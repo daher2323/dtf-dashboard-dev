@@ -1615,9 +1615,18 @@ function renderToday() {
 
   document.getElementById('content').innerHTML = ''
     +'<div class="full-card">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;flex-wrap:wrap;gap:8px;">'
-    +'<div style="display:flex;align-items:center;gap:8px;"><div style="width:8px;height:8px;border-radius:50%;background:'+(isLive?'#1D9E75':'#888780')+'"></div><h3 style="margin:0;font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em">Daily outlook</h3></div>'
-    +dateNavHTML+'</div>'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:.5rem;flex-wrap:wrap;">'
+      +'<div style="width:8px;height:8px;border-radius:50%;background:'+(isLive?'#1D9E75':'#888780')+';flex-shrink:0;"></div>'
+      +'<h3 style="margin:0;font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">Daily outlook</h3>'
+      +'<div style="width:0.5px;height:12px;background:#2c2c2a;flex-shrink:0;"></div>'
+      +'<button onclick="navDay(-1)" '+(prevDisabled?'disabled':'')+' style="width:22px;height:22px;flex-shrink:0;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:'+(prevDisabled?'default':'pointer')+';color:'+(prevDisabled?'#444441':'#888780')+';font-size:14px;display:flex;align-items:center;justify-content:center;font-family:system-ui;">&#8249;</button>'
+      +'<div onclick="openPicker()" style="display:flex;align-items:center;gap:5px;cursor:pointer;position:relative;" id="date-nav-anchor">'
+        +'<span style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+viewFmt+'</span>'
+        +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">&#x25BE;</span>'
+        +(dayLabel?'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">· '+dayLabel+'</span>':'')
+      +'</div>'
+      +'<button onclick="navDay(1)" '+(nextDisabled?'disabled':'')+' style="width:22px;height:22px;flex-shrink:0;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:'+(nextDisabled?'default':'pointer')+';color:'+(nextDisabled?'#444441':'#888780')+';font-size:14px;display:flex;align-items:center;justify-content:center;font-family:system-ui;">&#8250;</button>'
+    +'</div>'
     +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Currently running</div>'
     +(isLive?ALL_LINES.map(function(line){
       var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',items=runningByLine[line]||[];
