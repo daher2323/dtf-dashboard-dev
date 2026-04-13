@@ -1370,6 +1370,7 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
       if(po){po.style.left=(totalW+1)+'%';po.textContent=tp+'%';}
       if(rem){
         var remaining=Math.max(0,totalGoal-Math.round(todayTotal*e));
+        rem.style.fontSize='11px';rem.style.fontWeight='500';rem.style.color='#888780';
         rem.textContent=remaining>0?remaining.toLocaleString()+' to go':'';
       }
       gaugeData.forEach(function(g){
@@ -1589,14 +1590,17 @@ function renderToday() {
                 +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;"><div style="font-size:11px;font-weight:500;color:#e8e6e0;">'+brand+'</div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;background:'+sBg+';color:'+sTxt+';">Partial</span></div>'
                 +'<div style="font-size:11px;color:#888780;margin-bottom:6px;">'+product+'</div>'
                 +'<div style="display:flex;align-items:center;justify-content:space-between;"><div>'
-                +'<span style="font-size:11px;color:#888780;">'+l.finalUnits.toLocaleString()+' <span style="color:#5f5e5a;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'+(l.todayUnits!==l.finalUnits?' <span style="color:#5f5e5a;font-size:10px;">('+l.todayUnits.toLocaleString()+' today)</span>':'')+'</span>'
+                +'<span style="font-size:13px;font-weight:500;color:#e8e6e0;">'+l.finalUnits.toLocaleString()+'</span> <span style="font-size:10px;color:#5f5e5a;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj'+(l.todayUnits!==l.finalUnits?' · '+l.todayUnits.toLocaleString()+' today':'')+'</span>'
                 +'<div style="height:3px;background:#2c2c2a;border-radius:2px;width:80px;margin-top:4px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>'
                 +'</div></div></div>';
             }
             return '<div style="padding:8px 10px;border-bottom:0.5px solid #2c2c2a;">'
               +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;"><div style="font-size:11px;font-weight:500;color:#e8e6e0;">'+brand+'</div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;background:#0F6E56;color:#9FE1CB;">Complete</span></div>'
               +'<div style="font-size:11px;color:#888780;margin-bottom:5px">'+product+'</div>'
-              +'<div style="display:flex;align-items:center;justify-content:space-between;"><span style="font-size:11px;color:#888780">'+l.finalUnits.toLocaleString()+' <span style="color:#5f5e5a">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span></span>'+(devS?'<span style="font-size:10px;font-weight:500;padding:2px 6px;border-radius:6px;background:'+devBg+';color:'+devTxt+';">'+devS+'</span>':'')+'</div></div>';
+              +'<div style="display:flex;align-items:center;justify-content:space-between;">'
+                +'<span><span style="font-size:13px;font-weight:500;color:#e8e6e0;">'+l.finalUnits.toLocaleString()+'</span> <span style="font-size:10px;color:#5f5e5a;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span></span>'
+                +(devS?'<span style="font-size:10px;font-weight:500;padding:2px 6px;border-radius:6px;background:'+devBg+';color:'+devTxt+';">'+devS+'</span>':'')
+              +'</div></div>';
           }).join('');
         return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;">'
           +'<div style="padding:8px 10px;border-bottom:0.5px solid #2c2c2a;display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+bg+';color:'+txt+'">'+line+'</span><span style="font-size:10px;color:#888780">'+type+'</span></div>'
@@ -1636,7 +1640,7 @@ function renderToday() {
       +'<div id="banner-seg2" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#2']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-seg4" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#4']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-pct-overlay" style="position:absolute;top:50%;transform:translateY(-50%);font-size:11px;font-weight:500;color:'+LINE_COLOR['line#4']+';font-family:system-ui;transition:left 1.2s cubic-bezier(.4,0,.2,1);left:2%;white-space:nowrap;">0%</div>'
-      +'<div id="banner-remaining" style="position:absolute;top:50%;right:12px;transform:translateY(-50%);font-size:10px;color:#444441;font-family:system-ui;white-space:nowrap;">'+totalGoal.toLocaleString()+' to go</div>'
+      +'<div id="banner-remaining" style="position:absolute;top:50%;right:12px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'+totalGoal.toLocaleString()+' to go</div>'
     +'</div>'
     +'<div style="display:flex;gap:14px;">'
       +ALL_LINES.map(function(line){ var k2=lk(line),c=LINE_COLOR[k2]||'#888780'; return '<div style="display:flex;align-items:center;gap:5px;"><div style="width:8px;height:8px;border-radius:2px;background:'+c+';"></div><span id="banner-leg-'+k2+'" style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+line+' — 0</span></div>'; }).join('')
