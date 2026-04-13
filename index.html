@@ -1612,7 +1612,7 @@ function renderToday() {
             }
             return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:10px 12px;">'+tileContent+'</div>';
           }).join('');
-        return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
+        return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
           +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
             +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span><span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span></div>'
             +(lots.length>0?'<span style="font-size:10px;color:'+txt+';font-weight:500;font-family:system-ui;">'+totalLineUnits.toLocaleString()+' units</span>':'')
