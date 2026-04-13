@@ -1378,9 +1378,15 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
         rem.style.fontSize='11px';rem.style.fontWeight='500';rem.style.color='#888780';
         rem.textContent=remaining>0?remaining.toLocaleString()+' to go':'';
       }
-      gaugeData.forEach(function(g){
-        var leg=document.getElementById('banner-leg-'+lk(g.line||ALL_LINES[g.idx]||''));
-        if(leg) leg.textContent=(g.line||ALL_LINES[g.idx]||'')+' — '+Math.round(g.units*e).toLocaleString();
+      // Position labels at midpoint of each segment
+      var segs=[{id:'line#1',left:0,width:w1},{id:'line#2',left:w1,width:w2},{id:'line#4',left:w1+w2,width:w4}];
+      segs.forEach(function(s){
+        var leg=document.getElementById('banner-leg-'+s.id);
+        if(!leg) return;
+        var units=Math.round((gaugeData.find(function(g){return lk(g.line||ALL_LINES[g.idx]||'')===s.id;})||{units:0}).units*e);
+        leg.textContent=s.id.replace('line#','Line #')+' — '+units.toLocaleString();
+        if(s.width>2){ leg.style.display='block'; leg.style.left=(s.left+s.width/2)+'%'; }
+        else { leg.style.display='none'; }
       });
     }
     if(t>=1){
@@ -1422,6 +1428,8 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
   if(allHit){
     ['banner-seg1','banner-seg2','banner-seg4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='1'; });
     if(rem){ rem.style.color='#9FE1CB'; rem.textContent='Target exceeded · +'+(todayTotal-totalGoal).toLocaleString()+' units'; }
+    // Keep line labels visible on green background
+    ['banner-leg-line#1','banner-leg-line#2','banner-leg-line#4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='.85'; });
   }
   var bs=document.getElementById('banner-bullseye'); if(bs) bs.style.display=allHit?'inline':'none';
   var bvStatus=document.getElementById('banner-status'); if(bvStatus){bvStatus.textContent=statusLabel;bvStatus.style.color=statusColor;}
@@ -1669,14 +1677,16 @@ function renderToday() {
     +'<div id="banner-div3" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-status" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Status</div><div id="banner-status" style="font-size:13px;font-weight:500;color:'+statusColor+';line-height:1.4">'+statusLabel+'</div></div>'
     +'</div>'
-    +'<div id="banner-track" style="background:#0d0f10;border:1.5px solid #2c2c2a;border-radius:8px;height:20px;position:relative;overflow:hidden;margin-bottom:10px;">'
+    +'<div id="banner-track" style="background:#0d0f10;border:1.5px solid #2c2c2a;border-radius:8px;height:20px;position:relative;overflow:hidden;margin-bottom:6px;">'
       +'<div id="banner-seg1" style="position:absolute;top:0;left:0;height:100%;width:0%;background:'+LINE_COLOR['line#1']+';border-radius:6px 0 0 6px;transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-seg2" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#2']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-seg4" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#4']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-remaining" style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'+totalGoal.toLocaleString()+' to go</div>'
     +'</div>'
-    +'<div style="display:flex;gap:14px;">'
-      +ALL_LINES.map(function(line){ var k2=lk(line),c=LINE_COLOR[k2]||'#888780'; return '<div style="display:flex;align-items:center;gap:5px;"><div style="width:8px;height:8px;border-radius:2px;background:'+c+';"></div><span id="banner-leg-'+k2+'" style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+line+' — 0</span></div>'; }).join('')
+    +'<div style="position:relative;height:18px;">'
+      +'<div id="banner-leg-line#1" style="position:absolute;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#1']+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);transition:left 1.2s cubic-bezier(.4,0,.2,1);left:0%;">Line #1 — 0</div>'
+      +'<div id="banner-leg-line#2" style="position:absolute;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#2']+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);transition:left 1.2s cubic-bezier(.4,0,.2,1);left:0%;">Line #2 — 0</div>'
+      +'<div id="banner-leg-line#4" style="position:absolute;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#4']+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);transition:left 1.2s cubic-bezier(.4,0,.2,1);left:0%;">Line #4 — 0</div>'
     +'</div>'
     +'</div>'
     +'<div style="border-top:0.5px solid #2c2c2a;padding-top:.75rem;">'
