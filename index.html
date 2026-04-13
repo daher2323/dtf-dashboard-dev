@@ -1493,7 +1493,7 @@ function renderToday() {
     var runningTotal=runningTotalByLot[lot]||0;
     var st=todayStatus.toLowerCase();
     if(st.includes('complete')||st.includes('partial')){
-      completedToday.push({product:product,projected:projected,finalUnits:runningTotal,todayUnits:todayUnits,status:todayStatus,line:line});
+      completedToday.push({product:product,projected:projected,finalUnits:runningTotal,todayUnits:todayUnits,status:todayStatus,line:line,rowIdx:lotData?lotData.rowIdx:0});
     } else {
       if(!runningByLine[line]) runningByLine[line]=[];
       runningByLine[line].push({product:product,projected:projected,startTime:startTime});
@@ -1584,6 +1584,8 @@ function renderToday() {
   } else {
     var byLine={'Line #1':[],'Line #2':[],'Line #4':[]};
     completedToday.forEach(function(l){ if(byLine[l.line]) byLine[l.line].push(l); else byLine[l.line]=[l]; });
+    // Sort each line's lots by rowIdx — order they appear in the sheet = completion order
+    Object.keys(byLine).forEach(function(line){ byLine[line].sort(function(a,b){ return (a.rowIdx||0)-(b.rowIdx||0); }); });
     completedHTML='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:start">'
       +ALL_LINES.map(function(line){
         var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',type=LINE_TYPE[k2]||'';
