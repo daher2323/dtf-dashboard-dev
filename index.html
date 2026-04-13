@@ -1605,7 +1605,7 @@ function renderToday() {
               +'<div>'
               +(l.lot?'<div style="font-size:11px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:2px;">#'+l.lot+'</div>':'')
               +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
-              +'<div style="font-size:12px;font-weight:500;color:#888780;font-family:system-ui;">'+product+'</div>'
+              +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div>'
               +'</div>'
               +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
               +'</div>'
@@ -1619,7 +1619,7 @@ function renderToday() {
             if(isPartial){
               tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
             }
-            return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:11px 13px;">'+tileContent+'</div>';
+            return '<div style="border-left:3px solid '+color+';border-bottom:0.5px solid #2c2c2a;background:#141618;padding:12px 14px;">'+tileContent+'</div>';
           }).join('');
         return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
           +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
@@ -1719,7 +1719,7 @@ function buildWeekLotsGrid(lots) {
             +(dateStr?'<div style="font-size:10px;color:#444441;font-family:system-ui;">· '+dateStr+'</div>':'')
           +'</div>'
           +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
-          +'<div style="font-size:12px;font-weight:500;color:#888780;font-family:system-ui;">'+product+'</div>'
+          +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div>'
           +'</div>'
           +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
           +'</div>'
@@ -1734,7 +1734,7 @@ function buildWeekLotsGrid(lots) {
         if(isPartial){
           tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
         }
-        return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:11px 13px;">'+tileContent+'</div>';
+        return '<div style="border-left:3px solid '+color+';border-bottom:0.5px solid #2c2c2a;background:#141618;padding:12px 14px;">'+tileContent+'</div>';
       }).join('');
     return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
       +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
