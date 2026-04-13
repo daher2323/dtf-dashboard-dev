@@ -1607,9 +1607,9 @@ function renderToday() {
             var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
             var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">'
               +'<div>'
-              +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">'
+              +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">'
                 +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+brand+'</div>'
-                +(l.lot?'<div style="font-size:10px;color:#444441;font-family:system-ui;">· #'+l.lot+'</div>':'')
+                +(l.lot?'<div style="font-size:10px;font-weight:500;color:#888780;padding:1px 6px;border-radius:4px;border:0.5px solid #444441;background:#1a1d20;font-family:system-ui;">#'+l.lot+'</div>':'')
               +'</div>'
               +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div></div>'
               +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
@@ -1718,8 +1718,9 @@ function buildWeekLotsGrid(lots) {
         }
         var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">'
           +'<div>'
-          +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">'
+          +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">'
             +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+brand+'</div>'
+            +(l.lot?'<div style="font-size:10px;font-weight:500;color:#888780;padding:1px 6px;border-radius:4px;border:0.5px solid #444441;background:#1a1d20;font-family:system-ui;">#'+l.lot+'</div>':'')
             +(dateStr?'<div style="font-size:10px;color:#444441;font-family:system-ui;">· '+dateStr+'</div>':'')
           +'</div>'
           +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div></div>'
@@ -1818,7 +1819,7 @@ function renderWeekly() {
     if(!isNaN(dt) && (!weekLotLastDate[lot] || dt>weekLotLastDate[lot])) weekLotLastDate[lot]=dt;
   });
   var weekLotsSeen=new Set(), weekLots=[];
-  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; var weekUnitsForLot=weekLotUnits[lot]||0; var lastDate=weekLotLastDate[lot]; var dateStr=lastDate?lastDate.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'}):(ld?ld.date:(r['Date']||'')); var lineUnits=weekLotLineUnits[lot]||{}; var dominantLine=Object.keys(lineUnits).reduce(function(a,b){return (lineUnits[a]||0)>=(lineUnits[b]||0)?a:b;},(r['Line']||'').trim()); weekLots.push({product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:weekUnitsForLot,fullUnits:ld?ld.finalUnits:weekUnitsForLot,status:ld?ld.status:(r['Complete or Partial']||''),line:dominantLine,date:dateStr}); });
+  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; var weekUnitsForLot=weekLotUnits[lot]||0; var lastDate=weekLotLastDate[lot]; var dateStr=lastDate?lastDate.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'}):(ld?ld.date:(r['Date']||'')); var lineUnits=weekLotLineUnits[lot]||{}; var dominantLine=Object.keys(lineUnits).reduce(function(a,b){return (lineUnits[a]||0)>=(lineUnits[b]||0)?a:b;},(r['Line']||'').trim()); weekLots.push({lot:lot,product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:weekUnitsForLot,fullUnits:ld?ld.finalUnits:weekUnitsForLot,status:ld?ld.status:(r['Complete or Partial']||''),line:dominantLine,date:dateStr}); });
   weekLots = weekLots.filter(function(l){ return l.finalUnits > 0; });
   var completeLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('complete');}).length;
   var partialLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('partial');}).length;
