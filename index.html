@@ -1574,36 +1574,41 @@ function renderToday() {
     completedHTML='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:start">'
       +ALL_LINES.map(function(line){
         var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',type=LINE_TYPE[k2]||'';
+        var color=LINE_COLOR[k2]||'#888780';
+        var hdrBg=k2==='line#1'?'#0a1520':k2==='line#2'?'#110f22':'#1a0c14';
         var lots=byLine[line]||[];
-        var rows=lots.length===0?'<div style="padding:10px;font-size:11px;color:#5f5e5a;font-style:italic">No completed lots</div>'
+        var totalLineUnits=lots.reduce(function(s,l){return s+l.finalUnits;},0);
+        var rows=lots.length===0?'<div style="padding:10px;font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;">No completed lots</div>'
           :lots.map(function(l){
             var parts=(l.product||'').split('-'); var brand=parts[0].trim(); var product=parts.slice(1).join('-').trim()||brand;
             var isPartial=l.status.toLowerCase().includes('partial');
-            var sBg=isPartial?'#633806':'#0F6E56', sTxt=isPartial?'#FAC775':'#9FE1CB';
+            var sBg=isPartial?'#633806':'#085041', sTxt=isPartial?'#FAC775':'#9FE1CB';
+            var sLabel=isPartial?'Partial':'Complete';
             var runPct=l.projected?Math.min(Math.round((l.finalUnits/l.projected)*100),100):0;
             var dev=(!isPartial&&l.projected)?((l.finalUnits-l.projected)/l.projected*100):null;
             var devS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'';
-            var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#0F6E56';
+            var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
             var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
+            var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">'
+              +'<div><div style="font-size:13px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+brand+'</div>'
+              +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+product+'</div></div>'
+              +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
+              +'</div>'
+              +'<div style="display:flex;align-items:baseline;gap:6px;margin-top:6px;">'
+                +'<span style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.finalUnits.toLocaleString()+'</span>'
+                +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'
+                +(devS?'<span style="font-size:11px;font-weight:500;padding:1px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;margin-left:auto;">'+devS+'</span>':'')
+              +'</div>';
             if(isPartial){
-              return '<div style="padding:8px 10px;border-bottom:0.5px solid #2c2c2a;">'
-                +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;"><div style="font-size:11px;font-weight:500;color:#e8e6e0;">'+brand+'</div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;background:'+sBg+';color:'+sTxt+';">Partial</span></div>'
-                +'<div style="font-size:11px;color:#888780;margin-bottom:6px;">'+product+'</div>'
-                +'<div style="display:flex;align-items:center;justify-content:space-between;"><div>'
-                +'<span style="font-size:13px;font-weight:500;color:#e8e6e0;">'+l.finalUnits.toLocaleString()+'</span> <span style="font-size:10px;color:#5f5e5a;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj'+(l.todayUnits!==l.finalUnits?' · '+l.todayUnits.toLocaleString()+' today':'')+'</span>'
-                +'<div style="height:3px;background:#2c2c2a;border-radius:2px;width:80px;margin-top:4px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>'
-                +'</div></div></div>';
+              tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
             }
-            return '<div style="padding:8px 10px;border-bottom:0.5px solid #2c2c2a;">'
-              +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;"><div style="font-size:11px;font-weight:500;color:#e8e6e0;">'+brand+'</div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;background:#0F6E56;color:#9FE1CB;">Complete</span></div>'
-              +'<div style="font-size:11px;color:#888780;margin-bottom:5px">'+product+'</div>'
-              +'<div style="display:flex;align-items:center;justify-content:space-between;">'
-                +'<span><span style="font-size:13px;font-weight:500;color:#e8e6e0;">'+l.finalUnits.toLocaleString()+'</span> <span style="font-size:10px;color:#5f5e5a;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span></span>'
-                +(devS?'<span style="font-size:10px;font-weight:500;padding:2px 6px;border-radius:6px;background:'+devBg+';color:'+devTxt+';">'+devS+'</span>':'')
-              +'</div></div>';
+            return '<div style="border:1.5px solid '+color+';margin:8px;border-radius:8px;background:#141618;padding:10px 12px;">'+tileContent+'</div>';
           }).join('');
-        return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;">'
-          +'<div style="padding:8px 10px;border-bottom:0.5px solid #2c2c2a;display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+bg+';color:'+txt+'">'+line+'</span><span style="font-size:10px;color:#888780">'+type+'</span></div>'
+        return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
+          +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
+            +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span><span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span></div>'
+            +(lots.length>0?'<span style="font-size:10px;color:'+txt+';font-weight:500;font-family:system-ui;">'+totalLineUnits.toLocaleString()+' units</span>':'')
+          +'</div>'
           +rows+'</div>';
       }).join('')+'</div>';
   }
