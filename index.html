@@ -1369,12 +1369,10 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
       var s1=document.getElementById('banner-seg1');
       var s2=document.getElementById('banner-seg2');
       var s4=document.getElementById('banner-seg4');
-      var po=document.getElementById('banner-pct-overlay');
       var rem=document.getElementById('banner-remaining');
       if(s1){s1.style.width=w1+'%';}
       if(s2){s2.style.left=w1+'%';s2.style.width=w2+'%';}
       if(s4){s4.style.left=(w1+w2)+'%';s4.style.width=w4+'%';}
-      if(po){po.style.left=(totalW+1)+'%';po.textContent=tp+'%';}
       if(rem){
         var remaining=Math.max(0,totalGoal-Math.round(todayTotal*e));
         rem.style.fontSize='11px';rem.style.fontWeight='500';rem.style.color='#888780';
@@ -1420,12 +1418,10 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
   ['banner-div1','banner-div2','banner-div3'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.background=allHit?'#0F6E56':'#2c2c2a'; });
   var bt=document.getElementById('banner-track');
   if(bt){ bt.style.background='#0d0f10'; bt.style.border=allHit?'1.5px solid #1D9E75':'1.5px solid #2c2c2a'; }
-  var po=document.getElementById('banner-pct-overlay');
   var rem=document.getElementById('banner-remaining');
   if(allHit){
     ['banner-seg1','banner-seg2','banner-seg4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='1'; });
-    if(po){ po.style.left='50%'; po.style.transform='translateY(-50%) translateX(-50%)'; po.style.color='#9FE1CB'; po.textContent='Target exceeded · +'+(todayTotal-totalGoal).toLocaleString()+' units'; }
-    if(rem) rem.textContent='';
+    if(rem){ rem.style.color='#9FE1CB'; rem.textContent='Target exceeded · +'+(todayTotal-totalGoal).toLocaleString()+' units'; }
   }
   var bs=document.getElementById('banner-bullseye'); if(bs) bs.style.display=allHit?'inline':'none';
   var bvStatus=document.getElementById('banner-status'); if(bvStatus){bvStatus.textContent=statusLabel;bvStatus.style.color=statusColor;}
@@ -1673,7 +1669,6 @@ function renderToday() {
       +'<div id="banner-seg1" style="position:absolute;top:0;left:0;height:100%;width:0%;background:'+LINE_COLOR['line#1']+';border-radius:6px 0 0 6px;transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-seg2" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#2']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-seg4" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#4']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
-      +'<div id="banner-pct-overlay" style="position:absolute;top:50%;transform:translateY(-50%);font-size:10px;font-weight:500;color:'+LINE_COLOR['line#4']+';font-family:system-ui;transition:left 1.2s cubic-bezier(.4,0,.2,1);left:2%;white-space:nowrap;">0%</div>'
       +'<div id="banner-remaining" style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'+totalGoal.toLocaleString()+' to go</div>'
     +'</div>'
     +'<div style="display:flex;gap:14px;">'
