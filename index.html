@@ -1739,17 +1739,28 @@ function renderWeekly() {
   var allRowsCombined=allRows.concat(allRows25);
   var wkMon=selectedWeekMon;
   var wkFri=new Date(wkMon); wkFri.setDate(wkMon.getDate()+4); wkFri.setHours(23,59,59,999);
-  var wkEnd=isLiveWeek?now:wkFri;
+  var wkSat=new Date(wkMon); wkSat.setDate(wkMon.getDate()+5); wkSat.setHours(23,59,59,999);
+  var wkSun=new Date(wkMon); wkSun.setDate(wkMon.getDate()+6); wkSun.setHours(23,59,59,999);
+  var hasSatData=allRowsCombined.some(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; var s=new Date(wkMon); s.setDate(wkMon.getDate()+5); s.setHours(0,0,0,0); return dt>=s&&dt<=wkSat&&num(r['Final Units'])>0; });
+  var hasSunData=allRowsCombined.some(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; var s=new Date(wkMon); s.setDate(wkMon.getDate()+6); s.setHours(0,0,0,0); return dt>=s&&dt<=wkSun&&num(r['Final Units'])>0; });
+  var wkLastDay=hasSunData?wkSun:hasSatData?wkSat:wkFri;
+  var wkEnd=isLiveWeek?now:wkLastDay;
   var wkDates=[];
-  for(var i=0;i<5;i++){ var dd=new Date(wkMon); dd.setDate(wkMon.getDate()+i); wkDates.push(dd); }
+  var wkDayCount=hasSunData?7:hasSatData?6:5;
+  for(var i=0;i<wkDayCount;i++){ var dd=new Date(wkMon); dd.setDate(wkMon.getDate()+i); wkDates.push(dd); }
   var weekNum=getWeekNum(wkMon);
   var lastMon=new Date(wkMon); lastMon.setDate(wkMon.getDate()-7);
   var lastFri=new Date(lastMon); lastFri.setDate(lastMon.getDate()+4); lastFri.setHours(23,59,59,999);
+  var lastSat=new Date(lastMon); lastSat.setDate(lastMon.getDate()+5); lastSat.setHours(23,59,59,999);
+  var lastSun=new Date(lastMon); lastSun.setDate(lastMon.getDate()+6); lastSun.setHours(23,59,59,999);
+  var hadLastSatData=allRowsCombined.some(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; var s=new Date(lastMon); s.setDate(lastMon.getDate()+5); s.setHours(0,0,0,0); return dt>=s&&dt<=lastSat&&num(r['Final Units'])>0; });
+  var hadLastSunData=allRowsCombined.some(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; var s=new Date(lastMon); s.setDate(lastMon.getDate()+6); s.setHours(0,0,0,0); return dt>=s&&dt<=lastSun&&num(r['Final Units'])>0; });
+  var lastWeekEnd=hadLastSunData?lastSun:hadLastSatData?lastSat:lastFri;
   var weekRows=allRowsCombined.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=wkMon&&dt<=wkEnd; });
   var weekUnits=weekRows.reduce(function(s,r){return s+num(r['Final Units']);},0);
   var weekByLine={};
   weekRows.forEach(function(r){ var line=(r['Line']||'').trim(); if(!line) return; weekByLine[line]=(weekByLine[line]||0)+num(r['Final Units']); });
-  var lastWeekUnits=allRowsCombined.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=lastMon&&dt<=lastFri; }).reduce(function(s,r){return s+num(r['Final Units']);},0);
+  var lastWeekUnits=allRowsCombined.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=lastMon&&dt<=lastWeekEnd; }).reduce(function(s,r){return s+num(r['Final Units']);},0);
   var daysWithTarget=0,daysWithoutTarget=0,targetSum=0;
   wkDates.forEach(function(d){ var k=dateKey(d),row=dailyTargets[k]||{},dayTotal=ALL_LINES.reduce(function(s,line){return s+(row[line]||0);},0); if(dayTotal>0){targetSum+=dayTotal;daysWithTarget++;}else daysWithoutTarget++; });
   var viewYear=wkMon.getFullYear();
@@ -1783,7 +1794,7 @@ function renderWeekly() {
   var weeks8=[],ptr=new Date(wkMon);
   for(var wi=0;wi<8;wi++){ var ptrKey=ptr.getFullYear()+'-'+String(getWeekNum(ptr)).padStart(2,'0'); weeks8.unshift({key:ptrKey,mon:new Date(ptr),units:byWeekMap[ptrKey]?byWeekMap[ptrKey].units:0,num:getWeekNum(ptr)}); ptr.setDate(ptr.getDate()-7); }
   var monFmt=wkMon.toLocaleDateString('en-US',{month:'short',day:'numeric'});
-  var friEndFmt=wkFri.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  var friEndFmt=wkLastDay.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   var barPct=weeklyTarget?Math.min(Math.round((weekUnits/weeklyTarget)*100),100):0;
   var targetLabel=targetIsFullySet?'<span style="color:#1D9E75">(set)</span>':targetIsEstimated?'<span style="color:#EF9F27">(est.)</span>':'(avg)';
   var chartStaticTarget = viewYear<=2025 ? WEEKLY_TARGET_2025 : WEEKLY_TARGET;
@@ -1864,10 +1875,16 @@ function renderDetail() {
     if(!selectedWeekMon) selectedWeekMon=getCurrentWeekMon();
     var isLiveWeek=selectedWeekMon.toDateString()===getCurrentWeekMon().toDateString();
     var wkFri2=new Date(selectedWeekMon); wkFri2.setDate(selectedWeekMon.getDate()+4); wkFri2.setHours(23,59,59,999);
-    var wkEnd2=isLiveWeek?now:wkFri2;
+    var wkSat2=new Date(selectedWeekMon); wkSat2.setDate(selectedWeekMon.getDate()+5); wkSat2.setHours(23,59,59,999);
+    var wkSun2=new Date(selectedWeekMon); wkSun2.setDate(selectedWeekMon.getDate()+6); wkSun2.setHours(23,59,59,999);
+    var combined2=allRows.concat(allRows25);
+    var hasSatData2=combined2.some(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; var s=new Date(selectedWeekMon); s.setDate(selectedWeekMon.getDate()+5); s.setHours(0,0,0,0); return dt>=s&&dt<=wkSat2&&num(r['Final Units'])>0; });
+    var hasSunData2=combined2.some(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; var s=new Date(selectedWeekMon); s.setDate(selectedWeekMon.getDate()+6); s.setHours(0,0,0,0); return dt>=s&&dt<=wkSun2&&num(r['Final Units'])>0; });
+    var wkLastDay2=hasSunData2?wkSun2:hasSatData2?wkSat2:wkFri2;
+    var wkEnd2=isLiveWeek?now:wkLastDay2;
     var weekNum2=getWeekNum(selectedWeekMon);
     var monFmt2=selectedWeekMon.toLocaleDateString('en-US',{month:'short',day:'numeric'});
-    var friEndFmt2=wkFri2.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    var friEndFmt2=wkLastDay2.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     sourceRows=allRows.concat(allRows25).filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=selectedWeekMon&&dt<=wkEnd2; });
     navHTML='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;position:relative;" id="week-nav-anchor">'
       +'<button onclick="navWeek(-1)" style="width:28px;height:28px;flex-shrink:0;border-radius:8px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#e8e6e0;font-size:16px;display:flex;align-items:center;justify-content:center;font-family:system-ui">&#8249;</button>'
