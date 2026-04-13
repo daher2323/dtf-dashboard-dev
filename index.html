@@ -1697,8 +1697,17 @@ function buildWeekLotsGrid(lots) {
         var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
         var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
         var runPct=l.projected?Math.min(Math.round((l.finalUnits/l.projected)*100),100):0;
+        var dateStr='';
+        if(l.date){
+          var d=new Date(l.date);
+          if(!isNaN(d)) dateStr=d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+        }
         var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">'
-          +'<div><div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-bottom:2px;">'+brand+'</div>'
+          +'<div>'
+          +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">'
+            +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+brand+'</div>'
+            +(dateStr?'<div style="font-size:10px;color:#444441;font-family:system-ui;">· '+dateStr+'</div>':'')
+          +'</div>'
           +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div></div>'
           +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
           +'</div>'
@@ -1781,7 +1790,7 @@ function renderWeekly() {
   if(isLiveWeek){ statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775'; }
   else{ var finalPct=weeklyTarget?(weekUnits/weeklyTarget)*100:0; if(finalPct>=100){statusLabel='Target exceeded';statusBg='#085041';statusTxt='#9FE1CB';}else if(finalPct>=98){statusLabel='Target met';statusBg='#085041';statusTxt='#9FE1CB';}else{statusLabel='Target missed';statusBg='#791F1F';statusTxt='#F09595';} }
   var weekLotsSeen=new Set(), weekLots=[];
-  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; weekLots.push({product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:ld?ld.finalUnits:num(r['Final Units']),status:ld?ld.status:(r['Complete or Partial']||''),line:(r['Line']||'').trim()}); });
+  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; weekLots.push({product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:ld?ld.finalUnits:num(r['Final Units']),status:ld?ld.status:(r['Complete or Partial']||''),line:(r['Line']||'').trim(),date:ld?ld.date:(r['Date']||'')}); });
   weekLots = weekLots.filter(function(l){ return l.finalUnits > 0; });
   var completeLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('complete');}).length;
   var partialLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('partial');}).length;
