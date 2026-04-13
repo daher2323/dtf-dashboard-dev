@@ -1460,12 +1460,19 @@ function renderToday() {
 
   var runningByLine={'Line #1':[],'Line #2':[],'Line #4':[]};
   var completedToday=[];
-  var seenLots=new Set();
   var todayUnitsByLot={};
+  var todayLotData={};
   allRows.forEach(function(r){
     if(!matchDate(r['Date'])) return;
     var lot=(r['Lot Number']||'').trim(); if(!lot) return;
     todayUnitsByLot[lot]=(todayUnitsByLot[lot]||0)+num(r['Final Units']);
+    // Keep updating so last row wins for status/line
+    if(!todayLotData[lot]) todayLotData[lot]={product:'',projected:0,line:'',startTime:'',status:''};
+    if(r['Product']) todayLotData[lot].product=r['Product'];
+    if(r['Projected Units']) todayLotData[lot].projected=num(r['Projected Units']);
+    if(r['Line']) todayLotData[lot].line=(r['Line']||'').trim();
+    if(r['Start Time']) todayLotData[lot].startTime=(r['Start Time']||'').trim();
+    if(r['Complete or Partial']) todayLotData[lot].status=(r['Complete or Partial']||'').trim();
   });
   var viewDateObj=new Date(viewStr);
   var runningTotalByLot={};
@@ -1474,15 +1481,14 @@ function renderToday() {
     var lot=(r['Lot Number']||'').trim(); if(!lot) return;
     runningTotalByLot[lot]=(runningTotalByLot[lot]||0)+num(r['Final Units']);
   });
-  allRows.forEach(function(r){
-    if(!matchDate(r['Date'])) return;
-    var lot=(r['Lot Number']||'').trim(); if(!lot||seenLots.has(lot)) return; seenLots.add(lot);
+  Object.keys(todayLotData).forEach(function(lot){
+    var d=todayLotData[lot];
     var lotData=lotMap[lot];
-    var product=lotData?lotData.product:(r['Product']||'');
-    var projected=lotData?lotData.projected:num(r['Projected Units']);
-    var line=(r['Line']||'').trim();
-    var startTime=(r['Start Time']||'').trim();
-    var todayStatus=(r['Complete or Partial']||'').trim();
+    var product=lotData?lotData.product:d.product;
+    var projected=lotData?lotData.projected:d.projected;
+    var line=d.line;
+    var startTime=d.startTime;
+    var todayStatus=d.status;
     var todayUnits=todayUnitsByLot[lot]||0;
     var runningTotal=runningTotalByLot[lot]||0;
     var st=todayStatus.toLowerCase();
