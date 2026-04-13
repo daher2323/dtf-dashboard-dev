@@ -1619,14 +1619,17 @@ function renderToday() {
             if(isPartial){
               tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
             }
-            return '<div style="border-bottom:0.5px solid #2c2c2a;background:#141618;padding:12px 14px;">'+tileContent+'</div>';
+            return '<div style="background:#141618;border-radius:8px;padding:11px 13px;">'+tileContent+'</div>';
           }).join('');
         return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-left:3px solid '+color+';border-radius:10px;overflow:hidden;">'
           +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
             +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span><span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span></div>'
             +(lots.length>0?'<span style="font-size:10px;color:'+txt+';font-weight:500;font-family:system-ui;">'+totalLineUnits.toLocaleString()+' units</span>':'')
           +'</div>'
-          +rows+'</div>';
+          +'<div style="padding:8px;display:flex;flex-direction:column;gap:6px;">'
+          +rows
+          +'</div>'
+          +'</div>';
       }).join('')+'</div>';
   }
 
@@ -1734,14 +1737,17 @@ function buildWeekLotsGrid(lots) {
         if(isPartial){
           tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
         }
-        return '<div style="border-bottom:0.5px solid #2c2c2a;background:#141618;padding:12px 14px;">'+tileContent+'</div>';
+        return '<div style="background:#141618;border-radius:8px;padding:11px 13px;">'+tileContent+'</div>';
       }).join('');
     return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-left:3px solid '+color+';border-radius:10px;overflow:hidden;">'
       +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
         +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span><span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span></div>'
         +(lineLots.length>0?'<span style="font-size:10px;color:'+txt+';font-weight:500;font-family:system-ui;">'+totalLineUnits.toLocaleString()+' units</span>':'')
       +'</div>'
-      +rows+'</div>';
+      +'<div style="padding:8px;display:flex;flex-direction:column;gap:6px;">'
+      +rows
+      +'</div>'
+      +'</div>';
   }).join('');
 }
 
