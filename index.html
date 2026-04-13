@@ -1419,12 +1419,12 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
   ['banner-lbl-total','banner-lbl-goal','banner-lbl-pct','banner-lbl-status'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.color=allHit?'#5DCAA5':'#888780'; });
   ['banner-div1','banner-div2','banner-div3'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.background=allHit?'#0F6E56':'#2c2c2a'; });
   var bt=document.getElementById('banner-track');
-  if(bt){ bt.style.background=allHit?'#085041':'#1e2124'; bt.style.border=allHit?'1.5px solid #1D9E75':'1.5px solid #2c2c2a'; }
+  if(bt){ bt.style.background='#0d0f10'; bt.style.border=allHit?'1.5px solid #1D9E75':'1.5px solid #2c2c2a'; }
   var po=document.getElementById('banner-pct-overlay');
   var rem=document.getElementById('banner-remaining');
   if(allHit){
-    ['banner-seg1','banner-seg2','banner-seg4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='.85'; });
-    if(po){ po.style.left='50%'; po.style.transform='translateY(-50%) translateX(-50%)'; po.style.color='#9FE1CB'; po.textContent='Target exceeded · '+todayTotal.toLocaleString()+' units'; }
+    ['banner-seg1','banner-seg2','banner-seg4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='1'; });
+    if(po){ po.style.left='50%'; po.style.transform='translateY(-50%) translateX(-50%)'; po.style.color='#9FE1CB'; po.textContent='Target exceeded · +'+(todayTotal-totalGoal).toLocaleString()+' units'; }
     if(rem) rem.textContent='';
   }
   var bs=document.getElementById('banner-bullseye'); if(bs) bs.style.display=allHit?'inline':'none';
