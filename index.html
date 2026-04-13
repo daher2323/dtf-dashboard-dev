@@ -1582,6 +1582,7 @@ function renderToday() {
       +ALL_LINES.map(function(line){
         var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',type=LINE_TYPE[k2]||'';
         var color=LINE_COLOR[k2]||'#888780';
+        var trackColor=LINE_TRACK[k2]||'#2c2c2a';
         var hdrBg=k2==='line#1'?'#0a1520':k2==='line#2'?'#110f22':'#1a0c14';
         var lots=byLine[line]||[];
         var totalLineUnits=lots.reduce(function(s,l){return s+l.finalUnits;},0);
@@ -1609,7 +1610,7 @@ function renderToday() {
             if(isPartial){
               tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
             }
-            return '<div style="border:0.5px solid #2c2c2a;border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:10px 12px;">'+tileContent+'</div>';
+            return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:10px 12px;">'+tileContent+'</div>';
           }).join('');
         return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
           +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
