@@ -1601,24 +1601,25 @@ function renderToday() {
             var devS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'';
             var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
             var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
-            var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">'
+            var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
               +'<div>'
-              +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">'
-                +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+brand+'</div>'
-                +(l.lot?'<div style="font-size:10px;font-weight:500;color:#888780;padding:1px 6px;border-radius:4px;border:0.5px solid #444441;background:#1a1d20;font-family:system-ui;">#'+l.lot+'</div>':'')
+              +(l.lot?'<div style="font-size:11px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:2px;">#'+l.lot+'</div>':'')
+              +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
+              +'<div style="font-size:12px;font-weight:500;color:#888780;font-family:system-ui;">'+product+'</div>'
               +'</div>'
-              +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div></div>'
               +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
               +'</div>'
-              +'<div style="display:flex;align-items:baseline;gap:6px;margin-top:6px;">'
-                +'<span style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.finalUnits.toLocaleString()+'</span>'
-                +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'
-                +(devS?'<span style="font-size:11px;font-weight:500;padding:1px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;margin-left:auto;">'+devS+'</span>':'')
+              +'<div style="border-top:0.5px solid #2c2c2a;padding-top:9px;display:flex;align-items:center;justify-content:space-between;">'
+                +'<div style="display:flex;align-items:baseline;gap:5px;">'
+                  +'<span style="font-size:24px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.finalUnits.toLocaleString()+'</span>'
+                  +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'
+                +'</div>'
+                +(devS?'<span style="font-size:11px;font-weight:500;padding:2px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;">'+devS+'</span>':'')
               +'</div>';
             if(isPartial){
               tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
             }
-            return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:10px 12px;">'+tileContent+'</div>';
+            return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:11px 13px;">'+tileContent+'</div>';
           }).join('');
         return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
           +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
@@ -1711,26 +1712,29 @@ function buildWeekLotsGrid(lots) {
           var d=new Date(l.date);
           if(!isNaN(d)) dateStr=d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
         }
-        var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">'
+        var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
           +'<div>'
-          +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">'
-            +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+brand+'</div>'
-            +(l.lot?'<div style="font-size:10px;font-weight:500;color:#888780;padding:1px 6px;border-radius:4px;border:0.5px solid #444441;background:#1a1d20;font-family:system-ui;">#'+l.lot+'</div>':'')
+          +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">'
+            +(l.lot?'<div style="font-size:11px;font-weight:500;color:#e8e6e0;font-family:system-ui;">#'+l.lot+'</div>':'')
             +(dateStr?'<div style="font-size:10px;color:#444441;font-family:system-ui;">· '+dateStr+'</div>':'')
           +'</div>'
-          +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div></div>'
+          +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
+          +'<div style="font-size:12px;font-weight:500;color:#888780;font-family:system-ui;">'+product+'</div>'
+          +'</div>'
           +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
           +'</div>'
-          +'<div style="display:flex;align-items:baseline;gap:6px;margin-top:6px;">'
-            +'<span style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+displayUnits.toLocaleString()+'</span>'
-            +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'
-            +(devS?'<span style="font-size:11px;font-weight:500;padding:1px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;margin-left:auto;">'+devS+'</span>':'')
+          +'<div style="border-top:0.5px solid #2c2c2a;padding-top:9px;display:flex;align-items:center;justify-content:space-between;">'
+            +'<div style="display:flex;align-items:baseline;gap:5px;">'
+              +'<span style="font-size:24px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+displayUnits.toLocaleString()+'</span>'
+              +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'
+            +'</div>'
+            +(devS?'<span style="font-size:11px;font-weight:500;padding:2px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;">'+devS+'</span>':'')
           +'</div>'
           +(isCrossWeek?'<div style="font-size:10px;color:#5f5e5a;margin-top:4px;font-family:system-ui;">'+l.finalUnits.toLocaleString()+' produced this week</div>':'');
         if(isPartial){
           tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
         }
-        return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:10px 12px;">'+tileContent+'</div>';
+        return '<div style="border:0.5px solid '+trackColor+';border-left:3px solid '+color+';margin:8px;border-radius:0 8px 8px 0;background:#141618;padding:11px 13px;">'+tileContent+'</div>';
       }).join('');
     return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
       +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
