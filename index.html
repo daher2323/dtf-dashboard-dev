@@ -1690,9 +1690,11 @@ function buildWeekLotsGrid(lots) {
       :lineLots.map(function(l){
         var parts=(l.product||'').split('-'); var brand=parts[0].trim(); var product=parts.slice(1).join('-').trim()||brand;
         var isPartial=l.status.toLowerCase().includes('partial');
+        var isCrossWeek=l.fullUnits&&l.finalUnits<l.fullUnits;
+        var displayUnits=isCrossWeek?l.fullUnits:l.finalUnits;
         var sBg=isPartial?'#633806':'#085041', sTxt=isPartial?'#FAC775':'#9FE1CB';
         var sLabel=isPartial?'Partial':'Complete';
-        var dev=(!isPartial&&l.projected)?((l.finalUnits-l.projected)/l.projected*100):null;
+        var dev=(!isPartial&&l.projected)?((displayUnits-l.projected)/l.projected*100):null;
         var devS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'';
         var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
         var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
@@ -1712,10 +1714,11 @@ function buildWeekLotsGrid(lots) {
           +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
           +'</div>'
           +'<div style="display:flex;align-items:baseline;gap:6px;margin-top:6px;">'
-            +'<span style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.finalUnits.toLocaleString()+'</span>'
+            +'<span style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+displayUnits.toLocaleString()+'</span>'
             +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'
             +(devS?'<span style="font-size:11px;font-weight:500;padding:1px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;margin-left:auto;">'+devS+'</span>':'')
-          +'</div>';
+          +'</div>'
+          +(isCrossWeek?'<div style="font-size:10px;color:#5f5e5a;margin-top:4px;font-family:system-ui;">'+l.finalUnits.toLocaleString()+' produced this week</div>':'');
         if(isPartial){
           tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
         }
@@ -1803,7 +1806,7 @@ function renderWeekly() {
     if(!isNaN(dt) && (!weekLotLastDate[lot] || dt>weekLotLastDate[lot])) weekLotLastDate[lot]=dt;
   });
   var weekLotsSeen=new Set(), weekLots=[];
-  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; var weekUnitsForLot=weekLotUnits[lot]||0; var lastDate=weekLotLastDate[lot]; var dateStr=lastDate?lastDate.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'}):(ld?ld.date:(r['Date']||'')); var lineUnits=weekLotLineUnits[lot]||{}; var dominantLine=Object.keys(lineUnits).reduce(function(a,b){return (lineUnits[a]||0)>=(lineUnits[b]||0)?a:b;},(r['Line']||'').trim()); weekLots.push({product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:weekUnitsForLot,status:ld?ld.status:(r['Complete or Partial']||''),line:dominantLine,date:dateStr}); });
+  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; var weekUnitsForLot=weekLotUnits[lot]||0; var lastDate=weekLotLastDate[lot]; var dateStr=lastDate?lastDate.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'}):(ld?ld.date:(r['Date']||'')); var lineUnits=weekLotLineUnits[lot]||{}; var dominantLine=Object.keys(lineUnits).reduce(function(a,b){return (lineUnits[a]||0)>=(lineUnits[b]||0)?a:b;},(r['Line']||'').trim()); weekLots.push({product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:weekUnitsForLot,fullUnits:ld?ld.finalUnits:weekUnitsForLot,status:ld?ld.status:(r['Complete or Partial']||''),line:dominantLine,date:dateStr}); });
   weekLots = weekLots.filter(function(l){ return l.finalUnits > 0; });
   var completeLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('complete');}).length;
   var partialLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('partial');}).length;
