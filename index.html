@@ -1437,17 +1437,23 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
   });
   var allHit = todayTotal >= totalGoal;
   var banner = document.getElementById('today-banner');
-  if(banner){ banner.style.background=allHit?'#085041':'#141618'; banner.style.border=allHit?'1.5px solid #1D9E75':'0.5px solid #2c2c2a'; }
-  ['banner-lbl-total','banner-lbl-goal','banner-lbl-pct','banner-lbl-status'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.color=allHit?'#5DCAA5':'#888780'; });
-  ['banner-div1','banner-div2','banner-div3'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.background=allHit?'#0F6E56':'#2c2c2a'; });
+  if(banner){
+    banner.style.background='#141618';
+    banner.style.border=allHit?'2px solid #1D9E75':'0.5px solid #2c2c2a';
+    banner.style.boxShadow=allHit?'0 0 10px 2px rgba(29,158,117,0.28),0 0 20px 4px rgba(29,158,117,0.10)':'none';
+  }
+  ['banner-lbl-total','banner-lbl-goal','banner-lbl-pct','banner-lbl-status'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.color='#888780'; });
+  ['banner-div1','banner-div2','banner-div3'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.background='#2c2c2a'; });
   var bt=document.getElementById('banner-track');
   if(bt){ bt.style.background='#0d0f10'; bt.style.border=allHit?'1.5px solid #1D9E75':'1.5px solid #2c2c2a'; }
+  // Show/hide checkmark badge
+  var bc=document.getElementById('banner-check');
+  if(bc) bc.style.display=allHit?'flex':'none';
   var rem=document.getElementById('banner-remaining');
   if(allHit){
     ['banner-seg1','banner-seg2','banner-seg4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='1'; });
-    if(rem){ rem.style.color='#9FE1CB'; rem.textContent='Target exceeded · +'+(todayTotal-totalGoal).toLocaleString()+' units'; }
-    // Keep line labels visible on green background
-    ['banner-leg-line#1','banner-leg-line#2','banner-leg-line#4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='.85'; });
+    if(rem){ rem.style.color='#9FE1CB'; rem.textContent='+' + (todayTotal-totalGoal).toLocaleString()+' over target'; }
+    ['banner-leg-line#1','banner-leg-line#2','banner-leg-line#4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='1'; });
   }
   var bs=document.getElementById('banner-bullseye'); if(bs) bs.style.display=allHit?'inline':'none';
   var bvStatus=document.getElementById('banner-status'); if(bvStatus){bvStatus.textContent=statusLabel;bvStatus.style.color=statusColor;}
@@ -1685,7 +1691,8 @@ function renderToday() {
     +'<div style="border-top:0.5px solid #2c2c2a;margin-top:.75rem;padding-top:.75rem">'
     +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Production by line</div>'
     +'<div style="display:flex;gap:12px;margin-bottom:10px">'+gaugesHTML+'</div>'
-    +'<div id="today-banner" style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem">'
+    +'<div id="today-banner" style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;position:relative;">'
+    +'<div id="banner-check" style="display:none;position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:#1D9E75;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'
     +'<div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;">'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-total" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">'+(isLive?'Total units today':'Total units')+'</div><div style="display:flex;align-items:center;justify-content:center;gap:6px;"><span id="banner-total" style="font-size:26px;font-weight:500;color:#e8e6e0;line-height:1">0</span><span id="banner-bullseye" style="display:none;font-size:22px;line-height:1">&#127919;</span>'+(recTotalRank===0?'<span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:7px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;">\uD83C\uDFC6 Record</span>':'')+'</div></div>'
     +'<div id="banner-div1" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
