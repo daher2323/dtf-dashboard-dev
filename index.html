@@ -844,12 +844,7 @@ function setMainSection(s) {
 
 function renderSubBar() {
   var sb = document.getElementById('sub-bar');
-  var abr = document.getElementById('app-bar-right');
   if (!sb) return;
-
-  // Live pill always in app-bar-right
-  var isLive = (mainSection === 'production') && isViewingLive && typeof isViewingLive === 'function' && isViewingLive();
-  if (abr) abr.innerHTML = isLive ? '<span style="font-size:10px;color:#1D9E75;font-weight:500;padding:3px 10px;border-radius:10px;background:#085041;white-space:nowrap;">&#8635; Live</span>' : '';
 
   if (mainSection === 'production') {
     var isAdmin = userRole === 'admin';
@@ -2897,7 +2892,7 @@ function renderCustomerOverview(healthData) {
   var appBarH = appBarEl ? appBarEl.offsetHeight : 68;
   var subBarH = subBarEl ? subBarEl.offsetHeight : 40;
   var stickyTop = appBarH + subBarH;
-  var inlineHeader = '<div style="position:sticky;top:'+stickyTop+'px;z-index:10;background:#0d0f10;border-bottom:0.5px solid #2c2c2a;margin-bottom:4px;display:flex;align-items:center;gap:0;padding:6px 14px 5px 15px;">'
+  var inlineHeader = '<div style="position:sticky;top:'+stickyTop+'px;z-index:10;background:#0d0f10;border-bottom:0.5px solid #2c2c2a;margin-bottom:4px;display:flex;align-items:center;gap:0;padding:6px 14px 5px 12px;">'
     +'<div style="width:140px;flex-shrink:0;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">Customer overview <span style="color:#5f5e5a;">&middot; thru '+ytdLabel+'</span></div>'
     +'<div style="flex:1;display:flex;flex-direction:column;gap:0;min-width:0;justify-content:center;">'
       +'<div style="display:flex;align-items:center;gap:7px;">'
