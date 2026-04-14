@@ -1978,35 +1978,193 @@ function renderWeekly() {
     +'<button onclick="navWeek(1)" '+(isLiveWeek?'disabled':'')+' style="width:28px;height:28px;flex-shrink:0;border-radius:8px;border:0.5px solid #444441;background:transparent;cursor:'+(isLiveWeek?'default':'pointer')+';color:'+(isLiveWeek?'#444441':'#e8e6e0')+';font-size:16px;display:flex;align-items:center;justify-content:center;font-family:system-ui">&#8250;</button>'
     +'</div>';
 
+  // Per-day per-line units for the day breakdown
+  var dayLineUnits={};
+  wkDates.forEach(function(d){
+    var dk=dateKey(d);
+    var dayStart=new Date(d); dayStart.setHours(0,0,0,0);
+    var dayEnd=new Date(d); dayEnd.setHours(23,59,59,999);
+    ALL_LINES.forEach(function(line){
+      if(!dayLineUnits[line]) dayLineUnits[line]={};
+      var u=allRowsCombined.filter(function(r){
+        var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=dayStart&&dt<=dayEnd&&(r['Line']||'').trim()===line;
+      }).reduce(function(s,r){return s+num(r['Final Units']);},0);
+      dayLineUnits[line][dk]=u;
+    });
+  });
+
   document.getElementById('content').innerHTML=
+    // ── Nav bar ──
     '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;">'
     +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:'+(weekNote?'8px':'12px')+';flex-wrap:wrap;gap:8px;">'+weekNavHTML
     +'<div style="display:flex;align-items:center;gap:8px;">'
-    +(targetSource==='set'?'<span style="font-size:10px;font-weight:500;color:#1D9E75;padding:2px 8px;border-radius:6px;background:#085041;">&#10003; Target set</span>':targetSource==='est'?'<span style="font-size:10px;color:#EF9F27;padding:2px 8px;border-radius:6px;background:#633806;">Est. target</span>':'')
-    +'<span style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:10px;background:'+statusBg+';color:'+statusTxt+';">'+statusLabel+'</span>'
+    +(targetSource==='set'?'<span style="font-size:10px;font-weight:500;color:#1D9E75;padding:2px 8px;border-radius:6px;background:#085041;font-family:system-ui;">&#10003; Target set</span>':targetSource==='est'?'<span style="font-size:10px;color:#EF9F27;padding:2px 8px;border-radius:6px;background:#633806;font-family:system-ui;">Est. target</span>':'')
+    +(statusLabel?'<span style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:10px;background:'+statusBg+';color:'+statusTxt+';font-family:system-ui;">'+statusLabel+'</span>':'')
     +'</div></div>'
     +(weekNote?'<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;padding:6px 10px;background:#141618;border-radius:6px;border-left:2px solid #444441;">'
       +'<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#888780" stroke-width="1.2"/><line x1="6" y1="5" x2="6" y2="8.5" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><circle cx="6" cy="3.2" r=".7" fill="#888780"/></svg>'
-      +'<span style="font-size:11px;color:#888780;">'+weekNote+'</span></div>':'')
-    +'<div style="display:flex;gap:10px;flex-wrap:wrap;">'
-    +'<div style="flex:1;min-width:120px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Units this week</div><div style="font-size:22px;font-weight:500;color:#378ADD;">'+weekUnits.toLocaleString()+'</div><div style="font-size:11px;color:#5f5e5a;margin-bottom:6px;">of '+weeklyTarget.toLocaleString()+' '+targetLabel+'</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;"><div style="height:100%;width:'+barPct+'%;background:#378ADD;border-radius:3px;"></div></div></div>'
-    +'<div style="width:0.5px;background:#2c2c2a;flex-shrink:0;align-self:stretch;"></div>'
-    +'<div style="flex:1;min-width:120px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+(isLiveWeek?(daysRemaining>0?'Needed per day':'Final output'):'Final output')+'</div><div style="font-size:22px;font-weight:500;color:'+(onPace?'#1D9E75':'#EF9F27')+';">'+(isLiveWeek&&daysRemaining>0?neededPerDay.toLocaleString():weekUnits.toLocaleString())+'</div><div style="font-size:11px;color:#5f5e5a;">'+(isLiveWeek&&daysRemaining>0?(unitsNeeded.toLocaleString()+' units left · '+daysRemaining+'d remaining'):'target: '+weeklyTarget.toLocaleString())+'</div></div>'
-    +'<div style="width:0.5px;background:#2c2c2a;flex-shrink:0;align-self:stretch;"></div>'
-    +'<div style="flex:1;min-width:100px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Vs target</div><div style="font-size:22px;font-weight:500;color:'+(vsTargetPct>=0?'#1D9E75':'#EF9F27')+'">'+(vsTargetPct>=0?'+':'')+vsTargetPct+'%</div><div style="font-size:11px;color:#5f5e5a;">'+(vsTarget>=0?'+':'')+vsTarget.toLocaleString()+' units</div></div>'
-    +'<div style="width:0.5px;background:#2c2c2a;flex-shrink:0;align-self:stretch;"></div>'
-    +(vsLastWk!==null?'<div style="flex:1;min-width:100px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+(isLiveWeek?'Vs this time last wk':'Vs last week')+'</div><div style="font-size:22px;font-weight:500;color:'+(vsLastWk>=0?'#1D9E75':'#EF9F27')+'">'+(vsLastWk>=0?'+':'')+vsLastWk.toFixed(1)+'%</div><div style="font-size:11px;color:#5f5e5a;">Wk '+(weekNum-1)+': '+lastWkSameUnits.toLocaleString()+(isLiveWeek?' ('+daysElapsed+'d)':'')+'</div></div><div style="width:0.5px;background:#2c2c2a;flex-shrink:0;align-self:stretch;"></div>':'')
-    +'<div style="flex:1;min-width:100px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Lots this week</div><div style="font-size:22px;font-weight:500;color:#e8e6e0;">'+completeLots+'</div><div style="font-size:11px;color:#5f5e5a;">'+partialLots+' partial in progress</div></div>'
+      +'<span style="font-size:11px;color:#888780;font-family:system-ui;">'+weekNote+'</span></div>':'')
+
+    // ── Summary stat row ──
+    +'<div style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr 0.5px 1fr;gap:0;">'
+    // Units WTD
+    +'<div style="padding:.75rem 1rem;">'
+      +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Units · week to date</div>'
+      +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px;">'
+        +'<div style="font-size:26px;font-weight:500;color:#378ADD;font-family:system-ui;">'+weekUnits.toLocaleString()+'</div>'
+        +'<div style="font-size:12px;color:#5f5e5a;font-family:system-ui;">of '+weeklyTarget.toLocaleString()+'</div>'
+      +'</div>'
+      +'<div style="background:#2c2c2a;border-radius:4px;height:6px;overflow:hidden;margin-bottom:4px;"><div style="height:100%;width:'+barPct+'%;background:#378ADD;border-radius:4px;"></div></div>'
+      +'<div style="font-size:10px;color:#888780;font-family:system-ui;">'+barPct+'% of target · '+targetLabel+'</div>'
+    +'</div>'
+    +'<div style="background:#2c2c2a;"></div>'
+    // Needed per day
+    +(isLiveWeek&&daysRemaining>0
+      ?'<div style="padding:.75rem 1rem;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Needed per day</div>'
+        +'<div style="font-size:26px;font-weight:500;color:'+(onPace?'#1D9E75':'#EF9F27')+';font-family:system-ui;margin-bottom:2px;">'+neededPerDay.toLocaleString()+'</div>'
+        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+unitsNeeded.toLocaleString()+' left &middot; '+daysRemaining+'d remaining</div>'
+        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">hist. avg: '+historicalDailyAvg.toLocaleString()+'/day</div>'
+      +'</div>'
+      :'<div style="padding:.75rem 1rem;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Final output</div>'
+        +'<div style="font-size:26px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:2px;">'+weekUnits.toLocaleString()+'</div>'
+        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">target: '+weeklyTarget.toLocaleString()+'</div>'
+      +'</div>')
+    +'<div style="background:#2c2c2a;"></div>'
+    // Vs this time last week
+    +(vsLastWk!==null
+      ?'<div style="padding:.75rem 1rem;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">'+(isLiveWeek?'Vs this time last wk':'Vs last week')+'</div>'
+        +'<div style="font-size:26px;font-weight:500;color:'+(vsLastWk>=0?'#1D9E75':'#EF9F27')+';font-family:system-ui;margin-bottom:2px;">'+(vsLastWk>=0?'+':'')+vsLastWk.toFixed(1)+'%</div>'
+        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">Wk '+(weekNum-1)+': '+lastWkSameUnits.toLocaleString()+(isLiveWeek?' ('+daysElapsed+'d)':'')+'</div>'
+      +'</div>'
+      :'<div style="padding:.75rem 1rem;"><div style="font-size:10px;color:#5f5e5a;font-style:italic;font-family:system-ui;">No prior week data</div></div>')
+    +'<div style="background:#2c2c2a;"></div>'
+    // Lots
+    +'<div style="padding:.75rem 1rem;">'
+      +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Lots completed</div>'
+      +'<div style="font-size:26px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:2px;">'+completeLots+'</div>'
+      +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+partialLots+' partial in progress</div>'
+    +'</div>'
     +'</div></div>'
-    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;margin-bottom:10px;">Weekly output by line</div><div style="display:flex;gap:10px;flex-wrap:wrap;">'
-    +ALL_LINES.map(function(line){ var k2=lk(line),color=LINE_COLOR[k2]||'#888780',txt=LINE_TXT[k2]||'#e8e6e0',type=LINE_TYPE[k2]||''; var u=weekByLine[line]||0; var lineShare=totalAvgPerDay?(lineAvg[line]||0)/totalAvgPerDay:0; var lineWeeklyShare=Math.round(weeklyTarget*lineShare); var p=lineWeeklyShare?Math.min(Math.round((u/lineWeeklyShare)*100),100):0; return '<div style="flex:1;min-width:140px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:'+txt+';text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+line+' \u2014 '+type+'</div><div style="font-size:18px;font-weight:500;color:'+color+';">'+u.toLocaleString()+'</div><div style="font-size:10px;color:#5f5e5a;margin-bottom:6px;">of ~'+lineWeeklyShare.toLocaleString()+' weekly share</div><div style="height:5px;background:#2c2c2a;border-radius:3px;overflow:hidden;"><div style="height:100%;width:'+p+'%;background:'+color+';border-radius:3px;"></div></div></div>'; }).join('')
+
+    // ── Line cards ──
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">'
+    +ALL_LINES.map(function(line){
+      var k2=lk(line),color=LINE_COLOR[k2]||'#888780',trackColor=LINE_TRACK[k2]||'#2c2c2a';
+      var type=LINE_TYPE[k2]||'';
+      var bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0';
+      var hdrBg=k2==='line#1'?'#0a1520':k2==='line#2'?'#110f22':'#1a0c14';
+      var borderColor=k2==='line#1'?'#061d35':k2==='line#2'?'#1a1840':'#4B1528';
+      var u=weekByLine[line]||0;
+      var lineShareFrac=totalAvgPerDay?(lineAvg[line]||0)/totalAvgPerDay:0;
+      var lineWeeklyShare=Math.round(weeklyTarget*lineShareFrac);
+      var sharePct=lineWeeklyShare?Math.min(Math.round((u/lineWeeklyShare)*100),100):0;
+      var weekElapsedPct=Math.round((daysElapsed/wkDayCount)*100);
+      var lineOnTrack=sharePct>=weekElapsedPct*0.9;
+      var lineStatusBg=lineOnTrack?'#085041':'#633806';
+      var lineStatusTxt=lineOnTrack?'#9FE1CB':'#FAC775';
+      var lineStatusLbl=lineOnTrack?'On track':'Behind';
+      // Day breakdown
+      var dayNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      var dayCells=wkDates.map(function(d,i){
+        var dk=dateKey(d);
+        var dayU=(dayLineUnits[line]||{})[dk]||0;
+        var dayTgt=ALL_LINES.reduce(function(s,l2){
+          var row=dailyTargets[dk]||{}; return s+(l2===line?(row[line]||0):0);
+        },0);
+        var hasDayData=dayU>0;
+        var isFuture=isLiveWeek&&d>now;
+        var devPct=dayTgt&&hasDayData?Math.round((dayU-dayTgt)/dayTgt*100):null;
+        var devColor=devPct===null?'#444441':devPct>=-1?'#1D9E75':'#EF9F27';
+        var devStr=devPct===null?'':(devPct>=0?'+':'')+devPct+'%';
+        return '<div style="text-align:center;">'
+          +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:3px;">'+dayNames[i]+'</div>'
+          +(isFuture
+            ?'<div style="font-size:12px;font-weight:500;color:#2c2c2a;font-family:system-ui;">—</div>'
+            +'<div style="font-size:9px;color:#2c2c2a;font-family:system-ui;">—</div>'
+            :hasDayData
+              ?'<div style="font-size:12px;font-weight:500;color:'+color+';font-family:system-ui;">'+dayU.toLocaleString()+'</div>'
+              +'<div style="font-size:9px;color:'+devColor+';font-family:system-ui;">'+devStr+'</div>'
+              :'<div style="font-size:12px;font-weight:500;color:#444441;font-family:system-ui;">—</div>'
+              +'<div style="font-size:9px;color:#444441;font-family:system-ui;">—</div>'
+          )
+        +'</div>';
+      }).join('');
+      return '<div style="background:#1e2124;border:0.5px solid '+borderColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
+        +'<div style="padding:10px 14px 8px;background:'+hdrBg+';border-bottom:0.5px solid #2c2c2a;display:flex;align-items:center;justify-content:space-between;">'
+          +'<div style="display:flex;align-items:center;gap:6px;">'
+            +'<span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span>'
+            +'<span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span>'
+          +'</div>'
+          +(weeklyTarget?'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+lineStatusBg+';color:'+lineStatusTxt+';font-family:system-ui;">'+lineStatusLbl+'</span>':'')
+        +'</div>'
+        +'<div style="padding:12px 14px;">'
+          +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px;">'
+            +'<div style="font-size:26px;font-weight:500;color:'+color+';font-family:system-ui;">'+u.toLocaleString()+'</div>'
+            +(lineWeeklyShare?'<div style="font-size:11px;color:#5f5e5a;font-family:system-ui;">of ~'+lineWeeklyShare.toLocaleString()+'</div>':'')
+          +'</div>'
+          +'<div style="background:#2c2c2a;border-radius:4px;height:8px;overflow:hidden;margin-bottom:5px;"><div style="height:100%;width:'+sharePct+'%;background:'+color+';border-radius:4px;"></div></div>'
+          +'<div style="display:flex;justify-content:space-between;font-size:10px;font-family:system-ui;margin-bottom:10px;">'
+            +'<span style="color:#888780;">'+sharePct+'% of weekly share</span>'
+            +'<span style="color:#5f5e5a;">'+weekElapsedPct+'% of week elapsed</span>'
+          +'</div>'
+          +'<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;display:grid;grid-template-columns:repeat('+wkDayCount+',1fr);gap:4px;">'
+            +dayCells
+          +'</div>'
+        +'</div>'
+      +'</div>';
+    }).join('')
+    +'</div>'
+
+    // ── Combined progress bar ──
+    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;">Weekly progress — all lines</div>'
+        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">Target: '+weeklyTarget.toLocaleString()+'</div>'
+      +'</div>'
+      +'<div style="background:#0d0f10;border:1.5px solid #2c2c2a;border-radius:8px;height:22px;position:relative;overflow:hidden;margin-bottom:8px;">'
+        +ALL_LINES.map(function(line,i){
+          var k2=lk(line),color=LINE_COLOR[k2];
+          var u=weekByLine[line]||0;
+          var w=weeklyTarget?Math.min((u/weeklyTarget)*100,100):0;
+          var left=ALL_LINES.slice(0,i).reduce(function(s,l2){return s+(weeklyTarget?Math.min(((weekByLine[l2]||0)/weeklyTarget)*100,100):0);},0);
+          var radius=i===0?'6px 0 0 6px':i===ALL_LINES.length-1?'0 6px 6px 0':'0';
+          return '<div style="position:absolute;top:0;left:'+left+'%;height:100%;width:'+w+'%;background:'+color+';border-radius:'+radius+';"></div>';
+        }).join('')
+        +'<div style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'
+          +(weeklyTarget?Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go':'')
+        +'</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+        +ALL_LINES.map(function(line){
+          var k2=lk(line),color=LINE_COLOR[k2];
+          var u=weekByLine[line]||0;
+          return '<div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#5f5e5a;font-family:system-ui;">'
+            +'<div style="width:8px;height:8px;border-radius:2px;background:'+color+';"></div>'
+            +line+' — '+u.toLocaleString()
+          +'</div>';
+        }).join('')
+      +'</div>'
+    +'</div>'
+
+    // ── 8-week trend chart ──
+    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;">Weekly output \u2014 last 8 weeks</div>'
+    +'<div style="display:flex;align-items:center;gap:14px;font-size:11px;color:#888780;font-family:system-ui;">'
+    +'<div style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:16px;border-top:2px dashed #1D9E75;"></span>Target: '+chartStaticTarget.toLocaleString()+'</div>'
+    +'<div style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:16px;border-top:2px dashed #EF9F27;"></span>8-wk avg: '+week8Avg.toLocaleString()+'</div>'
     +'</div></div>'
-    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;">Weekly units \u2014 last 8 weeks</div><div style="display:flex;align-items:center;gap:14px;font-size:11px;color:#888780;"><div style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:16px;border-top:2px dashed #1D9E75;"></span>Target: '+chartStaticTarget.toLocaleString()+'</div><div style="display:flex;align-items:center;gap:5px;"><span style="display:inline-block;width:16px;border-top:2px dashed #EF9F27;"></span>8-wk avg: '+week8Avg.toLocaleString()+'</div></div></div><div style="position:relative;height:200px;"><canvas id="cWeeklyW"></canvas></div></div>'
+    +'<div style="position:relative;height:200px;"><canvas id="cWeeklyW"></canvas></div></div>'
+
+    // ── Lots grid ──
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;">'
     +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">'
-    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;">Lots this week</div>'
-    +'<select id="weekCustFilter" onchange="filterWeekLots()" style="padding:5px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;"><option value="">All customers</option>'+weekCustomers.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select>'
-    +'<span id="weekLotCount" style="font-size:11px;color:#5f5e5a;">'+weekLots.length+' lot'+(weekLots.length!==1?'s':'')+'</span>'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;">Lots this week</div>'
+    +'<select id="weekCustFilter" onchange="filterWeekLots()" style="padding:5px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;"><option value="">All customers</option>'+weekCustomers.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select>'
+    +'<span id="weekLotCount" style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+weekLots.length+' lot'+(weekLots.length!==1?'s':'')+'</span>'
     +'</div>'
     +'<div id="weekLotsGrid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">'+buildWeekLotsGrid(weekLots)+'</div></div>';
 
