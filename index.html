@@ -765,16 +765,34 @@ function refreshAndRender(forceRender) {
   }).catch(function(e){ console.error('Refresh failed:', e); });
 }
 
+function getTodayStr() {
+  var n=new Date(); return (n.getMonth()+1)+'/'+n.getDate()+'/'+n.getFullYear();
+}
+var lastKnownDate = getTodayStr();
+
+function checkDateRollover() {
+  var currentDate = getTodayStr();
+  if(currentDate !== lastKnownDate) {
+    lastKnownDate = currentDate;
+    // Date has changed — snap to new today
+    selectedDayIdx = productionDays.length - 1;
+    refreshAndRender(true);
+  }
+}
+
 function startRefreshTimers() {
   if (refreshTimer) clearInterval(refreshTimer);
   if (todayTimer) clearInterval(todayTimer);
   refreshTimer = setInterval(function(){
+    checkDateRollover();
     if(topView==='summary'&&subView==='performance'||topView==='detail') refreshAndRender(false);
   }, 5*60*1000);
   todayTimer = setInterval(function(){
+    checkDateRollover();
     if(topView==='summary'&&subView==='today') refreshAndRender(false);
   }, 60*1000);
   document.addEventListener('visibilitychange', function(){
+    checkDateRollover();
     if(document.visibilityState==='visible' && Date.now()-lastRefreshTime > 45000) refreshAndRender(true);
   });
 }
