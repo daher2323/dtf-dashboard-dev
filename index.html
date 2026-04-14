@@ -166,8 +166,8 @@
 </div>
 
 <script>
-var CORRECT_PW = 'DTF2026!';
-var ADMIN_PW   = 'DTFAdmin785$';
+var CORRECT_PW = '53381b5017ab006a3be103e760d153ad240bc964495bf36cc674dcfc5319250f';
+var ADMIN_PW   = '976130b2d1e873ea6c0f6663f7bab915393516be9fb4d69428d3daf59e459366';
 var userRole   = 'viewer'; // 'viewer' | 'admin'
 var CSV_2026 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=943770391&single=true&output=csv';
 var CSV_2025 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=2024063496&single=true&output=csv';
@@ -426,11 +426,17 @@ function showStandardLogin() {
   setTimeout(function(){ document.getElementById('pw-input').focus(); }, 50);
 }
 
-function checkPw(role) {
+async function hashPw(pw) {
+  var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
+  return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+
+async function checkPw(role) {
   var inputId = role === 'admin' ? 'pw-admin-input' : 'pw-input';
   var errorId = role === 'admin' ? 'pw-admin-error' : 'pw-error';
   var v = document.getElementById(inputId).value;
-  var valid = role === 'admin' ? v === ADMIN_PW : v === CORRECT_PW;
+  var hash = await hashPw(v);
+  var valid = role === 'admin' ? hash === ADMIN_PW : hash === CORRECT_PW;
   if (valid) {
     userRole = role;
     sessionStorage.setItem('dtf_auth', '1');
