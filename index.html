@@ -2807,7 +2807,7 @@ function renderCustomerOverview(healthData) {
       var prevWithData = null;
       for (var pi=idx-1; pi>=0; pi--) { if (cd.qtrs[pi].units>0){prevWithData=cd.qtrs[pi];break;} }
       var unitsDelta = '';
-      if (prevWithData && q.units>0) {
+      if (prevWithData && q.units>0 && !isCur) {
         unitsDelta = pctBadge(q.units, prevWithData.units, true);
       } else if (!prevWithData && q.units>0) {
         unitsDelta = ' <span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
@@ -2815,11 +2815,11 @@ function renderCustomerOverview(healthData) {
 
       var prevRun = null;
       for (var ri=idx-1; ri>=0; ri--) { if (cd.qtrs[ri].avgRun>0){prevRun=cd.qtrs[ri].avgRun;break;} }
-      var runDelta = prevRun && q.avgRun ? pctBadge(q.avgRun, prevRun, true) : '';
+      var runDelta = prevRun && q.avgRun && !isCur ? pctBadge(q.avgRun, prevRun, true) : '';
 
       var prevPct = null;
       for (var ci=idx-1; ci>=0; ci--) { if (cd.qtrs[ci].pctOfProd!==null){prevPct=cd.qtrs[ci].pctOfProd;break;} }
-      var pctDelta = prevPct!==null && q.pctOfProd!==null ? pctBadge(q.pctOfProd, prevPct, true) : '';
+      var pctDelta = prevPct!==null && q.pctOfProd!==null && !isCur ? pctBadge(q.pctOfProd, prevPct, true) : '';
 
       var bW = q.units ? Math.round((q.units/maxUnits)*88) : 0;
       var bCol = isCur ? '#378ADD' : '#4A6580';
@@ -3409,7 +3409,7 @@ function renderProcurement() {
       var unitsDelta = '';
       if (prevWithData && q.units>0 && q.key!==curQk) unitsDelta = pctB(q.units, prevWithData.units, true);
       else if (!prevWithData && q.units>0) unitsDelta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
-      else if (q.key===curQk && q.units>0) unitsDelta = '<span style="font-size:10px;color:#5f5e5a;">in progress</span>';
+      else if (q.key===curQk && q.units>0) unitsDelta = '<span style="font-size:10px;color:#5f5e5a;">In progress</span>';
       var prevPct = null;
       for (var ci=idx-1; ci>=0; ci--) { if (cd.qtrs[ci].pctOfTotal!==null){prevPct=cd.qtrs[ci].pctOfTotal;break;} }
       var pctDelta = prevPct!==null && q.pctOfTotal!==null && q.key!==curQk ? pctB(q.pctOfTotal, prevPct, true) : '';
