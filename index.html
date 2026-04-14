@@ -3385,18 +3385,25 @@ function renderProcurement() {
         +tagEl
       +'</div>'
       +'<div style="flex:1;display:flex;flex-direction:column;gap:4px;min-width:0;">'
-        +(cd.ytd25Units ? '<div style="display:flex;align-items:center;gap:7px;"><div style="width:32px;font-size:10px;color:#5f5e5a;flex-shrink:0;">'+prevYr+'</div><div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w25+'%;background:#4A6580;border-radius:2px;"></div></div><div style="font-size:11px;color:#888780;width:68px;text-align:right;flex-shrink:0;">'+cd.ytd25Units.toLocaleString()+'</div></div>' : '')
-        +'<div style="display:flex;align-items:center;gap:7px;"><div style="width:32px;font-size:10px;color:#378ADD;flex-shrink:0;">'+nowYr+'</div><div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w26+'%;background:'+bar26Color+';border-radius:2px;"></div></div><div style="font-size:11px;color:#e8e6e0;font-weight:500;width:68px;text-align:right;flex-shrink:0;">'+cd.ytdUnits.toLocaleString()+'</div>'
-        +pctB(cd.ytdUnits, cd.ytd25Units, true)
+        +(cd.ytd25Units
+          ? '<div style="display:flex;align-items:center;gap:7px;"><div style="width:32px;font-size:10px;color:#5f5e5a;flex-shrink:0;">'+prevYr+'</div><div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w25+'%;background:#4A6580;border-radius:2px;"></div></div><div style="font-size:11px;color:#888780;width:80px;text-align:right;flex-shrink:0;">'+cd.ytd25Units.toLocaleString()+'</div><div style="width:60px;flex-shrink:0;"></div></div>'
+          : '')
+        +'<div style="display:flex;align-items:center;gap:7px;"><div style="width:32px;font-size:10px;color:#378ADD;flex-shrink:0;">'+nowYr+'</div><div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w26+'%;background:'+bar26Color+';border-radius:2px;"></div></div>'
+        +'<div style="font-size:11px;color:#e8e6e0;font-weight:500;width:80px;text-align:right;flex-shrink:0;">'+cd.ytdUnits.toLocaleString()+'</div>'
+        +'<div style="width:60px;flex-shrink:0;">'+pctB(cd.ytdUnits, cd.ytd25Units, false)+'</div>'
         +'</div>'
       +'</div>'
-      +'<div style="display:flex;gap:20px;flex-shrink:0;margin-left:16px;">'
-        +'<div style="text-align:right;"><div style="font-size:10px;color:#888780;margin-bottom:2px;">Lots YTD</div>'
-          +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+cd.ytdLots+(cd.ytd25Lots?' <span style="font-size:11px;color:#5f5e5a;font-weight:400;">was '+cd.ytd25Lots+'</span>':'')+'</div></div>'
-        +'<div style="text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;"><div style="font-size:10px;color:#888780;margin-bottom:2px;">'+(isDes||isNeck?'Total YTD':'% of '+label+' usage')+'</div>'
-          +'<div style="font-size:14px;font-weight:500;color:#e8e6e0;">'
-          +(isDes||isNeck ? cd.ytdUnits.toLocaleString()+pctB(cd.ytdUnits, cd.ytd25Units, true) : (cd.ytdPct!==null?cd.ytdPct+'%':'&#x2014;')+pctB(cd.ytdPct, cd.ytdPct25, true))
-          +'</div></div>'
+      +'<div style="width:100px;flex-shrink:0;text-align:right;padding-left:16px;">'
+        +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Lots YTD</div>'
+        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+cd.ytdLots+'</div>'
+        +(cd.ytd25Lots?'<div style="font-size:10px;color:#5f5e5a;">was '+cd.ytd25Lots+'</div>':'<div style="height:16px;"></div>')
+      +'</div>'
+      +'<div style="width:140px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;">'
+        +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">'+(isDes||isNeck?'Total YTD':'% of '+label+' usage')+'</div>'
+        +'<div style="font-size:14px;font-weight:500;color:#e8e6e0;">'
+          +(isDes||isNeck ? cd.ytdUnits.toLocaleString() : (cd.ytdPct!==null?cd.ytdPct+'%':'&#x2014;'))
+        +'</div>'
+        +(isDes||isNeck ? '<div>'+pctB(cd.ytdUnits, cd.ytd25Units, false)+'</div>' : (cd.ytdPct!==null?'<div>'+pctB(cd.ytdPct, cd.ytdPct25, false)+'</div>':'<div style="height:18px;"></div>'))
       +'</div>'
       +'<div style="display:flex;align-items:flex-end;gap:2px;height:28px;flex-shrink:0;margin-left:16px;">'+sparkBars+'</div>'
       +'<svg id="pc-'+sid+'" width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;margin-left:8px;transition:transform .15s;transform:'+(expanded?'rotate(180deg)':'')+'"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
