@@ -176,6 +176,7 @@ var YEAR_TARGET = 3927000;
 var YEAR_TARGET_2025 = 3300000;
 var WEEKLY_TARGET = Math.round(YEAR_TARGET / 52);
 var WEEKLY_TARGET_2025 = Math.round(YEAR_TARGET_2025 / 52);
+var TARGET_HIT_THRESHOLD = 0.99; // 99% = within 1% tolerance
 var ALL_LINES = ['Line #1', 'Line #2', 'Line #4'];
 var LINE_COLOR = {'line#1':'#378ADD','line#2':'#7F77DD','line#4':'#D4537E'};
 var LINE_TRACK = {'line#1':'#061d35','line#2':'#1a1840','line#4':'#4B1528'};
@@ -1375,7 +1376,7 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
     if(!start) start=ts;
     var t=Math.min((ts-start)/DURATION,1), e=easeOut(t);
     gaugeData.forEach(function(g){
-      var frac=g.avg?(g.units/g.avg):0, hit=frac>=1;
+      var frac=g.avg?(g.units/g.avg):0, hit=frac>=TARGET_HIT_THRESHOLD;
       var p=drawDial(g.idx, hit?'#1D9E75':g.color, hit?'#085041':g.track, Math.min(frac*e,1));
       var ve=document.getElementById('gval_'+g.idx); if(ve){ve.textContent=Math.round(g.units*e).toLocaleString();ve.style.color=hit?'#1D9E75':g.color;}
       var be=document.getElementById('gbadge_'+g.idx); if(be){be.textContent=p+(g.sfx||'% of Avg');if(hit){be.style.background='#085041';be.style.color='#9FE1CB';}}
@@ -1415,7 +1416,7 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
     }
     if(t>=1){
       gaugeData.forEach(function(g){
-        var frac=g.avg?(g.units/g.avg):0, hit=frac>=1;
+        var frac=g.avg?(g.units/g.avg):0, hit=frac>=TARGET_HIT_THRESHOLD;
         drawDial(g.idx, hit?'#1D9E75':g.color, hit?'#085041':g.track, frac);
         var ve=document.getElementById('gval_'+g.idx); if(ve) ve.textContent=g.units.toLocaleString();
         var be=document.getElementById('gbadge_'+g.idx); if(be) be.textContent=Math.round(frac*100)+(g.sfx||'% of Avg');
@@ -1429,7 +1430,7 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
 
 function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusColor) {
   gaugeData.forEach(function(g){
-    var frac = g.avg ? (g.units/g.avg) : 0, hit = frac >= 1;
+    var frac = g.avg ? (g.units/g.avg) : 0, hit = frac >= TARGET_HIT_THRESHOLD;
     var card = document.getElementById('gcard_'+g.idx);
     var check = document.getElementById('gcheck_'+g.idx);
     var remain = document.getElementById('gremain_'+g.idx);
@@ -1441,7 +1442,7 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
       else remain.innerHTML='';
     }
   });
-  var allHit = todayTotal >= totalGoal;
+  var allHit = totalGoal ? (todayTotal/totalGoal) >= TARGET_HIT_THRESHOLD : false;
   var banner = document.getElementById('today-banner');
   if(banner){
     banner.style.background='#141618';
