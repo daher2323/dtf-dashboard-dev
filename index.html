@@ -2764,6 +2764,7 @@ function renderCustomerOverview(healthData) {
           +'<div style="width:32px;font-size:10px;color:#5f5e5a;flex-shrink:0;">'+prevYr+'</div>'
           +'<div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w25+'%;background:#4A6580;border-radius:2px;"></div></div>'
           +'<div style="font-size:11px;color:#888780;width:80px;text-align:right;flex-shrink:0;">'+(cd.ytd25?cd.ytd25.toLocaleString():'&#x2014;')+'</div>'
+          +'<div style="width:60px;flex-shrink:0;"></div>'
         +'</div>'
         +'<div style="display:flex;align-items:center;gap:7px;">'
           +'<div style="width:32px;font-size:10px;color:#378ADD;flex-shrink:0;">'+nowYr+'</div>'
@@ -2882,9 +2883,34 @@ function renderCustomerOverview(healthData) {
 
   var legendHTML = '';
 
+  var colHeader = '<div style="display:flex;align-items:center;gap:0;padding:4px 14px 6px 12px;">'
+    +'<div style="width:140px;flex-shrink:0;"></div>'
+    +'<div style="flex:1;display:flex;flex-direction:column;gap:4px;min-width:0;">'
+      +'<div style="display:flex;align-items:center;gap:7px;">'
+        +'<div style="width:32px;flex-shrink:0;"></div>'
+        +'<div style="flex:1;"></div>'
+        +'<div style="font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;width:80px;text-align:right;flex-shrink:0;">'+prevYr+'</div>'
+        +'<div style="width:60px;flex-shrink:0;"></div>'
+      +'</div>'
+      +'<div style="display:flex;align-items:center;gap:7px;">'
+        +'<div style="width:32px;flex-shrink:0;"></div>'
+        +'<div style="flex:1;"></div>'
+        +'<div style="font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;width:80px;text-align:right;flex-shrink:0;">'+nowYr+' YTD</div>'
+        +'<div style="width:60px;flex-shrink:0;"></div>'
+      +'</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:20px;flex-shrink:0;margin-left:16px;">'
+      +'<div style="text-align:right;width:80px;flex-shrink:0;font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">Lots YTD</div>'
+      +'<div style="text-align:right;width:100px;flex-shrink:0;font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">Avg run</div>'
+      +'<div style="text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;width:100px;flex-shrink:0;font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">% of prod</div>'
+    +'</div>'
+    +'<div style="width:44px;flex-shrink:0;"></div>'
+  +'</div>';
+
   return '<div style="margin-bottom:14px;">'
     +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">Customer overview &middot; thru '+ytdLabel+'</div>'
   +'</div>'
+  +colHeader
   +rows
   +'</div>';
 }
