@@ -29,6 +29,7 @@
   .main-tab:not(.on) .main-tab-name { color: #5f5e5a; }
   .app-bar-right { display: flex; align-items: center; gap: 8px; padding-left: 16px; border-left: 0.5px solid #2c2c2a; margin-left: auto; flex-shrink: 0; }
   .sub-bar-outer { background: #0d1118; border-bottom: 0.5px solid #1a2030; position: sticky; top: 68px; z-index: 99; }
+  .cust-col-header-outer { background: #0d0f10; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 108px; z-index: 98; display: none; }
   .sub-divider { width: 0.5px; height: 20px; background: #2c2c2a; flex-shrink: 0; }
 
   .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 1.25rem; }
@@ -157,6 +158,10 @@
 <!-- Sub-bar -->
 <div class="sub-bar-outer">
   <div id="sub-bar" style="max-width:1400px;margin:0 auto;width:100%;display:flex;align-items:center;gap:8px;padding:.5rem 1.5rem;"></div>
+</div>
+<!-- Customer column header (sticky, shown only on customer overview) -->
+<div class="cust-col-header-outer" id="cust-col-header-outer">
+  <div id="cust-col-header" style="max-width:1400px;margin:0 auto;width:100%;padding:5px 1.5rem;"></div>
 </div>
 
 <div class="shell">
@@ -813,6 +818,9 @@ function navBtnStyle(isActive) {
 function setMainSection(s) {
   closeMsPanel();
   mainSection = s;
+  // Hide customer col header when not on customers
+  var hdrOuter = document.getElementById('cust-col-header-outer');
+  if(hdrOuter && s !== 'customers') hdrOuter.style.display = 'none';
   ['production','customers','procurement'].forEach(function(k) {
     var t = document.getElementById('mtab-' + k);
     if (!t) return;
@@ -2418,6 +2426,8 @@ function toggleRecords() {
 
 function selectCustomer(name) {
   selectedCustomer = name;
+  var hdrOuter = document.getElementById('cust-col-header-outer');
+  if(hdrOuter) hdrOuter.style.display = name ? 'none' : 'block';
   renderSubBar();
   renderCustomers();
   window.scrollTo(0, 0);
@@ -2778,11 +2788,11 @@ function renderCustomerOverview(healthData) {
           +(cd.ytdLots25?'<div style="font-size:10px;color:#5f5e5a;font-weight:400;">was '+cd.ytdLots25+'</div>':'')
         +'</div>'
       +'</div>'
-      +'<div style="width:110px;flex-shrink:0;text-align:right;">'
+      +'<div style="width:130px;flex-shrink:0;text-align:right;">'
         +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+(ytdAvgRun?ytdAvgRun.toLocaleString():'&#x2014;')+'</div>'
         +(ytdAvgRun&&ytdAvgRun25?'<div>'+pctBadge(ytdAvgRun, ytdAvgRun25, false)+'</div>':'')
       +'</div>'
-      +'<div style="width:110px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;">'
+      +'<div style="width:130px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;">'
         +'<div style="font-size:14px;font-weight:500;color:#e8e6e0;">'+(cd.ytdPct!==null?cd.ytdPct+'%':'&#x2014;')+'</div>'
         +(cd.ytdPct!==null&&cd.ytdPct25!==null?'<div>'+pctBadge(cd.ytdPct, cd.ytdPct25, false)+'</div>':'')
       +'</div>';
@@ -2859,9 +2869,9 @@ function renderCustomerOverview(healthData) {
         +'<th style="'+thS+'">Units</th>'
         +'<th style="'+thS+'width:70px;">vs prev</th>'
         +'<th style="'+thS+'">Lots</th>'
-        +'<th style="'+thS+'">Avg run</th>'
+        +'<th style="'+thS+'">Avg run size</th>'
         +'<th style="'+thS+'width:70px;">vs prev</th>'
-        +'<th style="'+thS+'">% of prod</th>'
+        +'<th style="'+thS+'">% of production</th>'
         +'<th style="'+thS+'width:70px;">vs prev</th>'
         +'<th style="'+thS+'padding-right:14px;width:110px;">Volume</th>'
       +'</tr></thead>'
@@ -2876,9 +2886,9 @@ function renderCustomerOverview(healthData) {
 
   var legendHTML = '';
 
-  var colHeader = '<div style="position:sticky;top:0;z-index:10;background:#0d0f10;display:flex;align-items:center;gap:0;padding:5px 14px 5px 12px;border-bottom:0.5px solid #2c2c2a;">'
+  var colHeaderHTML = '<div style="display:flex;align-items:center;gap:0;padding:5px 14px 5px 12px;">'
     +'<div style="width:140px;flex-shrink:0;"></div>'
-    +'<div style="flex:1;display:flex;flex-direction:column;gap:4px;min-width:0;">'
+    +'<div style="flex:1;display:flex;flex-direction:column;gap:0;min-width:0;justify-content:center;">'
       +'<div style="display:flex;align-items:center;gap:7px;">'
         +'<div style="width:32px;flex-shrink:0;"></div>'
         +'<div style="flex:1;"></div>'
@@ -2888,23 +2898,26 @@ function renderCustomerOverview(healthData) {
       +'<div style="display:flex;align-items:center;gap:7px;">'
         +'<div style="width:32px;flex-shrink:0;"></div>'
         +'<div style="flex:1;"></div>'
-        +'<div style="font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;width:80px;text-align:right;flex-shrink:0;">'+nowYr+' YTD</div>'
+        +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;width:80px;text-align:right;flex-shrink:0;">'+nowYr+' YTD</div>'
         +'<div style="width:60px;flex-shrink:0;"></div>'
       +'</div>'
     +'</div>'
-    +'<div style="width:80px;flex-shrink:0;text-align:right;padding-left:16px;font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">Lots YTD</div>'
-    +'<div style="width:110px;flex-shrink:0;text-align:right;font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">Avg run</div>'
-    +'<div style="width:110px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;font-size:10px;font-weight:500;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">% of prod</div>'
-    +'<div style="width:44px;flex-shrink:0;"></div>'
+    +'<div style="width:80px;flex-shrink:0;text-align:right;padding-left:16px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Lots YTD</div>'
+    +'<div style="width:130px;flex-shrink:0;text-align:right;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Avg run size</div>'
+    +'<div style="width:130px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">% of production</div>'
+    +'<div style="width:60px;flex-shrink:0;"></div>'
   +'</div>';
+
+  // Populate and show the external sticky header
+  var hdrOuter = document.getElementById('cust-col-header-outer');
+  var hdrInner = document.getElementById('cust-col-header');
+  if(hdrOuter) hdrOuter.style.display = selectedCustomer ? 'none' : 'block';
+  if(hdrInner) hdrInner.innerHTML = colHeaderHTML;
 
   return '<div style="margin-bottom:14px;">'
     +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">Customer overview &middot; thru '+ytdLabel+'</div>'
   +'</div>'
-  +'<div style="position:relative;">'
-  +colHeader
   +rows
-  +'</div>'
   +'</div>';
 }
 
