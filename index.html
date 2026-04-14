@@ -1995,59 +1995,81 @@ function renderWeekly() {
 
   document.getElementById('content').innerHTML=
     // ── Nav bar ──
-    '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:'+(weekNote?'8px':'12px')+';flex-wrap:wrap;gap:8px;">'+weekNavHTML
-    +'<div style="display:flex;align-items:center;gap:8px;">'
-    +(targetSource==='set'?'<span style="font-size:10px;font-weight:500;color:#1D9E75;padding:2px 8px;border-radius:6px;background:#085041;font-family:system-ui;">&#10003; Target set</span>':targetSource==='est'?'<span style="font-size:10px;color:#EF9F27;padding:2px 8px;border-radius:6px;background:#633806;font-family:system-ui;">Est. target</span>':'')
-    +(statusLabel?'<span style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:10px;background:'+statusBg+';color:'+statusTxt+';font-family:system-ui;">'+statusLabel+'</span>':'')
-    +'</div></div>'
-    +(weekNote?'<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;padding:6px 10px;background:#141618;border-radius:6px;border-left:2px solid #444441;">'
-      +'<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#888780" stroke-width="1.2"/><line x1="6" y1="5" x2="6" y2="8.5" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><circle cx="6" cy="3.2" r=".7" fill="#888780"/></svg>'
-      +'<span style="font-size:11px;color:#888780;font-family:system-ui;">'+weekNote+'</span></div>':'')
-
-    // ── Summary stat row ──
-    +'<div style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr 0.5px 1fr;gap:0;">'
-    // Units WTD
-    +'<div style="padding:.75rem 1rem;">'
-      +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Units · week to date</div>'
-      +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px;">'
-        +'<div style="font-size:26px;font-weight:500;color:#378ADD;font-family:system-ui;">'+weekUnits.toLocaleString()+'</div>'
-        +'<div style="font-size:12px;color:#5f5e5a;font-family:system-ui;">of '+weeklyTarget.toLocaleString()+'</div>'
-      +'</div>'
-      +'<div style="background:#2c2c2a;border-radius:4px;height:6px;overflow:hidden;margin-bottom:4px;"><div style="height:100%;width:'+barPct+'%;background:#378ADD;border-radius:4px;"></div></div>'
-      +'<div style="font-size:10px;color:#888780;font-family:system-ui;">'+barPct+'% of target · '+targetLabel+'</div>'
-    +'</div>'
-    +'<div style="background:#2c2c2a;"></div>'
-    // Needed per day
-    +(isLiveWeek&&daysRemaining>0
-      ?'<div style="padding:.75rem 1rem;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Needed per day</div>'
-        +'<div style="font-size:26px;font-weight:500;color:'+(onPace?'#1D9E75':'#EF9F27')+';font-family:system-ui;margin-bottom:2px;">'+neededPerDay.toLocaleString()+'</div>'
-        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+unitsNeeded.toLocaleString()+' left &middot; '+daysRemaining+'d remaining</div>'
-        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">hist. avg: '+historicalDailyAvg.toLocaleString()+'/day</div>'
-      +'</div>'
-      :'<div style="padding:.75rem 1rem;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Final output</div>'
-        +'<div style="font-size:26px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:2px;">'+weekUnits.toLocaleString()+'</div>'
-        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">target: '+weeklyTarget.toLocaleString()+'</div>'
-      +'</div>')
-    +'<div style="background:#2c2c2a;"></div>'
-    // Vs this time last week
-    +(vsLastWk!==null
-      ?'<div style="padding:.75rem 1rem;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">'+(isLiveWeek?'Vs this time last wk':'Vs last week')+'</div>'
-        +'<div style="font-size:26px;font-weight:500;color:'+(vsLastWk>=0?'#1D9E75':'#EF9F27')+';font-family:system-ui;margin-bottom:2px;">'+(vsLastWk>=0?'+':'')+vsLastWk.toFixed(1)+'%</div>'
-        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">Wk '+(weekNum-1)+': '+lastWkSameUnits.toLocaleString()+(isLiveWeek?' ('+daysElapsed+'d)':'')+'</div>'
-      +'</div>'
-      :'<div style="padding:.75rem 1rem;"><div style="font-size:10px;color:#5f5e5a;font-style:italic;font-family:system-ui;">No prior week data</div></div>')
-    +'<div style="background:#2c2c2a;"></div>'
-    // Lots
-    +'<div style="padding:.75rem 1rem;">'
-      +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-family:system-ui;">Lots completed</div>'
-      +'<div style="font-size:26px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:2px;">'+completeLots+'</div>'
-      +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+partialLots+' partial in progress</div>'
-    +'</div>'
-    +'</div></div>'
+    // ── Weekly banner (daily bar style) ──
+    (function(){
+      var allHitWeek=!isLiveWeek&&weeklyTarget&&(weekUnits/weeklyTarget)>=TARGET_HIT_THRESHOLD;
+      var bannerBorder=allHitWeek?'2px solid #1D9E75':'0.5px solid #2c2c2a';
+      var bannerShadow=allHitWeek?'0 0 10px 2px rgba(29,158,117,0.28),0 0 20px 4px rgba(29,158,117,0.10)':'none';
+      var pctColor=allHitWeek?'#9FE1CB':onPace?'#9FE1CB':'#EF9F27';
+      var statusColor=allHitWeek?'#9FE1CB':onPace?'#9FE1CB':'#EF9F27';
+      var remText=allHitWeek?'+'+(weekUnits-weeklyTarget).toLocaleString()+' over target'
+        :isLiveWeek&&weeklyTarget?Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go'
+        :weeklyTarget?(weekUnits>=weeklyTarget?'+'+( weekUnits-weeklyTarget).toLocaleString()+' over target':Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go'):'';
+      // segment widths
+      var segs=ALL_LINES.map(function(line){
+        var u=weekByLine[line]||0;
+        return weeklyTarget?Math.min((u/weeklyTarget)*100,100):0;
+      });
+      var segLeft=[0,segs[0],segs[0]+segs[1]];
+      // leg positions (midpoints)
+      var legPos=segs.map(function(w,i){return segLeft[i]+w/2;});
+      return '<div style="background:#141618;border:'+bannerBorder+';border-radius:10px;padding:1rem 1.25rem;margin-bottom:10px;position:relative;box-shadow:'+bannerShadow+';">'
+        // nav + badges row
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:'+(weekNote?'8px':'14px')+';flex-wrap:wrap;gap:8px;">'+weekNavHTML
+        +'<div style="display:flex;align-items:center;gap:8px;">'
+        +(targetSource==='set'?'<span style="font-size:10px;font-weight:500;color:#1D9E75;padding:2px 8px;border-radius:6px;background:#085041;font-family:system-ui;">&#10003; Target set</span>':targetSource==='est'?'<span style="font-size:10px;color:#EF9F27;padding:2px 8px;border-radius:6px;background:#633806;font-family:system-ui;">Est. target</span>':'')
+        +(statusLabel?'<span style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:10px;background:'+statusBg+';color:'+statusTxt+';font-family:system-ui;">'+statusLabel+'</span>':'')
+        +'</div></div>'
+        +(weekNote?'<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;padding:6px 10px;background:#141618;border-radius:6px;border-left:2px solid #444441;">'
+          +'<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#888780" stroke-width="1.2"/><line x1="6" y1="5" x2="6" y2="8.5" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><circle cx="6" cy="3.2" r=".7" fill="#888780"/></svg>'
+          +'<span style="font-size:11px;color:#888780;font-family:system-ui;">'+weekNote+'</span></div>':'')
+        // stat row
+        +'<div style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr 0.5px 1fr;margin-bottom:14px;">'
+          +'<div style="text-align:center;padding:0 10px;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">'+(isLiveWeek?'Total units · WTD':'Total units')+'</div>'
+            +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+weekUnits.toLocaleString()+'</div>'
+          +'</div>'
+          +'<div style="background:#2c2c2a;"></div>'
+          +'<div style="text-align:center;padding:0 10px;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Weekly target</div>'
+            +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+weeklyTarget.toLocaleString()+'</div>'
+          +'</div>'
+          +'<div style="background:#2c2c2a;"></div>'
+          +'<div style="text-align:center;padding:0 10px;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">% of target</div>'
+            +'<div style="font-size:22px;font-weight:500;color:'+pctColor+';font-family:system-ui;">'+barPct+'%</div>'
+          +'</div>'
+          +'<div style="background:#2c2c2a;"></div>'
+          +'<div style="text-align:center;padding:0 10px;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">'+(isLiveWeek?'Needed / day':'Status')+'</div>'
+            +(isLiveWeek&&daysRemaining>0
+              ?'<div style="font-size:22px;font-weight:500;color:'+(onPace?'#9FE1CB':'#EF9F27')+';font-family:system-ui;">'+neededPerDay.toLocaleString()+'</div>'
+              :statusLabel?'<div style="font-size:13px;font-weight:500;color:'+statusColor+';padding-top:4px;font-family:system-ui;">'+statusLabel+'</div>'
+              :'<div style="font-size:13px;color:#5f5e5a;font-family:system-ui;">—</div>'
+            )
+          +'</div>'
+        +'</div>'
+        // segmented bar
+        +'<div style="background:#0d0f10;border:1.5px solid '+(allHitWeek?'#1D9E75':'#2c2c2a')+';border-radius:8px;height:20px;position:relative;overflow:hidden;margin-bottom:8px;">'
+          +ALL_LINES.map(function(line,i){
+            var k2=lk(line),color=LINE_COLOR[k2];
+            var radius=i===0?'6px 0 0 6px':i===ALL_LINES.length-1?'0 6px 6px 0':'0';
+            return '<div style="position:absolute;top:0;left:'+segLeft[i]+'%;height:100%;width:'+segs[i]+'%;background:'+color+';border-radius:'+radius+';"></div>';
+          }).join('')
+          +'<div style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:'+(allHitWeek?'#9FE1CB':'#888780')+';font-family:system-ui;white-space:nowrap;">'+remText+'</div>'
+        +'</div>'
+        // per-line labels under bar
+        +'<div style="position:relative;height:18px;">'
+          +ALL_LINES.map(function(line,i){
+            var k2=lk(line),color=LINE_COLOR[k2];
+            var u=weekByLine[line]||0;
+            return segs[i]>2?'<div style="position:absolute;font-size:10px;font-weight:500;color:'+color+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);left:'+legPos[i]+'%;">'+line+' — '+u.toLocaleString()+'</div>':'';
+          }).join('')
+        +'</div>'
+        // checkmark badge when target hit
+        +(allHitWeek?'<div style="position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:#1D9E75;display:flex;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>':'')
+      +'</div>';
+    })()
 
     // ── Line cards ──
     +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">'
@@ -2135,37 +2157,6 @@ function renderWeekly() {
         +'</div>'
       +'</div>';
     }).join('')
-    +'</div>'
-
-    // ── Combined progress bar ──
-    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;">'
-      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;">Weekly progress — all lines</div>'
-        +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">Target: '+weeklyTarget.toLocaleString()+'</div>'
-      +'</div>'
-      +'<div style="background:#0d0f10;border:1.5px solid #2c2c2a;border-radius:8px;height:22px;position:relative;overflow:hidden;margin-bottom:8px;">'
-        +ALL_LINES.map(function(line,i){
-          var k2=lk(line),color=LINE_COLOR[k2];
-          var u=weekByLine[line]||0;
-          var w=weeklyTarget?Math.min((u/weeklyTarget)*100,100):0;
-          var left=ALL_LINES.slice(0,i).reduce(function(s,l2){return s+(weeklyTarget?Math.min(((weekByLine[l2]||0)/weeklyTarget)*100,100):0);},0);
-          var radius=i===0?'6px 0 0 6px':i===ALL_LINES.length-1?'0 6px 6px 0':'0';
-          return '<div style="position:absolute;top:0;left:'+left+'%;height:100%;width:'+w+'%;background:'+color+';border-radius:'+radius+';"></div>';
-        }).join('')
-        +'<div style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'
-          +(weeklyTarget?Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go':'')
-        +'</div>'
-      +'</div>'
-      +'<div style="display:flex;gap:16px;flex-wrap:wrap;">'
-        +ALL_LINES.map(function(line){
-          var k2=lk(line),color=LINE_COLOR[k2];
-          var u=weekByLine[line]||0;
-          return '<div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#5f5e5a;font-family:system-ui;">'
-            +'<div style="width:8px;height:8px;border-radius:2px;background:'+color+';"></div>'
-            +line+' — '+u.toLocaleString()
-          +'</div>';
-        }).join('')
-      +'</div>'
     +'</div>'
 
     // ── 8-week trend chart ──
