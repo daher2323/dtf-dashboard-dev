@@ -2077,37 +2077,47 @@ function renderWeekly() {
       var lineStatusLbl=lineOnTrack?'On track':'Behind';
       // Day breakdown
       var dayNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      var daysHit=0;
       var dayCells=wkDates.map(function(d,i){
         var dk=dateKey(d);
         var dayU=(dayLineUnits[line]||{})[dk]||0;
-        var dayTgt=ALL_LINES.reduce(function(s,l2){
-          var row=dailyTargets[dk]||{}; return s+(l2===line?(row[line]||0):0);
-        },0);
+        var dayTgt=(dailyTargets[dk]||{})[line]||0;
         var hasDayData=dayU>0;
         var isFuture=isLiveWeek&&d>now;
+        var hitDay=dayTgt>0&&hasDayData&&(dayU/dayTgt)>=TARGET_HIT_THRESHOLD;
         var devPct=dayTgt&&hasDayData?Math.round((dayU-dayTgt)/dayTgt*100):null;
         var devColor=devPct===null?'#444441':devPct>=-1?'#1D9E75':'#EF9F27';
         var devStr=devPct===null?'':(devPct>=0?'+':'')+devPct+'%';
-        return '<div style="text-align:center;">'
-          +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:3px;">'+dayNames[i]+'</div>'
+        if(hitDay) daysHit++;
+        var cellBg=hitDay?'background:#041f18;border:0.5px solid #1D9E75;box-shadow:0 0 6px 1px rgba(29,158,117,0.18);':'background:#141618;border:0.5px solid #2c2c2a;';
+        return '<div style="text-align:center;border-radius:6px;padding:5px 2px;'+cellBg+'">'
+          +'<div style="font-size:9px;color:'+(hitDay?'#5DCAA5':'#5f5e5a')+';text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:3px;">'
+            +(hitDay?'<svg width="8" height="8" viewBox="0 0 10 10" fill="none" style="vertical-align:middle;margin-right:2px;"><polyline points="1.5,5 4,7.5 8.5,2" stroke="#1D9E75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')
+            +dayNames[i]
+          +'</div>'
           +(isFuture
             ?'<div style="font-size:12px;font-weight:500;color:#2c2c2a;font-family:system-ui;">—</div>'
-            +'<div style="font-size:9px;color:#2c2c2a;font-family:system-ui;">—</div>'
+            +'<div style="font-size:9px;color:#2c2c2a;font-family:system-ui;">&nbsp;</div>'
             :hasDayData
-              ?'<div style="font-size:12px;font-weight:500;color:'+color+';font-family:system-ui;">'+dayU.toLocaleString()+'</div>'
+              ?'<div style="font-size:12px;font-weight:500;color:'+(hitDay?'#9FE1CB':color)+';font-family:system-ui;">'+dayU.toLocaleString()+'</div>'
               +'<div style="font-size:9px;color:'+devColor+';font-family:system-ui;">'+devStr+'</div>'
               :'<div style="font-size:12px;font-weight:500;color:#444441;font-family:system-ui;">—</div>'
-              +'<div style="font-size:9px;color:#444441;font-family:system-ui;">—</div>'
+              +'<div style="font-size:9px;color:#444441;font-family:system-ui;">&nbsp;</div>'
           )
         +'</div>';
       }).join('');
+      var daysWithData=wkDates.filter(function(d){ var dk=dateKey(d); return ((dayLineUnits[line]||{})[dk]||0)>0; }).length;
+      var daysHitStr=daysWithData>0?daysHit+'/'+daysWithData+' days hit':'';
       return '<div style="background:#1e2124;border:0.5px solid '+borderColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
         +'<div style="padding:10px 14px 8px;background:'+hdrBg+';border-bottom:0.5px solid #2c2c2a;display:flex;align-items:center;justify-content:space-between;">'
           +'<div style="display:flex;align-items:center;gap:6px;">'
             +'<span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span>'
             +'<span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span>'
           +'</div>'
-          +(weeklyTarget?'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+lineStatusBg+';color:'+lineStatusTxt+';font-family:system-ui;">'+lineStatusLbl+'</span>':'')
+          +'<div style="display:flex;align-items:center;gap:8px;">'
+            +(daysHitStr?'<span style="font-size:10px;color:'+(daysHit===daysWithData&&daysWithData>0?'#1D9E75':'#888780')+';font-family:system-ui;">'+daysHitStr+'</span>':'')
+            +(weeklyTarget?'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+lineStatusBg+';color:'+lineStatusTxt+';font-family:system-ui;">'+lineStatusLbl+'</span>':'')
+          +'</div>'
         +'</div>'
         +'<div style="padding:12px 14px;">'
           +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px;">'
