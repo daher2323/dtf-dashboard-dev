@@ -100,7 +100,13 @@
       <svg width="64" height="64" viewBox="0 0 54 54" style="margin-bottom:1.5rem"><rect x="2" y="2" width="50" height="50" rx="10" fill="#0C447C" stroke="#378ADD" stroke-width="1.5"/><text x="27" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#85B7EB" font-family="system-ui,sans-serif" letter-spacing="-1">DTF</text></svg>
       <div style="font-size:18px;font-weight:500;color:#e8e6e0;margin-bottom:4px">Dynamic Technical Formulations</div>
       <div style="font-size:13px;color:#888780;margin-bottom:2rem">Operations Center</div>
-      <input id="pw-input" type="password" placeholder="Enter password" onkeydown="if(event.key==='Enter')checkPw('viewer')" style="width:100%;padding:10px 14px;border:0.5px solid #444441;border-radius:8px;background:#141618;color:#e8e6e0;font-size:14px;margin-bottom:10px;outline:none;display:block" autofocus>
+      <div style="position:relative;margin-bottom:10px;">
+        <input id="pw-input" type="password" placeholder="Enter password" onkeydown="if(event.key==='Enter')checkPw('viewer')" style="width:100%;padding:10px 40px 10px 14px;border:0.5px solid #444441;border-radius:8px;background:#141618;color:#e8e6e0;font-size:14px;outline:none;display:block;box-sizing:border-box;" autofocus>
+        <button type="button" onclick="var i=document.getElementById('pw-input');i.type=i.type==='password'?'text':'password';this.querySelector('.eye-off').style.display=i.type==='password'?'block':'none';this.querySelector('.eye-on').style.display=i.type==='password'?'none':'block';" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:transparent;border:none;cursor:pointer;padding:4px;color:#5f5e5a;" onmouseover="this.style.color='#888780'" onmouseout="this.style.color='#5f5e5a'">
+          <svg class="eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="eye-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        </button>
+      </div>
       <button onclick="checkPw('viewer')" style="width:100%;padding:10px;background:#378ADD;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer">Sign in</button>
       <div id="pw-error" style="color:#F09595;font-size:12px;margin-top:10px;display:none">Incorrect password. Please try again.</div>
       <div style="margin-top:28px;padding-top:20px;border-top:0.5px solid #2c2c2a;">
@@ -117,7 +123,13 @@
       <div style="margin-bottom:14px;"><span style="padding:3px 12px;border-radius:20px;background:#0C2240;border:0.5px solid #1D5A99;color:#85B7EB;font-size:10px;font-weight:500;font-family:system-ui;letter-spacing:.05em;text-transform:uppercase;">Admin access</span></div>
       <div style="font-size:18px;font-weight:500;color:#e8e6e0;margin-bottom:4px">Dynamic Technical Formulations</div>
       <div style="font-size:13px;color:#888780;margin-bottom:2rem">Operations Center</div>
-      <input id="pw-admin-input" type="password" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')checkPw('admin')" style="width:100%;padding:10px 14px;border:0.5px solid #444441;border-radius:8px;background:#141618;color:#e8e6e0;font-size:14px;margin-bottom:10px;outline:none;display:block">
+      <div style="position:relative;margin-bottom:10px;">
+        <input id="pw-admin-input" type="password" placeholder="Enter admin password" onkeydown="if(event.key==='Enter')checkPw('admin')" style="width:100%;padding:10px 40px 10px 14px;border:0.5px solid #444441;border-radius:8px;background:#141618;color:#e8e6e0;font-size:14px;outline:none;display:block;box-sizing:border-box;">
+        <button type="button" onclick="var i=document.getElementById('pw-admin-input');i.type=i.type==='password'?'text':'password';this.querySelector('.eye-off').style.display=i.type==='password'?'block':'none';this.querySelector('.eye-on').style.display=i.type==='password'?'none':'block';" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:transparent;border:none;cursor:pointer;padding:4px;color:#5f5e5a;" onmouseover="this.style.color='#888780'" onmouseout="this.style.color='#5f5e5a'">
+          <svg class="eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="eye-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        </button>
+      </div>
       <button onclick="checkPw('admin')" style="width:100%;padding:10px;background:#0C447C;color:#85B7EB;border:1.5px solid #378ADD;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer">Sign in as admin</button>
       <div id="pw-admin-error" style="color:#F09595;font-size:12px;margin-top:10px;display:none">Incorrect admin password. Please try again.</div>
     </div>
