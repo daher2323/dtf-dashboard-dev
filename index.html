@@ -2155,6 +2155,40 @@ function renderWeekly() {
           +'<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;display:grid;grid-template-columns:repeat('+wkDayCount+',1fr);gap:4px;">'
             +dayCells
           +'</div>'
+          +(function(){
+            // Build container size mix for this line from weekLots
+            var isBottleLine = k2==='line#2';
+            var sizeKey = isBottleLine ? 'bottleSize' : 'jarSize';
+            var bySize={};
+            var lineTotal=0;
+            weekLots.forEach(function(l){
+              if((l.line||'').trim()!==line) return;
+              var sz=isBottleLine?(lotMap[l.lot]?lotMap[l.lot].bottleSize:''):(lotMap[l.lot]?lotMap[l.lot].jarSize:'');
+              var normalized=jarSizeKey(sz)||'Other';
+              bySize[normalized]=(bySize[normalized]||0)+l.finalUnits;
+              lineTotal+=l.finalUnits;
+            });
+            if(!lineTotal||Object.keys(bySize).length===0) return '';
+            var MIX_COLORS=['#378ADD','#1D9E75','#EF9F27','#D4537E','#7F77DD','#D85A30','#85B7EB','#5DCAA5'];
+            var entries=Object.entries(bySize).sort(function(a,b){return b[1]-a[1];});
+            var barSegs=entries.map(function(e,i){
+              var pct=(e[1]/lineTotal*100).toFixed(1);
+              var w=(e[1]/lineTotal*100);
+              return '<div style="height:100%;width:'+w+'%;background:'+MIX_COLORS[i%MIX_COLORS.length]+';'+(i===0?'border-radius:4px 0 0 4px;':i===entries.length-1?'border-radius:0 4px 4px 0;':'')+'" title="'+e[0]+': '+pct+'%"></div>';
+            }).join('');
+            var legend=entries.map(function(e,i){
+              var pct=(e[1]/lineTotal*100).toFixed(1);
+              return '<div style="display:flex;align-items:center;gap:4px;font-size:9px;color:#888780;font-family:system-ui;white-space:nowrap;">'
+                +'<div style="width:7px;height:7px;border-radius:2px;background:'+MIX_COLORS[i%MIX_COLORS.length]+';flex-shrink:0;"></div>'
+                +e[0]+' <span style="color:#5f5e5a;">'+pct+'%</span>'
+              +'</div>';
+            }).join('');
+            return '<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;margin-top:10px;">'
+              +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">'+(isBottleLine?'Bottle':'Jar')+' size mix</div>'
+              +'<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:6px;gap:1px;">'+barSegs+'</div>'
+              +'<div style="display:flex;flex-wrap:wrap;gap:6px 12px;">'+legend+'</div>'
+            +'</div>';
+          })()
         +'</div>'
       +'</div>';
     }).join('')
