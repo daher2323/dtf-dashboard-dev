@@ -1392,9 +1392,9 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
     var t=Math.min((ts-start)/DURATION,1), e=easeOut(t);
     gaugeData.forEach(function(g){
       var frac=g.avg?(g.units/g.avg):0, hit=frac>=TARGET_HIT_THRESHOLD;
-      var p=drawDial(g.idx, hit?'#1D9E75':g.color, hit?'#085041':g.track, Math.min(frac*e,1));
-      var ve=document.getElementById('gval_'+g.idx); if(ve){ve.textContent=Math.round(g.units*e).toLocaleString();ve.style.color=hit?'#1D9E75':g.color;}
-      var be=document.getElementById('gbadge_'+g.idx); if(be){be.textContent=p+(g.sfx||'% of Avg');if(hit){be.style.background='#085041';be.style.color='#9FE1CB';}}
+      var p=drawDial(g.idx, g.color, g.track, Math.min(frac*e,1));
+      var ve=document.getElementById('gval_'+g.idx); if(ve){ve.textContent=Math.round(g.units*e).toLocaleString();ve.style.color=g.color;}
+      var be=document.getElementById('gbadge_'+g.idx); if(be){be.textContent=p+(g.sfx||'% of Avg');if(hit){be.style.background=g.track.replace('#2c2c2a',g.track);be.style.color=g.color;}}
     });
     var tp=totalGoal?Math.round((todayTotal*e)/totalGoal*100):0;
     var pp=document.getElementById('banner-pct'); if(pp) pp.textContent=tp+'%';
@@ -1432,7 +1432,7 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
     if(t>=1){
       gaugeData.forEach(function(g){
         var frac=g.avg?(g.units/g.avg):0, hit=frac>=TARGET_HIT_THRESHOLD;
-        drawDial(g.idx, hit?'#1D9E75':g.color, hit?'#085041':g.track, frac);
+        drawDial(g.idx, g.color, g.track, frac);
         var ve=document.getElementById('gval_'+g.idx); if(ve) ve.textContent=g.units.toLocaleString();
         var be=document.getElementById('gbadge_'+g.idx); if(be) be.textContent=Math.round(frac*100)+(g.sfx||'% of Avg');
       });
