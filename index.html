@@ -1976,6 +1976,7 @@ function renderWeekly() {
     +'<div style="font-size:10px;color:#5f5e5a;margin-top:2px;height:14px;">'+(isLiveWeek?'(This week)':daysElapsed+' of '+wkDayCount+' days')+'</div>'
     +'</div>'
     +'<button onclick="navWeek(1)" '+(isLiveWeek?'disabled':'')+' style="width:28px;height:28px;flex-shrink:0;border-radius:8px;border:0.5px solid #444441;background:transparent;cursor:'+(isLiveWeek?'default':'pointer')+';color:'+(isLiveWeek?'#444441':'#e8e6e0')+';font-size:16px;display:flex;align-items:center;justify-content:center;font-family:system-ui">&#8250;</button>'
+    +(!isLiveWeek?'<button onclick="selectedWeekMon=getCurrentWeekMon();renderWeekly();" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;margin-left:4px;">Jump to this week</button>':'')
     +'</div>';
 
   // Per-day per-line units for the day breakdown
@@ -2026,7 +2027,7 @@ function renderWeekly() {
         // stat row
         +'<div style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr 0.5px 1fr;margin-bottom:14px;">'
           +'<div style="text-align:center;padding:0 10px;">'
-            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">'+(isLiveWeek?'Total units · WTD':'Total units')+'</div>'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">'+(isLiveWeek?'Total units · Week to date':'Total units')+'</div>'
             +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+weekUnits.toLocaleString()+'</div>'
           +'</div>'
           +'<div style="background:#2c2c2a;"></div>'
