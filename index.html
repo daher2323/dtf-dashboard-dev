@@ -2087,7 +2087,7 @@ function renderWeekly() {
         var hitDay=dayTgt>0&&hasDayData&&(dayU/dayTgt)>=TARGET_HIT_THRESHOLD;
         var devPct=dayTgt&&hasDayData?Math.round((dayU-dayTgt)/dayTgt*100):null;
         var devColor=devPct===null?'#444441':devPct>=-1?'#1D9E75':'#EF9F27';
-        var devStr=devPct===null?'':(devPct>=0?'+':'')+devPct+'%';
+        var devStr=devPct===null?'':(devPct>=0?'+':'')+devPct+'% of tgt';
         if(hitDay) daysHit++;
         var cellBg=hitDay?'background:#041f18;border:0.5px solid #1D9E75;box-shadow:0 0 6px 1px rgba(29,158,117,0.18);':'background:#141618;border:0.5px solid #2c2c2a;';
         return '<div style="text-align:center;border-radius:6px;padding:5px 2px;'+cellBg+'">'
