@@ -656,6 +656,16 @@ function parseWeeklyTargets(text) {
   } catch(e) { return {}; }
 }
 
+function fetchCSVSimple(url) {
+  return fetch(url).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }).then(function(text){
+    if (!text || text.trim().startsWith('<!')) throw new Error('Invalid response');
+    return text;
+  }).catch(function(){ return ''; });
+}
+
 function fetchWithRetry(url, retries, delay) {
   retries = retries || 5; delay = delay || 2000;
   return fetch(url).then(function(r){
@@ -680,7 +690,7 @@ function fetchData() {
     fetchWithRetry(CSV_2026),
     fetchWithRetry(CSV_2025),
     fetchWithRetry(CSV_TARGETS).catch(function(){ return ''; }),
-    fetchWithRetry(CSV_WEEKLY_TARGETS).catch(function(){ return ''; })
+    fetchCSVSimple(CSV_WEEKLY_TARGETS)
   ]);
 }
 
