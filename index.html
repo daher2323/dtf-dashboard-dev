@@ -189,6 +189,7 @@ var userRole   = 'viewer'; // 'viewer' | 'admin'
 var CSV_2026 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=943770391&single=true&output=csv';
 var CSV_2025 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=2024063496&single=true&output=csv';
 var CSV_TARGETS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=1686526578&single=true&output=csv';
+var CSV_WEEKLY_TARGETS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=329792715&single=true&output=csv';
 var YEAR_TARGET = 3927000;
 var YEAR_TARGET_2025 = 3300000;
 var WEEKLY_TARGET = Math.round(YEAR_TARGET / 52);
@@ -201,7 +202,7 @@ var LINE_BG    = {'line#1':'#0C447C','line#2':'#3C3489','line#4':'#72243E'};
 var LINE_TXT   = {'line#1':'#85B7EB','line#2':'#AFA9EC','line#4':'#ED93B1'};
 var LINE_TYPE  = {'line#1':'Powder','line#2':'Capsules','line#4':'Powder'};
 
-var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {};
+var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets = {};
 var mainSection = 'production'; // 'production' | 'customers' | 'procurement'
 var topView = 'summary', subView = 'today';
 var selectedCustomer = null;
@@ -636,6 +637,25 @@ function parseTargets(text) {
   } catch(e) { return {}; }
 }
 
+function parseWeeklyTargets(text) {
+  if (!text) return {};
+  try {
+    var rows = parseCSV(text);
+    var m = {};
+    rows.forEach(function(r){
+      var d = (r['Week Start']||'').trim(); if (!d) return;
+      var dt = new Date(d); if (isNaN(dt)) return;
+      // Normalize to Monday
+      var dow = dt.getDay(); var diff = dow===0?-6:1-dow;
+      dt.setDate(dt.getDate()+diff); dt.setHours(0,0,0,0);
+      var key = (dt.getMonth()+1)+'/'+dt.getDate()+'/'+dt.getFullYear();
+      var t = num(r['Target']||'');
+      if (t > 0) m[key] = { target: t, notes: (r['Notes']||'').trim() };
+    });
+    return m;
+  } catch(e) { return {}; }
+}
+
 function fetchWithRetry(url, retries, delay) {
   retries = retries || 5; delay = delay || 2000;
   return fetch(url).then(function(r){
@@ -659,7 +679,8 @@ function fetchData() {
   return Promise.all([
     fetchWithRetry(CSV_2026),
     fetchWithRetry(CSV_2025),
-    fetchWithRetry(CSV_TARGETS).catch(function(){ return ''; })
+    fetchWithRetry(CSV_TARGETS).catch(function(){ return ''; }),
+    fetchWithRetry(CSV_WEEKLY_TARGETS).catch(function(){ return ''; })
   ]);
 }
 
@@ -667,12 +688,13 @@ function applyFreshData(res) {
   var newRows = parseCSV(res[0]).filter(isValid);
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
+  var newWeeklyTargets = parseWeeklyTargets(res[3]||'');
   if (newRows.length < 3) { console.warn('Refresh aborted: too few rows'); return false; }
   if (allRows.length > 0 && newRows.length < allRows.length) {
     console.warn('Refresh aborted: new data (' + newRows.length + ' rows) has fewer rows than current (' + allRows.length + '). Keeping existing data.');
     return false;
   }
-  allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets;
+  allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets; weeklyTargets = newWeeklyTargets;
   lotMap = buildLotMap(allRows);
   buildProductionDays(true);
   return true;
@@ -712,6 +734,7 @@ function loadDashboard() {
     }
     allRows = rows; allRows25 = rows25;
     dailyTargets = parseTargets(results[2]);
+    weeklyTargets = parseWeeklyTargets(results[3]||'');
     lotMap = buildLotMap(allRows);
     buildProductionDays(false);
     lastRefreshTime = Date.now();
@@ -1853,9 +1876,23 @@ function renderWeekly() {
   var viewYear=wkMon.getFullYear();
   var annualTarget=viewYear<=2025?YEAR_TARGET_2025:YEAR_TARGET;
   var avgDailyFallback=daysWithTarget>0?Math.round(targetSum/daysWithTarget):Math.round(annualTarget/52/5);
-  var weeklyTarget=viewYear<=2025?Math.round(annualTarget/52):targetSum+(daysWithoutTarget*avgDailyFallback);
-  var targetIsEstimated=viewYear>2025&&daysWithoutTarget>0&&daysWithTarget>0;
-  var targetIsFullySet=viewYear>2025&&daysWithoutTarget===0;
+  // Check for a real weekly target from the Weekly Targets sheet
+  var wkMonKey=(wkMon.getMonth()+1)+'/'+wkMon.getDate()+'/'+wkMon.getFullYear();
+  var weeklyTargetRow=weeklyTargets[wkMonKey]||null;
+  var weeklyTarget, targetSource, weekNote='';
+  if(weeklyTargetRow){
+    weeklyTarget=weeklyTargetRow.target;
+    targetSource='set';
+    weekNote=weeklyTargetRow.notes||'';
+  } else if(viewYear<=2025){
+    weeklyTarget=Math.round(annualTarget/52);
+    targetSource='avg';
+  } else {
+    weeklyTarget=targetSum+(daysWithoutTarget*avgDailyFallback);
+    targetSource=daysWithoutTarget===0?'daily':'est';
+  }
+  var targetIsEstimated=targetSource==='est';
+  var targetIsFullySet=targetSource==='set'||targetSource==='daily';
   var day=now.getDay();
   var daysElapsed=isLiveWeek?(day===0?wkDayCount:day===6?wkDayCount:Math.min(day,wkDayCount)):wkDayCount;
   var dailyRate=daysElapsed?weekUnits/daysElapsed:0;
@@ -1865,8 +1902,13 @@ function renderWeekly() {
   var vsTargetPct=weeklyTarget?Math.round((vsTarget/weeklyTarget)*100):0;
   var vsLastWk=lastWeekUnits?((weekUnits-lastWeekUnits)/lastWeekUnits*100):null;
   var statusLabel,statusBg,statusTxt;
-  if(isLiveWeek){ statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775'; }
-  else{ var finalPct=weeklyTarget?(weekUnits/weeklyTarget)*100:0; if(finalPct>=100){statusLabel='Target exceeded';statusBg='#085041';statusTxt='#9FE1CB';}else if(finalPct>=98){statusLabel='Target met';statusBg='#085041';statusTxt='#9FE1CB';}else{statusLabel='Target missed';statusBg='#791F1F';statusTxt='#F09595';} }
+  if(isLiveWeek){
+    if(targetSource==='est'||targetSource==='avg'){
+      statusLabel=''; statusBg=''; statusTxt='';
+    } else {
+      statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775';
+    }
+  } else{ var finalPct=weeklyTarget?(weekUnits/weeklyTarget)*100:0; if(finalPct>=100){statusLabel='Target exceeded';statusBg='#085041';statusTxt='#9FE1CB';}else if(finalPct>=98){statusLabel='Target met';statusBg='#085041';statusTxt='#9FE1CB';}else{statusLabel='Target missed';statusBg='#791F1F';statusTxt='#F09595';} }
   // Build per-lot unit counts within this week's window only
   var weekLotUnits={};
   var weekLotLastDate={};
@@ -1896,7 +1938,7 @@ function renderWeekly() {
   var monFmt=wkMon.toLocaleDateString('en-US',{month:'short',day:'numeric'});
   var friEndFmt=wkLastDay.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   var barPct=weeklyTarget?Math.min(Math.round((weekUnits/weeklyTarget)*100),100):0;
-  var targetLabel=targetIsFullySet?'<span style="color:#1D9E75">(set)</span>':targetIsEstimated?'<span style="color:#EF9F27">(est.)</span>':'(avg)';
+  var targetLabel=targetSource==='set'?'<span style="color:#1D9E75;font-weight:500;">&#10003; Target set</span>':targetSource==='daily'?'<span style="color:#1D9E75">(from daily targets)</span>':targetSource==='est'?'<span style="color:#EF9F27">(est. — no weekly target set)</span>':'<span style="color:#888780">(avg)</span>';
   var chartStaticTarget = viewYear<=2025 ? WEEKLY_TARGET_2025 : WEEKLY_TARGET;
   var week8NonZero=weeks8.filter(function(w){return w.units>0;});
   var week8Avg=week8NonZero.length?Math.round(week8NonZero.reduce(function(s,w){return s+w.units;},0)/week8NonZero.length):0;
@@ -1911,8 +1953,14 @@ function renderWeekly() {
 
   document.getElementById('content').innerHTML=
     '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem;margin-bottom:10px;">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">'+weekNavHTML
-    +'<span style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:10px;background:'+statusBg+';color:'+statusTxt+';">'+statusLabel+'</span></div>'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:'+(weekNote?'8px':'12px')+';flex-wrap:wrap;gap:8px;">'+weekNavHTML
+    +'<div style="display:flex;align-items:center;gap:8px;">'
+    +(targetSource==='set'?'<span style="font-size:10px;font-weight:500;color:#1D9E75;padding:2px 8px;border-radius:6px;background:#085041;">&#10003; Target set</span>':targetSource==='est'?'<span style="font-size:10px;color:#EF9F27;padding:2px 8px;border-radius:6px;background:#633806;">Est. target</span>':'')
+    +'<span style="font-size:11px;font-weight:500;padding:4px 12px;border-radius:10px;background:'+statusBg+';color:'+statusTxt+';">'+statusLabel+'</span>'
+    +'</div></div>'
+    +(weekNote?'<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;padding:6px 10px;background:#141618;border-radius:6px;border-left:2px solid #444441;">'
+      +'<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#888780" stroke-width="1.2"/><line x1="6" y1="5" x2="6" y2="8.5" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><circle cx="6" cy="3.2" r=".7" fill="#888780"/></svg>'
+      +'<span style="font-size:11px;color:#888780;">'+weekNote+'</span></div>':'')
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;">'
     +'<div style="flex:1;min-width:120px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Units this week</div><div style="font-size:22px;font-weight:500;color:#378ADD;">'+weekUnits.toLocaleString()+'</div><div style="font-size:11px;color:#5f5e5a;margin-bottom:6px;">of '+weeklyTarget.toLocaleString()+' '+targetLabel+'</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;"><div style="height:100%;width:'+barPct+'%;background:#378ADD;border-radius:3px;"></div></div></div>'
     +'<div style="width:0.5px;background:#2c2c2a;flex-shrink:0;align-self:stretch;"></div>'
