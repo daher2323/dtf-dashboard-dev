@@ -2062,7 +2062,16 @@ function renderWeekly() {
       var lineWeeklyShare=Math.round(weeklyTarget*lineShareFrac);
       var sharePct=lineWeeklyShare?Math.min(Math.round((u/lineWeeklyShare)*100),100):0;
       var weekElapsedPct=Math.round((daysElapsed/wkDayCount)*100);
-      var lineOnTrack=sharePct>=weekElapsedPct*0.9;
+      // On track = actual units >= cumulative daily targets for days worked (with 1% tolerance)
+      var lineCumTarget=0, lineCumActual=u;
+      wkDates.slice(0,daysElapsed).forEach(function(d){
+        var dk=dateKey(d);
+        var row=dailyTargets[dk]||{};
+        lineCumTarget+=(row[line]||0);
+      });
+      var lineOnTrack = lineCumTarget>0
+        ? (lineCumActual/lineCumTarget) >= TARGET_HIT_THRESHOLD
+        : sharePct >= weekElapsedPct*0.9; // fallback to share logic if no daily targets
       var lineStatusBg=lineOnTrack?'#085041':'#633806';
       var lineStatusTxt=lineOnTrack?'#9FE1CB':'#FAC775';
       var lineStatusLbl=lineOnTrack?'On track':'Behind';
