@@ -2763,29 +2763,29 @@ function renderCustomerOverview(healthData) {
         +'<div style="display:flex;align-items:center;gap:7px;">'
           +'<div style="width:32px;font-size:10px;color:#5f5e5a;flex-shrink:0;">'+prevYr+'</div>'
           +'<div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w25+'%;background:#4A6580;border-radius:2px;"></div></div>'
-          +'<div style="font-size:11px;color:#888780;width:60px;text-align:right;flex-shrink:0;">'+(cd.ytd25?cd.ytd25.toLocaleString():'&#x2014;')+'</div>'
+          +'<div style="font-size:11px;color:#888780;width:80px;text-align:right;flex-shrink:0;">'+(cd.ytd25?cd.ytd25.toLocaleString():'&#x2014;')+'</div>'
         +'</div>'
         +'<div style="display:flex;align-items:center;gap:7px;">'
           +'<div style="width:32px;font-size:10px;color:#378ADD;flex-shrink:0;">'+nowYr+'</div>'
           +'<div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w26+'%;background:'+bar26Color+';border-radius:2px;"></div></div>'
-          +'<div style="font-size:11px;color:#e8e6e0;font-weight:500;width:60px;text-align:right;flex-shrink:0;">'+cd.ytd.toLocaleString()+'</div>'
-          +pctBadge(cd.ytd, cd.ytd25, true)
+          +'<div style="font-size:11px;color:#e8e6e0;font-weight:500;width:80px;text-align:right;flex-shrink:0;">'+cd.ytd.toLocaleString()+'</div>'
+          +'<div style="width:60px;flex-shrink:0;">'+pctBadge(cd.ytd, cd.ytd25, false)+'</div>'
         +'</div>'
       +'</div>'
       +'<div style="display:flex;gap:20px;flex-shrink:0;margin-left:16px;">'
-        +'<div style="text-align:right;">'
+        +'<div style="text-align:right;width:80px;flex-shrink:0;">'
           +'<div style="font-size:10px;color:#888780;margin-bottom:2px;">Lots YTD</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+cd.ytdLots
             +(cd.ytdLots25?' <span style="font-size:11px;color:#5f5e5a;font-weight:400;">was '+cd.ytdLots25+'</span>':'')
           +'</div>'
         +'</div>'
-        +'<div style="text-align:right;">'
+        +'<div style="text-align:right;width:100px;flex-shrink:0;">'
           +'<div style="font-size:10px;color:#888780;margin-bottom:2px;">Avg run</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+(ytdAvgRun?ytdAvgRun.toLocaleString():'&#x2014;')
             +pctBadge(ytdAvgRun, ytdAvgRun25, true)
           +'</div>'
         +'</div>'
-        +'<div style="text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;">'
+        +'<div style="text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;width:100px;flex-shrink:0;">'
           +'<div style="font-size:10px;color:#888780;margin-bottom:2px;">% of production</div>'
           +'<div style="font-size:14px;font-weight:500;color:#e8e6e0;">'+(cd.ytdPct!==null?cd.ytdPct+'%':'&#x2014;')
             +(cd.ytdPct!==null&&cd.ytdPct25!==null?pctBadge(cd.ytdPct, cd.ytdPct25, true):'')
