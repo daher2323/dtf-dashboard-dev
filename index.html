@@ -161,7 +161,7 @@
 </div>
 <!-- Customer column header (sticky, shown only on customer overview) -->
 <div class="cust-col-header-outer" id="cust-col-header-outer">
-  <div id="cust-col-header" style="max-width:1400px;margin:0 auto;width:100%;padding:5px 1.5rem;"></div>
+  <div id="cust-col-header" style="max-width:1400px;margin:0 auto;width:100%;padding:0 1.5rem;"></div>
 </div>
 
 <div class="shell">
@@ -2886,8 +2886,8 @@ function renderCustomerOverview(healthData) {
 
   var legendHTML = '';
 
-  var colHeaderHTML = '<div style="display:flex;align-items:center;gap:0;padding:5px 14px 5px 12px;">'
-    +'<div style="width:140px;flex-shrink:0;"></div>'
+  var colHeaderHTML = '<div style="display:flex;align-items:center;gap:0;padding:6px 14px 5px 15px;">'
+    +'<div style="width:140px;flex-shrink:0;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">Customer overview <span style="color:#5f5e5a;">&middot; thru '+ytdLabel+'</span></div>'
     +'<div style="flex:1;display:flex;flex-direction:column;gap:0;min-width:0;justify-content:center;">'
       +'<div style="display:flex;align-items:center;gap:7px;">'
         +'<div style="width:32px;flex-shrink:0;"></div>'
@@ -2914,11 +2914,7 @@ function renderCustomerOverview(healthData) {
   if(hdrOuter) hdrOuter.style.display = selectedCustomer ? 'none' : 'block';
   if(hdrInner) hdrInner.innerHTML = colHeaderHTML;
 
-  return '<div style="margin-bottom:14px;">'
-    +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">Customer overview &middot; thru '+ytdLabel+'</div>'
-  +'</div>'
-  +rows
-  +'</div>';
+  return rows+'</div>';
 }
 
 function _triggerExpandedSynopses() {
