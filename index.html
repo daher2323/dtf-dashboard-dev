@@ -703,12 +703,19 @@ function fetchData() {
 }
 
 function parseMaterials(text) {
-  if (!text) return [];
+  if (!text) { window._matDebug = 'Fetch returned empty string — CSV did not load.'; return []; }
   try {
     var rows = parseCSV(text);
-    return rows.filter(function(r){
+    var keys = rows[0] ? Object.keys(rows[0]) : [];
+    window._matDebug = 'Fetched ' + rows.length + ' rows. Headers: ' + keys.join(' | ');
+    var filtered = rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
-    }).map(function(r){
+    });
+    window._matDebug += ' → ' + filtered.length + ' valid rows after filter.';
+    if (filtered.length === 0 && rows.length > 0) {
+      window._matDebug += ' Sample row: ' + JSON.stringify(rows[0]).substring(0, 200);
+    }
+    return filtered.map(function(r){
       var d = new Date((r['Column 1']||r['Date']||'').trim());
       return {
         date: isNaN(d) ? null : d,
@@ -718,7 +725,7 @@ function parseMaterials(text) {
         qty: parseFloat(r['Qty Needed']||0)
       };
     }).filter(function(r){ return r.date; });
-  } catch(e) { return []; }
+  } catch(e) { window._matDebug = 'Parse error: ' + e.message; return []; }
 }
 
 function applyFreshData(res) {
@@ -3586,7 +3593,11 @@ function renderMaterials() {
 
   var rows = materialsData;
   if (!rows.length) {
-    content.innerHTML = '<div style="padding:2rem;text-align:center;color:#5f5e5a;font-family:system-ui;font-size:13px;">Loading material data…</div>';
+    content.innerHTML = '<div style="padding:2rem;font-family:system-ui;">'
+      +'<div style="font-size:13px;color:#5f5e5a;margin-bottom:12px;">No material data loaded.</div>'
+      +'<div style="font-size:11px;color:#888780;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;padding:12px;margin-bottom:16px;word-break:break-all;line-height:1.6;">'+(window._matDebug||'No debug info available.')+'</div>'
+      +'<button onclick="fetchData().then(applyFreshData).then(render)" style="padding:6px 14px;border:0.5px solid #444441;border-radius:8px;background:transparent;color:#e8e6e0;font-size:12px;cursor:pointer;font-family:system-ui;">Retry fetch</button>'
+      +'</div>';
     return;
   }
 
