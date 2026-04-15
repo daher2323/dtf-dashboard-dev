@@ -2163,7 +2163,10 @@ function renderWeekly() {
             var lineTotal=0;
             weekLots.forEach(function(l){
               if((l.line||'').trim()!==line) return;
-              var sz=isBottleLine?(lotMap[l.lot]?lotMap[l.lot].bottleSize:''):(lotMap[l.lot]?lotMap[l.lot].jarSize:'');
+              var ld=lotMap[l.lot]||{};
+              var sz=isBottleLine
+                ? ((ld.bottleSize||'').trim()||(ld.jarSize||'').trim())
+                : (ld.jarSize||'').trim();
               var normalized=jarSizeKey(sz)||'Other';
               bySize[normalized]=(bySize[normalized]||0)+l.finalUnits;
               lineTotal+=l.finalUnits;
@@ -2184,7 +2187,7 @@ function renderWeekly() {
               +'</div>';
             }).join('');
             return '<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;margin-top:10px;">'
-              +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">'+(isBottleLine?'Bottle':'Jar')+' size mix</div>'
+              +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">'+(isBottleLine?'Container':'Jar')+' size mix</div>'
               +'<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:6px;gap:1px;">'+barSegs+'</div>'
               +'<div style="display:flex;flex-wrap:wrap;gap:6px 12px;">'+legend+'</div>'
             +'</div>';
