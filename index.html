@@ -2143,10 +2143,11 @@ function renderWeekly() {
       var lineWeeklyShare=Math.round(weeklyTarget*lineShareFrac);
       var sharePct=lineWeeklyShare?Math.min(Math.round((u/lineWeeklyShare)*100),100):0;
       var weekElapsedPct=Math.round((daysElapsed/wkDayCount)*100);
-      // On track = actual units >= cumulative daily targets for days worked (with 1% tolerance)
+      // On track = actual units >= cumulative daily targets for completed days only (not today)
       var lineCumTarget=0, lineCumActual=u;
       wkDates.slice(0,daysElapsed).forEach(function(d){
         var dk=dateKey(d);
+        if(isLiveWeek&&dk===dateKey(now)) return; // skip today — still in progress
         var row=dailyTargets[dk]||{};
         lineCumTarget+=(row[line]||0);
       });
@@ -2191,7 +2192,10 @@ function renderWeekly() {
           )
         +'</div>';
       }).join('');
-      var daysWithData=wkDates.filter(function(d){ var dk=dateKey(d); return ((dayLineUnits[line]||{})[dk]||0)>0; }).length;
+      var daysWithData=wkDates.filter(function(d){
+        if(isLiveWeek&&dateKey(d)===dateKey(now)) return false; // today is in progress, not counted
+        var dk=dateKey(d); return ((dayLineUnits[line]||{})[dk]||0)>0;
+      }).length;
       // Only show days hit counter when daily targets exist to compare against
       var daysHitStr=hasDailyTargetsForLine&&daysWithData>0?daysHit+'/'+daysWithData+' days hit':'';
       return '<div style="background:#1e2124;border:0.5px solid '+borderColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
