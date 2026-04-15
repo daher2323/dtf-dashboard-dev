@@ -1490,7 +1490,7 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
     if(g.lineDown){
       if(card){ card.style.border='0.5px solid '+g.color; card.style.boxShadow='none'; }
       if(check) check.style.display='none';
-      if(remain) remain.innerHTML='<span style="color:'+g.color+';font-size:11px;">Line down</span>';
+      if(remain) remain.innerHTML='<span style="color:'+g.color+';font-size:11px;">Line Down</span>';
       return;
     }
     if(card){ card.style.border=hit?'2.5px solid #1D9E75':'0.5px solid #2c2c2a'; card.style.boxShadow=hit?'0 0 10px 2px rgba(29,158,117,0.28),0 0 20px 4px rgba(29,158,117,0.10)':'none'; }
@@ -1660,7 +1660,7 @@ function renderToday() {
     var lineClr=LINE_COLOR[k2]||'#378ADD', lineBg=LINE_BG[k2]||'#0C447C', lineTxt=LINE_TXT[k2]||'#85B7EB';
     var pillStyle=goal.lineDown?'background:'+lineBg+';border:0.5px solid '+lineClr+';color:'+lineTxt+';':goal.isTarget?'background:'+lineBg+';border:0.5px solid '+lineClr+';color:'+lineTxt+';':'background:#1a1f12;border:0.5px solid #3B5010;color:#C0DD97;';
     var pillDotStyle=goal.lineDown?'background:'+lineClr+';':goal.isTarget?'background:'+lineClr+';':'background:#639922;';
-    var pillLabel=goal.lineDown?'Line down':goal.isTarget?'Target: '+goal.value.toLocaleString()+' units':'Avg: '+(lineAvg[line]||0).toLocaleString()+' units/day';
+    var pillLabel=goal.lineDown?'Line Down':goal.isTarget?'Target: '+goal.value.toLocaleString()+' units':'Avg: '+(lineAvg[line]||0).toLocaleString()+' units/day';
     var lineRank = recLineRank[line];
     var recBadgeHTML = (lineRank === 0)
       ? '<div style="position:absolute;top:7px;left:8px;font-size:11px;padding:2px 7px;border-radius:7px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;font-weight:500;white-space:nowrap;">\uD83C\uDFC6 Record</div>'
