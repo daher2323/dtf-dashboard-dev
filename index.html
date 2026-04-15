@@ -2135,6 +2135,9 @@ function renderWeekly() {
       var lineOnTrack = lineCumTarget>0
         ? (lineCumActual/lineCumTarget) >= TARGET_HIT_THRESHOLD
         : sharePct >= weekElapsedPct*0.9; // fallback to share logic if no daily targets
+      var hasDailyTargetsForLine = lineCumTarget > 0;
+      // Only show badge if we have real daily targets OR it's the live week
+      var showLineBadge = hasDailyTargetsForLine || isLiveWeek;
       var lineStatusBg=lineOnTrack?'#085041':'#633806';
       var lineStatusTxt=lineOnTrack?'#9FE1CB':'#FAC775';
       var lineStatusLbl=lineOnTrack?'On track':'Behind';
@@ -2170,7 +2173,8 @@ function renderWeekly() {
         +'</div>';
       }).join('');
       var daysWithData=wkDates.filter(function(d){ var dk=dateKey(d); return ((dayLineUnits[line]||{})[dk]||0)>0; }).length;
-      var daysHitStr=daysWithData>0?daysHit+'/'+daysWithData+' days hit':'';
+      // Only show days hit counter when daily targets exist to compare against
+      var daysHitStr=hasDailyTargetsForLine&&daysWithData>0?daysHit+'/'+daysWithData+' days hit':'';
       return '<div style="background:#1e2124;border:0.5px solid '+borderColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
         +'<div style="padding:10px 14px 8px;background:'+hdrBg+';border-bottom:0.5px solid #2c2c2a;display:flex;align-items:center;justify-content:space-between;">'
           +'<div style="display:flex;align-items:center;gap:6px;">'
@@ -2179,7 +2183,7 @@ function renderWeekly() {
           +'</div>'
           +'<div style="display:flex;align-items:center;gap:8px;">'
             +(daysHitStr?'<span style="font-size:10px;color:'+(daysHit===daysWithData&&daysWithData>0?'#1D9E75':'#888780')+';font-family:system-ui;">'+daysHitStr+'</span>':'')
-            +(weeklyTarget?'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+lineStatusBg+';color:'+lineStatusTxt+';font-family:system-ui;">'+lineStatusLbl+'</span>':'')
+            +(showLineBadge&&weeklyTarget?'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+lineStatusBg+';color:'+lineStatusTxt+';font-family:system-ui;">'+lineStatusLbl+'</span>':'')
           +'</div>'
         +'</div>'
         +'<div style="padding:12px 14px;">'
