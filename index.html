@@ -2003,7 +2003,7 @@ function renderWeekly() {
   for(var wi=0;wi<8;wi++){ var ptrKey=ptr.getFullYear()+'-'+String(getWeekNum(ptr)).padStart(2,'0'); weeks8.unshift({key:ptrKey,mon:new Date(ptr),units:byWeekMap[ptrKey]?byWeekMap[ptrKey].units:0,num:getWeekNum(ptr)}); ptr.setDate(ptr.getDate()-7); }
   var monFmt=wkMon.toLocaleDateString('en-US',{month:'short',day:'numeric'});
   var friEndFmt=wkLastDay.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  var barPct=weeklyTarget?Math.min(Math.round((weekUnits/weeklyTarget)*100),100):0;
+  var realBarPct=weeklyTarget?Math.round((weekUnits/weeklyTarget)*100):0;
   var targetLabel=targetSource==='set'?'<span style="color:#1D9E75;font-weight:500;">&#10003; Target set</span>':targetSource==='daily'?'<span style="color:#1D9E75">(from daily targets)</span>':targetSource==='est'?'<span style="color:#EF9F27">(est. — no weekly target set)</span>':'<span style="color:#888780">(avg)</span>';
   var chartStaticTarget = viewYear<=2025 ? WEEKLY_TARGET_2025 : WEEKLY_TARGET;
   var week8NonZero=weeks8.filter(function(w){return w.units>0;});
@@ -2045,10 +2045,11 @@ function renderWeekly() {
       var remText=allHitWeek?'+'+(weekUnits-weeklyTarget).toLocaleString()+' over target'
         :isLiveWeek&&weeklyTarget?Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go'
         :weeklyTarget?(weekUnits>=weeklyTarget?'+'+( weekUnits-weeklyTarget).toLocaleString()+' over target':Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go'):'';
-      // segment widths
+      // segment widths — scale against max of (total units, target) so bar never overflows
+      var barScale=Math.max(weekUnits,weeklyTarget||1);
       var segs=ALL_LINES.map(function(line){
         var u=weekByLine[line]||0;
-        return weeklyTarget?Math.min((u/weeklyTarget)*100,100):0;
+        return (u/barScale)*100;
       });
       var segLeft=[0,segs[0],segs[0]+segs[1]];
       // leg positions (midpoints)
@@ -2077,7 +2078,7 @@ function renderWeekly() {
           +'<div style="background:#2c2c2a;"></div>'
           +'<div style="text-align:center;padding:0 10px;">'
             +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">% of target</div>'
-            +'<div style="font-size:22px;font-weight:500;color:'+pctColor+';font-family:system-ui;">'+barPct+'%</div>'
+            +'<div style="font-size:22px;font-weight:500;color:'+pctColor+';font-family:system-ui;">'+realBarPct+'%</div>'
           +'</div>'
           +'<div style="background:#2c2c2a;"></div>'
           +'<div style="text-align:center;padding:0 10px;">'
