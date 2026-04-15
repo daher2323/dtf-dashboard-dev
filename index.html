@@ -190,6 +190,8 @@ var CSV_2026 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRN
 var CSV_2025 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=2024063496&single=true&output=csv';
 var CSV_TARGETS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=1686526578&single=true&output=csv';
 var CSV_WEEKLY_TARGETS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=329792715&single=true&output=csv';
+var CSV_MATERIALS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRZQwQF77BiXbpOMSPJMEGdYedv0-1aoEev2lsk9RpJuLQ3ugoq_jNyW8sWAZemCbr4fVm4h4c7KRga/pub?gid=191934514&single=true&output=csv';
+var materialsData = [];
 var YEAR_TARGET = 3927000;
 var YEAR_TARGET_2025 = 3300000;
 var WEEKLY_TARGET = Math.round(YEAR_TARGET / 52);
@@ -215,7 +217,7 @@ var selectedDetailQuarter = 'ytd';
 var selectedDetailYear = new Date().getFullYear();
 var selectedDetailRange = null;
 var selectedPerfRange = null;
-var procView = 'jars'; // 'jars' | 'bottles' | 'lids' | 'desiccants'
+var procView = 'materials'; // 'materials' | 'jars' | 'bottles' | 'lids' | 'desiccants'
 var showZeroDes = false;
 var lastRefreshTime = 0;
 var filterState = { customer:[], product:[], status:[], bottle:[], jar:[] };
@@ -695,8 +697,28 @@ function fetchData() {
     fetchWithRetry(CSV_2026),
     fetchWithRetry(CSV_2025),
     fetchWithRetry(CSV_TARGETS).catch(function(){ return ''; }),
-    fetchCSVSimple(CSV_WEEKLY_TARGETS)
+    fetchCSVSimple(CSV_WEEKLY_TARGETS),
+    fetchCSVSimple(CSV_MATERIALS)
   ]);
+}
+
+function parseMaterials(text) {
+  if (!text) return [];
+  try {
+    var rows = parseCSV(text);
+    return rows.filter(function(r){
+      return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
+    }).map(function(r){
+      var d = new Date((r['Column 1']||r['Date']||'').trim());
+      return {
+        date: isNaN(d) ? null : d,
+        lot: (r['Order Lot #']||'').trim(),
+        partNum: (r['Part #']||'').trim(),
+        material: (r['Material Name']||'').trim(),
+        qty: parseFloat(r['Qty Needed']||0)
+      };
+    }).filter(function(r){ return r.date; });
+  } catch(e) { return []; }
 }
 
 function applyFreshData(res) {
@@ -704,12 +726,14 @@ function applyFreshData(res) {
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
   var newWeeklyTargets = parseWeeklyTargets(res[3]||'');
+  var newMaterials = parseMaterials(res[4]||'');
   if (newRows.length < 3) { console.warn('Refresh aborted: too few rows'); return false; }
   if (allRows.length > 0 && newRows.length < allRows.length) {
     console.warn('Refresh aborted: new data (' + newRows.length + ' rows) has fewer rows than current (' + allRows.length + '). Keeping existing data.');
     return false;
   }
   allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets; weeklyTargets = newWeeklyTargets;
+  if (newMaterials.length > 0) materialsData = newMaterials;
   lotMap = buildLotMap(allRows);
   buildProductionDays(true);
   return true;
@@ -928,9 +952,10 @@ function renderSubBar() {
         + '</div>';
     }
   } else if (mainSection === 'procurement') {
-    var pj = procView==='jars', pb = procView==='bottles', pl = procView==='lids', pd = procView==='desiccants', pn = procView==='neckbands';
+    var pm = procView==='materials', pj = procView==='jars', pb = procView==='bottles', pl = procView==='lids', pd = procView==='desiccants', pn = procView==='neckbands';
     sb.innerHTML =
       '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      + '<button onclick="setProcView(\'materials\')" style="'+navBtnStyle(pm)+'">Materials</button>'
       + '<button onclick="setProcView(\'jars\')" style="'+navBtnStyle(pj)+'">Jars</button>'
       + '<button onclick="setProcView(\'bottles\')" style="'+navBtnStyle(pb)+'">Bottles</button>'
       + '<button onclick="setProcView(\'lids\')" style="'+navBtnStyle(pl)+'">Lids</button>'
@@ -3555,7 +3580,138 @@ function exportProcurement() {
   XLSX.writeFile(wb, fname);
 }
 
+function renderMaterials() {
+  var content = document.getElementById('content');
+  if (!content) return;
+
+  var rows = materialsData;
+  if (!rows.length) {
+    content.innerHTML = '<div style="padding:2rem;text-align:center;color:#5f5e5a;font-family:system-ui;font-size:13px;">Loading material data…</div>';
+    return;
+  }
+
+  // Build per-material aggregates
+  var byMat = {};
+  rows.forEach(function(r){
+    if (!byMat[r.material]) byMat[r.material] = {name:r.material, totalKg:0, lots:new Set(), byMonth:{}};
+    var m = byMat[r.material];
+    m.totalKg += r.qty;
+    m.lots.add(r.lot);
+    var mk = r.date.getFullYear()+'-'+String(r.date.getMonth()+1).padStart(2,'0');
+    m.byMonth[mk] = (m.byMonth[mk]||0) + r.qty;
+  });
+
+  var matList = Object.values(byMat).sort(function(a,b){ return b.totalKg - a.totalKg; });
+  matList.forEach(function(m){ m.lotCount = m.lots.size; });
+  var maxKg = matList[0] ? matList[0].totalKg : 1;
+  var selectedMat = window._selectedMaterial || matList[0].name;
+
+  // Build month labels (last 13 months)
+  var now = new Date();
+  var monthKeys = [], monthLabels = [];
+  for (var i = 12; i >= 0; i--) {
+    var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    monthKeys.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+    monthLabels.push(d.toLocaleDateString('en-US',{month:'short',year:'2-digit'}));
+  }
+
+  function getMatStats(name) {
+    var m = byMat[name]; if (!m) return {total:0,avg:0,lots:0,data:[]};
+    var data = monthKeys.map(function(k){ return Math.round((m.byMonth[k]||0)*100)/100; });
+    var nonZero = data.filter(function(v){return v>0;});
+    return { total: Math.round(m.totalKg*100)/100, avg: nonZero.length ? Math.round(m.totalKg/nonZero.length*100)/100 : 0, lots: m.lotCount, data: data };
+  }
+
+  var sel = getMatStats(selectedMat);
+
+  content.innerHTML =
+    '<div style="display:grid;grid-template-columns:320px 1fr;gap:10px;align-items:start;">'
+    // Left: ranked list
+    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
+      +'<div style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;">Top materials by kg consumed</div>'
+      +'</div>'
+      +'<div style="max-height:600px;overflow-y:auto;">'
+      +matList.map(function(m, i){
+        var pct = Math.round(m.totalKg/maxKg*100);
+        var isSelected = m.name === selectedMat;
+        return '<div onclick="window._selectedMaterial=\''+m.name.replace(/'/g,'\\\'')+'\'rebderMatView()" '
+          +'style="padding:10px 14px;border-bottom:0.5px solid #2c2c2a;cursor:pointer;background:'+(isSelected?'#1a2535':'transparent')+';transition:background .15s;" '
+          +'onmouseover="this.style.background=\''+(isSelected?'#1a2535':'#1a1d20')+'\'" onmouseout="this.style.background=\''+(isSelected?'#1a2535':'transparent')+'\'">'
+          +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">'
+            +'<div style="font-size:12px;font-weight:500;color:'+(isSelected?'#85B7EB':'#e8e6e0')+';font-family:system-ui;flex:1;margin-right:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+m.name+'</div>'
+            +'<div style="font-size:11px;color:#888780;font-family:system-ui;white-space:nowrap;">'+m.totalKg.toLocaleString(undefined,{maximumFractionDigits:1})+' kg</div>'
+          +'</div>'
+          +'<div style="display:flex;align-items:center;gap:8px;">'
+            +'<div style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+              +'<div style="height:100%;width:'+pct+'%;background:'+(isSelected?'#378ADD':'#2c5a8a')+';border-radius:2px;"></div>'
+            +'</div>'
+            +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;white-space:nowrap;">'+m.lotCount+' lots</div>'
+          +'</div>'
+        +'</div>';
+      }).join('')
+      +'</div>'
+    +'</div>'
+    // Right: trend detail
+    +'<div>'
+      +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem 1.25rem;margin-bottom:10px;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-bottom:6px;">Selected material</div>'
+        +'<div style="font-size:18px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:14px;">'+selectedMat+'</div>'
+        +'<div style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr;">'
+          +'<div style="padding:0 12px 0 0;text-align:center;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Total consumed</div>'
+            +'<div style="font-size:22px;font-weight:500;color:#378ADD;font-family:system-ui;">'+sel.total.toLocaleString(undefined,{maximumFractionDigits:1})+' kg</div>'
+          +'</div>'
+          +'<div style="background:#2c2c2a;"></div>'
+          +'<div style="padding:0 12px;text-align:center;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Avg / active month</div>'
+            +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+sel.avg.toLocaleString(undefined,{maximumFractionDigits:1})+' kg</div>'
+          +'</div>'
+          +'<div style="background:#2c2c2a;"></div>'
+          +'<div style="padding:0 0 0 12px;text-align:center;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Lots used in</div>'
+            +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+sel.lots+'</div>'
+          +'</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem 1.25rem;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-bottom:12px;">Monthly consumption — last 13 months</div>'
+        +'<div style="position:relative;height:220px;"><canvas id="matTrendChart" role="img" aria-label="Monthly kg consumption for '+selectedMat+'">Monthly consumption trend.</canvas></div>'
+      +'</div>'
+    +'</div>'
+    +'</div>';
+
+  // Draw chart
+  if (window.matChart) { window.matChart.destroy(); window.matChart = null; }
+  var ctx = document.getElementById('matTrendChart');
+  if (!ctx) return;
+  window.matChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: monthLabels,
+      datasets: [{
+        data: sel.data,
+        backgroundColor: '#1a3a5c',
+        borderColor: '#378ADD',
+        borderWidth: 1,
+        borderRadius: 3
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(c){ return c.raw+' kg'; } } } },
+      scales: {
+        x: { ticks: { color:'#5f5e5a', font:{size:11,family:'system-ui'}, maxRotation:45 }, grid: { color:'#1a1a1a' }, border:{color:'#2c2c2a'} },
+        y: { ticks: { color:'#5f5e5a', font:{size:11,family:'system-ui'}, callback: function(v){ return v+' kg'; } }, grid: { color:'#1a1a1a' }, border:{color:'#2c2c2a'} }
+      }
+    }
+  });
+}
+
+window.rebderMatView = function() { renderMaterials(); };
+
 function renderProcurement() {
+  if (procView === 'materials') { renderMaterials(); return; }
   var now = new Date();
   var curQk = getQuarterKey(now);
   var cutoff = new Date(2025, 0, 1);
