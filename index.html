@@ -1488,9 +1488,9 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
     var check = document.getElementById('gcheck_'+g.idx);
     var remain = document.getElementById('gremain_'+g.idx);
     if(g.lineDown){
-      if(card){ card.style.border='0.5px solid #791F1F'; card.style.boxShadow='none'; }
+      if(card){ card.style.border='0.5px solid '+g.color; card.style.boxShadow='none'; }
       if(check) check.style.display='none';
-      if(remain) remain.innerHTML='<span style="color:#F09595;font-size:11px;">Line down — scheduled maintenance</span>';
+      if(remain) remain.innerHTML='<span style="color:'+g.color+';font-size:11px;">Line down</span>';
       return;
     }
     if(card){ card.style.border=hit?'2.5px solid #1D9E75':'0.5px solid #2c2c2a'; card.style.boxShadow=hit?'0 0 10px 2px rgba(29,158,117,0.28),0 0 20px 4px rgba(29,158,117,0.10)':'none'; }
@@ -1658,9 +1658,9 @@ function renderToday() {
     var k2=lk(line),color=LINE_COLOR[k2]||'#888780',bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',type=LINE_TYPE[k2]||'';
     var goal=lineGoal(line);
     var lineClr=LINE_COLOR[k2]||'#378ADD', lineBg=LINE_BG[k2]||'#0C447C', lineTxt=LINE_TXT[k2]||'#85B7EB';
-    var pillStyle=goal.lineDown?'background:#1a1212;border:0.5px solid #791F1F;color:#F09595;':goal.isTarget?'background:'+lineBg+';border:0.5px solid '+lineClr+';color:'+lineTxt+';':'background:#1a1f12;border:0.5px solid #3B5010;color:#C0DD97;';
-    var pillDotStyle=goal.lineDown?'background:#F09595;':goal.isTarget?'background:'+lineClr+';':'background:#639922;';
-    var pillLabel=goal.lineDown?'Line down — scheduled maintenance':goal.isTarget?'Target: '+goal.value.toLocaleString()+' units':'Avg: '+(lineAvg[line]||0).toLocaleString()+' units/day';
+    var pillStyle=goal.lineDown?'background:'+lineBg+';border:0.5px solid '+lineClr+';color:'+lineTxt+';':goal.isTarget?'background:'+lineBg+';border:0.5px solid '+lineClr+';color:'+lineTxt+';':'background:#1a1f12;border:0.5px solid #3B5010;color:#C0DD97;';
+    var pillDotStyle=goal.lineDown?'background:'+lineClr+';':goal.isTarget?'background:'+lineClr+';':'background:#639922;';
+    var pillLabel=goal.lineDown?'Line down':goal.isTarget?'Target: '+goal.value.toLocaleString()+' units':'Avg: '+(lineAvg[line]||0).toLocaleString()+' units/day';
     var lineRank = recLineRank[line];
     var recBadgeHTML = (lineRank === 0)
       ? '<div style="position:absolute;top:7px;left:8px;font-size:11px;padding:2px 7px;border-radius:7px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;font-weight:500;white-space:nowrap;">\uD83C\uDFC6 Record</div>'
@@ -1672,7 +1672,7 @@ function renderToday() {
       +'<div style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;margin-bottom:6px;'+pillStyle+'"><span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;'+pillDotStyle+'"></span>'+pillLabel+'</div>'
       +'<canvas id="dial_'+i+'" width="140" height="82" style="display:block;margin:0 auto .25rem"></canvas>'
       +'<div id="gval_'+i+'" style="font-size:20px;font-weight:500;color:'+color+';margin-bottom:4px">0</div>'
-      +'<div id="gbadge_'+i+'" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:'+bg+';color:'+txt+';margin-bottom:6px">0% of '+(goal.lineDown?'Target (down)':goal.isTarget?'Target':'Avg')+'</div>'
+      +'<div id="gbadge_'+i+'" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:'+bg+';color:'+txt+';margin-bottom:6px;visibility:'+(goal.lineDown?'hidden':'visible')+'">0% of '+(goal.isTarget?'Target':'Avg')+'</div>'
       +'<div id="gremain_'+i+'" style="display:flex;justify-content:center;align-items:center;gap:4px;font-size:11px;font-weight:500;min-height:16px"></div>'
       +'</div>';
   }).join('');
