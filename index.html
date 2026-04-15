@@ -1665,15 +1665,17 @@ function renderToday() {
     var recBadgeHTML = (lineRank === 0)
       ? '<div style="position:absolute;top:7px;left:8px;font-size:11px;padding:2px 7px;border-radius:7px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;font-weight:500;white-space:nowrap;">\uD83C\uDFC6 Record</div>'
       : '';
-    return '<div id="gcard_'+i+'" style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:1rem;text-align:center;position:relative;transition:border .3s,box-shadow .3s;">'
+    return '<div id="gcard_'+i+'" style="flex:1;background:#141618;border:'+(goal.lineDown?'0.5px solid '+lineClr:'0.5px solid #2c2c2a')+';border-radius:10px;padding:1rem;text-align:center;position:relative;transition:border .3s,box-shadow .3s;">'
       +recBadgeHTML
       +'<div id="gcheck_'+i+'" style="position:absolute;top:8px;right:8px;display:none;width:20px;height:20px;border-radius:50%;background:#1D9E75;align-items:center;justify-content:center"><svg width="11" height="11" viewBox="0 0 11 11" fill="none"><polyline points="1.5,5.5 4.5,8.5 9.5,2.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'
       +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:'+(recBadgeHTML?'20':'6')+'px">'+line+(type?' \u2014 '+type:'')+'</div>'
       +'<div style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;margin-bottom:6px;'+pillStyle+'"><span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;'+pillDotStyle+'"></span>'+pillLabel+'</div>'
-      +'<canvas id="dial_'+i+'" width="140" height="82" style="display:block;margin:0 auto .25rem"></canvas>'
-      +'<div id="gval_'+i+'" style="font-size:20px;font-weight:500;color:'+color+';margin-bottom:4px">0</div>'
+      +(goal.lineDown
+        ?'<div style="height:82px;display:flex;align-items:center;justify-content:center;margin:0 auto .25rem;"><svg width="48" height="48" viewBox="0 0 48 48" fill="none"><rect x="4" y="4" width="40" height="40" rx="10" fill="'+lineBg+'" stroke="'+lineClr+'" stroke-width="1.5"/><line x1="15" y1="15" x2="33" y2="33" stroke="'+lineClr+'" stroke-width="2.5" stroke-linecap="round"/><line x1="33" y1="15" x2="15" y2="33" stroke="'+lineClr+'" stroke-width="2.5" stroke-linecap="round"/></svg></div>'
+        :'<canvas id="dial_'+i+'" width="140" height="82" style="display:block;margin:0 auto .25rem"></canvas>')
+      +'<div id="gval_'+i+'" style="font-size:20px;font-weight:500;color:'+(goal.lineDown?lineClr:color)+';margin-bottom:4px">'+(goal.lineDown?'&mdash;':'0')+'</div>'
       +'<div id="gbadge_'+i+'" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;background:'+bg+';color:'+txt+';margin-bottom:6px;visibility:'+(goal.lineDown?'hidden':'visible')+'">0% of '+(goal.isTarget?'Target':'Avg')+'</div>'
-      +'<div id="gremain_'+i+'" style="display:flex;justify-content:center;align-items:center;gap:4px;font-size:11px;font-weight:500;min-height:16px"></div>'
+      +'<div id="gremain_'+i+'" style="display:flex;justify-content:center;align-items:center;gap:4px;font-size:11px;font-weight:500;min-height:16px;'+(goal.lineDown?'color:'+lineTxt+';':'')+'">'+( goal.lineDown?'No target set for today':'')+'</div>'
       +'</div>';
   }).join('');
 
