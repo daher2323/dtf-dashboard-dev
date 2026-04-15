@@ -3610,26 +3610,6 @@ function renderMaterials() {
 
   var rows = materialsData;
 
-  // Year filter
-  var now = new Date();
-  var availYears = Array.from(new Set(rows.map(function(r){ return r.date.getFullYear(); }))).sort();
-  if (!availYears.length) availYears = [now.getFullYear()];
-  if (availYears.indexOf(matYear) === -1) matYear = now.getFullYear();
-  var isYTD = matYear === now.getFullYear();
-  var yearStart = new Date(matYear, 0, 1);
-  var yearEnd = isYTD ? now : new Date(matYear, 11, 31, 23, 59, 59);
-  var filteredRows = rows.filter(function(r){ return r.date >= yearStart && r.date <= yearEnd; });
-
-  // Year picker HTML
-  var yearPickerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
-    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-right:4px;">Period</div>'
-    +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    +availYears.map(function(y){
-      var label = y === now.getFullYear() ? y+' YTD' : String(y);
-      return '<button onclick="matYear='+y+';window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matYear===y)+'">'+label+'</button>';
-    }).join('')
-    +'</div>'
-    +'</div>';
   if (!rows.length) {
     content.innerHTML = '<div style="padding:2rem;font-family:system-ui;">'
       +'<div style="font-size:13px;color:#5f5e5a;margin-bottom:12px;">No material data loaded.</div>'
@@ -3639,98 +3619,134 @@ function renderMaterials() {
     return;
   }
 
-  // Build per-material aggregates from filtered rows
+  var now = new Date();
+  var availYears = Array.from(new Set(rows.map(function(r){ return r.date.getFullYear(); }))).sort();
+  if (!availYears.length) availYears = [now.getFullYear()];
+  if (availYears.indexOf(matYear) === -1) matYear = now.getFullYear();
+  var isYTD = matYear === now.getFullYear();
+  var yearStart = new Date(matYear, 0, 1);
+  var yearEnd = isYTD ? now : new Date(matYear, 11, 31, 23, 59, 59);
+  var filteredRows = rows.filter(function(r){ return r.date >= yearStart && r.date <= yearEnd; });
+
+  function kgFmt(v) { return Math.round(v).toLocaleString() + ' kg'; }
+
+  // Quarter keys for selected year
+  var quarters = ['Q1','Q2','Q3','Q4'];
+  var qRanges = [
+    {label:'Q1',start:new Date(matYear,0,1),end:new Date(matYear,2,31,23,59,59)},
+    {label:'Q2',start:new Date(matYear,3,1),end:new Date(matYear,5,30,23,59,59)},
+    {label:'Q3',start:new Date(matYear,6,1),end:new Date(matYear,8,30,23,59,59)},
+    {label:'Q4',start:new Date(matYear,9,1),end:new Date(matYear,11,31,23,59,59)}
+  ];
+  // Only show quarters with data or that have started
+  var activeQs = qRanges.filter(function(q){ return q.start <= yearEnd; });
+
+  // Build per-material aggregates
   var byMat = {};
   filteredRows.forEach(function(r){
-    if (!byMat[r.material]) byMat[r.material] = {name:r.material, totalKg:0, lots:new Set(), byMonth:{}};
+    if (!byMat[r.material]) byMat[r.material] = {name:r.material,totalKg:0,lots:new Set(),byQ:[0,0,0,0]};
     var m = byMat[r.material];
     m.totalKg += r.qty;
     m.lots.add(r.lot);
-    var mk = r.date.getFullYear()+'-'+String(r.date.getMonth()+1).padStart(2,'0');
-    m.byMonth[mk] = (m.byMonth[mk]||0) + r.qty;
+    var qi = Math.floor(r.date.getMonth()/3);
+    m.byQ[qi] += r.qty;
   });
-
   var matList = Object.values(byMat).sort(function(a,b){ return b.totalKg - a.totalKg; });
   matList.forEach(function(m){ m.lotCount = m.lots.size; });
   var maxKg = matList[0] ? matList[0].totalKg : 1;
   var selectedMat = window._selectedMaterial || matList[0].name;
+  if (!byMat[selectedMat] && matList[0]) selectedMat = matList[0].name;
 
-  // Build month labels for selected year
+  // Month keys for chart
   var monthKeys = [], monthLabels = [];
-  var mStart = new Date(matYear, 0, 1);
-  var mEnd = isYTD ? now : new Date(matYear, 11, 31);
-  var mPtr = new Date(mStart);
-  while (mPtr <= mEnd) {
+  var mPtr = new Date(matYear, 0, 1);
+  while (mPtr <= yearEnd) {
     monthKeys.push(mPtr.getFullYear()+'-'+String(mPtr.getMonth()+1).padStart(2,'0'));
-    monthLabels.push(mPtr.toLocaleDateString('en-US',{month:'short',year:'2-digit'}));
+    monthLabels.push(mPtr.toLocaleDateString('en-US',{month:'short'}));
     mPtr.setMonth(mPtr.getMonth()+1);
   }
 
-  function getMatStats(name) {
-    var m = byMat[name]; if (!m) return {total:0,avg:0,lots:0,data:[]};
-    var data = monthKeys.map(function(k){ return Math.round((m.byMonth[k]||0)*100)/100; });
-    var nonZero = data.filter(function(v){return v>0;});
-    return { total: Math.round(m.totalKg*100)/100, avg: nonZero.length ? Math.round(m.totalKg/nonZero.length*100)/100 : 0, lots: m.lotCount, data: data };
-  }
+  var selM = byMat[selectedMat];
+  var selByMonth = {};
+  filteredRows.filter(function(r){ return r.material===selectedMat; }).forEach(function(r){
+    var mk = r.date.getFullYear()+'-'+String(r.date.getMonth()+1).padStart(2,'0');
+    selByMonth[mk] = (selByMonth[mk]||0) + r.qty;
+  });
+  var chartData = monthKeys.map(function(k){ return Math.round(selByMonth[k]||0); });
+  var nonZero = chartData.filter(function(v){return v>0;});
+  var selAvg = nonZero.length ? Math.round((selM?selM.totalKg:0)/nonZero.length) : 0;
 
-  var sel = getMatStats(selectedMat);
+  // Year picker
+  var yearPickerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
+    +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+    +availYears.map(function(y){
+      var label = y === now.getFullYear() ? y+' YTD' : String(y);
+      return '<button onclick="matYear='+y+';window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matYear===y)+'">'+label+'</button>';
+    }).join('')
+    +'</div></div>';
 
-  content.innerHTML =
-    yearPickerHTML
-    +'<div style="display:grid;grid-template-columns:320px 1fr;gap:10px;align-items:start;">'
-    // Left: ranked list
-    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
-      +'<div style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;">Top materials by kg consumed</div>'
-      +'</div>'
-      +'<div style="max-height:600px;overflow-y:auto;">'
-      +matList.map(function(m, i){
-        var pct = Math.round(m.totalKg/maxKg*100);
-        var isSelected = m.name === selectedMat;
-        return '<div onclick="window._selectedMaterial=\''+m.name.replace(/'/g,'\\\'')+'\';renderMaterials()" '
-          +'style="padding:10px 14px;border-bottom:0.5px solid #2c2c2a;cursor:pointer;background:'+(isSelected?'#1a2535':'transparent')+';transition:background .15s;" '
-          +'onmouseover="this.style.background=\''+(isSelected?'#1a2535':'#1a1d20')+'\'" onmouseout="this.style.background=\''+(isSelected?'#1a2535':'transparent')+'\'">'
-          +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">'
-            +'<div style="font-size:12px;font-weight:500;color:'+(isSelected?'#85B7EB':'#e8e6e0')+';font-family:system-ui;flex:1;margin-right:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+m.name+'</div>'
-            +'<div style="font-size:11px;color:#888780;font-family:system-ui;white-space:nowrap;">'+m.totalKg.toLocaleString(undefined,{maximumFractionDigits:1})+' kg</div>'
-          +'</div>'
-          +'<div style="display:flex;align-items:center;gap:8px;">'
-            +'<div style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
-              +'<div style="height:100%;width:'+pct+'%;background:'+(isSelected?'#378ADD':'#2c5a8a')+';border-radius:2px;"></div>'
-            +'</div>'
-            +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;white-space:nowrap;">'+m.lotCount+' lots</div>'
-          +'</div>'
-        +'</div>';
-      }).join('')
+  // Table header — rank, name, bar, total, Q columns, lots
+  var qHeaders = activeQs.map(function(q){
+    return '<th style="text-align:right;padding:6px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">'+q.label+'</th>';
+  }).join('');
+
+  var tableRows = matList.map(function(m, i){
+    var isSelected = m.name === selectedMat;
+    var bw = Math.round((m.totalKg/maxKg)*100);
+    var qCells = activeQs.map(function(q,qi){
+      var v = Math.round(m.byQ[qRanges.indexOf(q)]);
+      return '<td style="text-align:right;padding:6px 10px;font-size:12px;color:'+(v>0?'#e8e6e0':'#444441')+';">'+(v>0?v.toLocaleString():'—')+'</td>';
+    }).join('');
+    return '<tr onclick="window._selectedMaterial=\''+m.name.replace(/'/g,'\\\'')+'\';renderMaterials();" '
+      +'style="cursor:pointer;background:'+(isSelected?'#1a2535':'transparent')+';transition:background .15s;border-bottom:0.5px solid #2c2c2a;" '
+      +'onmouseover="this.style.background=\''+(isSelected?'#1a2535':'#1a1d20')+'\'" onmouseout="this.style.background=\''+(isSelected?'#1a2535':'transparent')+'\'"> '
+      +'<td style="padding:8px 10px;color:#5f5e5a;font-size:11px;width:28px;">'+(i+1)+'</td>'
+      +'<td style="padding:8px 10px;font-size:12px;font-weight:500;color:'+(isSelected?'#85B7EB':'#e8e6e0')+';max-width:220px;">'+m.name+'</td>'
+      +'<td style="padding:8px 10px;width:120px;"><div style="background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;"><div style="height:100%;width:'+bw+'%;background:'+(isSelected?'#378ADD':'#2c5a8a')+';border-radius:2px;"></div></div></td>'
+      +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:'+(isSelected?'#85B7EB':'#e8e6e0')+';white-space:nowrap;">'+Math.round(m.totalKg).toLocaleString()+' kg</td>'
+      +qCells
+      +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;">'+m.lotCount+'</td>'
+      +'</tr>';
+  }).join('');
+
+  content.innerHTML = yearPickerHTML
+    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;margin-bottom:10px;">'
+      +'<div style="overflow-x:auto;">'
+      +'<table style="width:100%;border-collapse:collapse;font-family:system-ui;">'
+        +'<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+          +'<th style="padding:8px 10px;width:28px;"></th>'
+          +'<th style="text-align:left;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;">Material</th>'
+          +'<th style="padding:8px 10px;width:120px;"></th>'
+          +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">Total kg</th>'
+          +qHeaders
+          +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;">Lots</th>'
+        +'</tr></thead>'
+        +'<tbody>'+tableRows+'</tbody>'
+      +'</table>'
       +'</div>'
     +'</div>'
-    // Right: trend detail
-    +'<div>'
-      +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem 1.25rem;margin-bottom:10px;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-bottom:6px;">Selected material</div>'
-        +'<div style="font-size:18px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:14px;">'+selectedMat+'</div>'
-        +'<div style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr;">'
-          +'<div style="padding:0 12px 0 0;text-align:center;">'
-            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Total consumed</div>'
-            +'<div style="font-size:22px;font-weight:500;color:#378ADD;font-family:system-ui;">'+sel.total.toLocaleString(undefined,{maximumFractionDigits:1})+' kg</div>'
+    // Detail panel for selected material
+    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem 1.25rem;">'
+      +'<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">'
+        +'<div style="font-size:16px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+selectedMat+'</div>'
+        +'<div style="display:flex;gap:20px;">'
+          +'<div style="text-align:right;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Total</div>'
+            +'<div style="font-size:16px;font-weight:500;color:#378ADD;font-family:system-ui;">'+(selM?kgFmt(selM.totalKg):'—')+'</div>'
           +'</div>'
-          +'<div style="background:#2c2c2a;"></div>'
-          +'<div style="padding:0 12px;text-align:center;">'
-            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Avg / active month</div>'
-            +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+sel.avg.toLocaleString(undefined,{maximumFractionDigits:1})+' kg</div>'
+          +'<div style="width:0.5px;background:#2c2c2a;"></div>'
+          +'<div style="text-align:right;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Avg / month</div>'
+            +'<div style="font-size:16px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(selAvg?kgFmt(selAvg):'—')+'</div>'
           +'</div>'
-          +'<div style="background:#2c2c2a;"></div>'
-          +'<div style="padding:0 0 0 12px;text-align:center;">'
-            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Lots used in</div>'
-            +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+sel.lots+'</div>'
+          +'<div style="width:0.5px;background:#2c2c2a;"></div>'
+          +'<div style="text-align:right;">'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Lots</div>'
+            +'<div style="font-size:16px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(selM?selM.lotCount:'—')+'</div>'
           +'</div>'
         +'</div>'
       +'</div>'
-      +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem 1.25rem;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-bottom:12px;">Monthly consumption — '+(isYTD?matYear+' year to date':matYear)+'</div>'
-        +'<div style="position:relative;height:220px;"><canvas id="matTrendChart" role="img" aria-label="Monthly kg consumption for '+selectedMat+'">Monthly consumption trend.</canvas></div>'
-      +'</div>'
-    +'</div>'
+      +'<div style="position:relative;height:200px;"><canvas id="matTrendChart" role="img" aria-label="Monthly kg consumption for '+selectedMat+'">Monthly consumption trend.</canvas></div>'
     +'</div>';
 
   // Draw chart
@@ -3742,7 +3758,7 @@ function renderMaterials() {
     data: {
       labels: monthLabels,
       datasets: [{
-        data: sel.data,
+        data: chartData,
         backgroundColor: '#1a3a5c',
         borderColor: '#378ADD',
         borderWidth: 1,
@@ -3751,12 +3767,34 @@ function renderMaterials() {
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(c){ return c.raw+' kg'; } } } },
+      layout: { padding: { top: 24 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: function(c){ return Math.round(c.raw).toLocaleString()+' kg'; } } },
+        datalabels: { display: false }
+      },
       scales: {
-        x: { ticks: { color:'#5f5e5a', font:{size:11,family:'system-ui'}, maxRotation:45 }, grid: { color:'#1a1a1a' }, border:{color:'#2c2c2a'} },
-        y: { ticks: { color:'#5f5e5a', font:{size:11,family:'system-ui'}, callback: function(v){ return v+' kg'; } }, grid: { color:'#1a1a1a' }, border:{color:'#2c2c2a'} }
+        x: { ticks: { color:'#5f5e5a', font:{size:11,family:'system-ui'}, autoSkip:false, maxRotation:0 }, grid: { color:'#1a1a1a' }, border:{color:'#2c2c2a'} },
+        y: { ticks: { color:'#5f5e5a', font:{size:11,family:'system-ui'}, callback: function(v){ return Math.round(v).toLocaleString(); } }, grid: { color:'#1a1a1a' }, border:{color:'#2c2c2a'} }
       }
-    }
+    },
+    plugins: [{
+      id: 'topLabels',
+      afterDatasetsDraw: function(chart) {
+        var ctx2 = chart.ctx;
+        ctx2.save();
+        ctx2.font = '500 10px system-ui';
+        ctx2.fillStyle = '#888780';
+        ctx2.textAlign = 'center';
+        chart.data.datasets[0].data.forEach(function(val, i) {
+          if (!val) return;
+          var meta = chart.getDatasetMeta(0);
+          var bar = meta.data[i];
+          ctx2.fillText(Math.round(val).toLocaleString(), bar.x, bar.y - 6);
+        });
+        ctx2.restore();
+      }
+    }]
   });
 }
 
