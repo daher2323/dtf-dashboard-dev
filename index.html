@@ -1607,7 +1607,7 @@ function renderToday() {
   var allLinesHaveTarget=ALL_LINES.every(function(line){ var g=lineGoal(line); return g.isTarget; });
   var bannerGoalLabel=allLinesHaveTarget?'% of Target':'% of Avg';
   var todayPct=totalGoal?Math.round((todayTotal/totalGoal)*100):0;
-  var statusLabel=isLive&&!dayComplete?'Day in progress':(todayPct>=100?'Target exceeded':'Day complete');
+  var statusLabel=isLive&&!dayComplete?'Day in progress':(todayPct>100?'Target exceeded':todayPct>=TARGET_HIT_THRESHOLD*100?'Target met':'Day complete');
   var statusColor=isLive&&!dayComplete?'#888780':(todayPct>=100?'#1D9E75':'#EF9F27');
   var barColor=isLive&&!dayComplete?'#5f5e5a':(todayPct>=100?'#1D9E75':'#EF9F27');
 
@@ -1992,7 +1992,7 @@ function renderWeekly() {
     } else {
       statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775';
     }
-  } else{ var finalPct=weeklyTarget?(weekUnits/weeklyTarget)*100:0; if(finalPct>=100){statusLabel='Target exceeded';statusBg='#085041';statusTxt='#9FE1CB';}else if(finalPct>=98){statusLabel='Target met';statusBg='#085041';statusTxt='#9FE1CB';}else{statusLabel='Target missed';statusBg='#791F1F';statusTxt='#F09595';} }
+  } else{ var finalPct=weeklyTarget?(weekUnits/weeklyTarget)*100:0; if(finalPct>100){statusLabel='Target exceeded';statusBg='#085041';statusTxt='#9FE1CB';}else if(finalPct>=TARGET_HIT_THRESHOLD*100){statusLabel='Target met';statusBg='#085041';statusTxt='#9FE1CB';}else{statusLabel='Target missed';statusBg='#791F1F';statusTxt='#F09595';} }
   // Build per-lot unit counts within this week's window only
   var weekLotUnits={};
   var weekLotLastDate={};
