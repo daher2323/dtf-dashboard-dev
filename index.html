@@ -1870,7 +1870,7 @@ function showMixPanel(panelId, sizeKey) {
   panel.innerHTML =
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
       +'<div style="font-size:10px;font-weight:500;color:'+col+';font-family:system-ui;">'+sizeKey+' — '+lots.length+' lot'+(lots.length!==1?'s':'')+'</div>'
-      +'<div onclick="document.getElementById(\''+panelId+'\').style.display=\'none\';document.getElementById(\''+panelId+'\').removeAttribute(\'data-open\');" style="cursor:pointer;font-size:12px;color:#5f5e5a;font-family:system-ui;">&#x2715;</div>'
+      +'<button onclick="document.getElementById(\''+panelId+'\').style.display=\'none\';document.getElementById(\''+panelId+'\').removeAttribute(\'data-open\');" style="font-size:10px;font-weight:500;color:#888780;background:transparent;border:0.5px solid #444441;border-radius:5px;padding:2px 8px;cursor:pointer;font-family:system-ui;" onmouseover="this.style.borderColor=\'#888780\';this.style.color=\'#e8e6e0\';" onmouseout="this.style.borderColor=\'#444441\';this.style.color=\'#888780\';">Collapse</button>'
     +'</div>'
     +rows;
   panel.setAttribute('data-open', sizeKey);
