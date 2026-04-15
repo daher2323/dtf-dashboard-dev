@@ -682,11 +682,18 @@ function fetchMaterialsCSV() {
       return r.text();
     }).then(function(text){
       if (!text) throw new Error('Empty response');
-      if (text.trim().startsWith('<!')) throw new Error('Got HTML — sheet may still be loading');
-      if (text.trim().length < 50) throw new Error('Response too short');
+      if (text.trim().startsWith('<!')) {
+        window._matDebug = 'Got HTML (not CSV) — first 200 chars: ' + text.trim().substring(0,200);
+        throw new Error('Got HTML instead of CSV');
+      }
+      if (text.trim().length < 50) throw new Error('Response too short: ' + text.trim().length + ' chars');
+      window._matDebug = 'Fetch OK — ' + text.trim().split('\n').length + ' lines, first line: ' + text.trim().split('\n')[0].substring(0,100);
       return text;
     }).catch(function(e){
-      if (retries <= 1) { window._matDebug = 'Fetch failed after retries: ' + e.message; return ''; }
+      if (retries <= 1) {
+        if (!window._matDebug) window._matDebug = 'All retries failed: ' + e.message;
+        return '';
+      }
       return new Promise(function(res){ setTimeout(res, delay); }).then(function(){ return attempt(retries-1, delay*1.5); });
     });
   }
