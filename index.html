@@ -1708,7 +1708,7 @@ function renderToday() {
             var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
               +'<div>'
               +(l.lot?'<div style="font-size:11px;font-weight:500;color:#5f5e5a;font-family:system-ui;margin-bottom:2px;">#'+l.lot+'</div>':'')
-              +'<div style="font-size:10px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
+              +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
               +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div>'
               +(containerStr?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+containerStr+'</div>':'')
               +'</div>'
@@ -1829,7 +1829,7 @@ function buildWeekLotsGrid(lots) {
             +(l.lot?'<div style="font-size:11px;font-weight:500;color:#5f5e5a;font-family:system-ui;">#'+l.lot+'</div>':'')
             +(dateStr?'<div style="font-size:10px;color:#444441;font-family:system-ui;">· '+dateStr+'</div>':'')
           +'</div>'
-          +'<div style="font-size:10px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
+          +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div>'
           +([l.bottleSize||l.jarSize,[l.lidSize,l.lidColor,l.lidProfile].filter(Boolean).join(' ')].filter(Boolean).length?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+[l.bottleSize||l.jarSize,[l.lidSize,l.lidColor,l.lidProfile].filter(Boolean).join(' ')].filter(Boolean).join(' / ')+'</div>':'')
           +'</div>'
