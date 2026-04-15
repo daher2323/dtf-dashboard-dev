@@ -218,6 +218,7 @@ var selectedDetailYear = new Date().getFullYear();
 var selectedDetailRange = null;
 var selectedPerfRange = null;
 var procView = 'materials'; // 'materials' | 'jars' | 'bottles' | 'lids' | 'desiccants'
+var matYear = new Date().getFullYear(); // default to current year (YTD)
 var showZeroDes = false;
 var lastRefreshTime = 0;
 var filterState = { customer:[], product:[], status:[], bottle:[], jar:[] };
@@ -673,6 +674,20 @@ function fetchCSVSimple(url) {
   }).catch(function(){ return ''; });
 }
 
+function fetchMaterialsCSV() {
+  return fetch(CSV_MATERIALS).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }).then(function(text){
+    if (!text) throw new Error('Empty response');
+    if (text.trim().startsWith('<!')) throw new Error('Got HTML instead of CSV — sheet may not be published');
+    return text;
+  }).catch(function(e){
+    window._matDebug = 'Fetch failed: ' + e.message;
+    return '';
+  });
+}
+
 function fetchWithRetry(url, retries, delay) {
   retries = retries || 5; delay = delay || 2000;
   return fetch(url).then(function(r){
@@ -698,7 +713,7 @@ function fetchData() {
     fetchWithRetry(CSV_2025),
     fetchWithRetry(CSV_TARGETS).catch(function(){ return ''; }),
     fetchCSVSimple(CSV_WEEKLY_TARGETS),
-    fetchCSVSimple(CSV_MATERIALS)
+    fetchMaterialsCSV()
   ]);
 }
 
@@ -708,6 +723,8 @@ function parseMaterials(text) {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
     window._matDebug = 'Fetched ' + rows.length + ' rows. Headers: ' + keys.join(' | ');
+    // Find the date column — it may have a BOM or whitespace prefix
+    var dateCol = keys.find(function(k){ return k.replace(/^\W+/,'').toLowerCase()==='column 1'; }) || 'Column 1';
     var filtered = rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
     });
@@ -716,7 +733,7 @@ function parseMaterials(text) {
       window._matDebug += ' Sample row: ' + JSON.stringify(rows[0]).substring(0, 200);
     }
     return filtered.map(function(r){
-      var d = new Date((r['Column 1']||r['Date']||'').trim());
+      var d = new Date((r[dateCol]||'').trim());
       return {
         date: isNaN(d) ? null : d,
         lot: (r['Order Lot #']||'').trim(),
@@ -3592,6 +3609,27 @@ function renderMaterials() {
   if (!content) return;
 
   var rows = materialsData;
+
+  // Year filter
+  var now = new Date();
+  var availYears = Array.from(new Set(rows.map(function(r){ return r.date.getFullYear(); }))).sort();
+  if (!availYears.length) availYears = [now.getFullYear()];
+  if (availYears.indexOf(matYear) === -1) matYear = now.getFullYear();
+  var isYTD = matYear === now.getFullYear();
+  var yearStart = new Date(matYear, 0, 1);
+  var yearEnd = isYTD ? now : new Date(matYear, 11, 31, 23, 59, 59);
+  var filteredRows = rows.filter(function(r){ return r.date >= yearStart && r.date <= yearEnd; });
+
+  // Year picker HTML
+  var yearPickerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-right:4px;">Period</div>'
+    +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+    +availYears.map(function(y){
+      var label = y === now.getFullYear() ? y+' YTD' : String(y);
+      return '<button onclick="matYear='+y+';window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matYear===y)+'">'+label+'</button>';
+    }).join('')
+    +'</div>'
+    +'</div>';
   if (!rows.length) {
     content.innerHTML = '<div style="padding:2rem;font-family:system-ui;">'
       +'<div style="font-size:13px;color:#5f5e5a;margin-bottom:12px;">No material data loaded.</div>'
@@ -3601,9 +3639,9 @@ function renderMaterials() {
     return;
   }
 
-  // Build per-material aggregates
+  // Build per-material aggregates from filtered rows
   var byMat = {};
-  rows.forEach(function(r){
+  filteredRows.forEach(function(r){
     if (!byMat[r.material]) byMat[r.material] = {name:r.material, totalKg:0, lots:new Set(), byMonth:{}};
     var m = byMat[r.material];
     m.totalKg += r.qty;
@@ -3617,13 +3655,15 @@ function renderMaterials() {
   var maxKg = matList[0] ? matList[0].totalKg : 1;
   var selectedMat = window._selectedMaterial || matList[0].name;
 
-  // Build month labels (last 13 months)
-  var now = new Date();
+  // Build month labels for selected year
   var monthKeys = [], monthLabels = [];
-  for (var i = 12; i >= 0; i--) {
-    var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    monthKeys.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
-    monthLabels.push(d.toLocaleDateString('en-US',{month:'short',year:'2-digit'}));
+  var mStart = new Date(matYear, 0, 1);
+  var mEnd = isYTD ? now : new Date(matYear, 11, 31);
+  var mPtr = new Date(mStart);
+  while (mPtr <= mEnd) {
+    monthKeys.push(mPtr.getFullYear()+'-'+String(mPtr.getMonth()+1).padStart(2,'0'));
+    monthLabels.push(mPtr.toLocaleDateString('en-US',{month:'short',year:'2-digit'}));
+    mPtr.setMonth(mPtr.getMonth()+1);
   }
 
   function getMatStats(name) {
@@ -3636,7 +3676,8 @@ function renderMaterials() {
   var sel = getMatStats(selectedMat);
 
   content.innerHTML =
-    '<div style="display:grid;grid-template-columns:320px 1fr;gap:10px;align-items:start;">'
+    yearPickerHTML
+    +'<div style="display:grid;grid-template-columns:320px 1fr;gap:10px;align-items:start;">'
     // Left: ranked list
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
       +'<div style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;">'
@@ -3646,7 +3687,7 @@ function renderMaterials() {
       +matList.map(function(m, i){
         var pct = Math.round(m.totalKg/maxKg*100);
         var isSelected = m.name === selectedMat;
-        return '<div onclick="window._selectedMaterial=\''+m.name.replace(/'/g,'\\\'')+'\'rebderMatView()" '
+        return '<div onclick="window._selectedMaterial=\''+m.name.replace(/'/g,'\\\'')+'\';renderMaterials()" '
           +'style="padding:10px 14px;border-bottom:0.5px solid #2c2c2a;cursor:pointer;background:'+(isSelected?'#1a2535':'transparent')+';transition:background .15s;" '
           +'onmouseover="this.style.background=\''+(isSelected?'#1a2535':'#1a1d20')+'\'" onmouseout="this.style.background=\''+(isSelected?'#1a2535':'transparent')+'\'">'
           +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">'
@@ -3686,7 +3727,7 @@ function renderMaterials() {
         +'</div>'
       +'</div>'
       +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1rem 1.25rem;">'
-        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-bottom:12px;">Monthly consumption — last 13 months</div>'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.05em;font-weight:500;font-family:system-ui;margin-bottom:12px;">Monthly consumption — '+(isYTD?matYear+' year to date':matYear)+'</div>'
         +'<div style="position:relative;height:220px;"><canvas id="matTrendChart" role="img" aria-label="Monthly kg consumption for '+selectedMat+'">Monthly consumption trend.</canvas></div>'
       +'</div>'
     +'</div>'
@@ -3718,8 +3759,6 @@ function renderMaterials() {
     }
   });
 }
-
-window.rebderMatView = function() { renderMaterials(); };
 
 function renderProcurement() {
   if (procView === 'materials') { renderMaterials(); return; }
