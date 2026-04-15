@@ -1841,6 +1841,42 @@ function buildWeekLotsGrid(lots) {
   }).join('');
 }
 
+function showMixPanel(panelId, sizeKey) {
+  var panel = document.getElementById(panelId);
+  if (!panel) return;
+  // Toggle off if same size clicked again
+  if (panel.getAttribute('data-open') === sizeKey && panel.style.display !== 'none') {
+    panel.style.display = 'none'; panel.removeAttribute('data-open'); return;
+  }
+  var data = (window._mixData||{})[panelId];
+  if (!data || !data[sizeKey]) return;
+  var col = data[sizeKey].color;
+  var lots = data[sizeKey].lots;
+  var rows = lots.map(function(l) {
+    var dev = l.projected&&l.finalUnits ? Math.round((l.finalUnits-l.projected)/l.projected*100) : null;
+    var prod = (l.product||'').split('-'); var brand = prod[0].trim(); var name = prod.slice(1).join('-').trim()||brand;
+    var devBg = dev===null?'#2c2c2a':dev>=-1?'#085041':'#791F1F';
+    var devTxt = dev===null?'#888780':dev>=-1?'#9FE1CB':'#F09595';
+    var devStr = dev===null?'—':(dev>=0?'+':'')+dev+'%';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid #1a1a1a;">'
+      +'<div style="flex:1;min-width:0;">'
+        +'<div style="font-size:9px;color:#5f5e5a;font-family:system-ui;">'+brand+' &middot; #'+l.lot+'</div>'
+        +'<div style="font-size:11px;font-weight:500;color:#e8e6e0;font-family:system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+name+'</div>'
+      +'</div>'
+      +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;flex-shrink:0;">'+l.finalUnits.toLocaleString()+'</div>'
+      +'<div style="flex-shrink:0;"><span style="font-size:10px;font-weight:500;padding:1px 5px;border-radius:4px;background:'+devBg+';color:'+devTxt+';">'+devStr+'</span></div>'
+    +'</div>';
+  }).join('');
+  panel.innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
+      +'<div style="font-size:10px;font-weight:500;color:'+col+';font-family:system-ui;">'+sizeKey+' — '+lots.length+' lot'+(lots.length!==1?'s':'')+'</div>'
+      +'<div onclick="document.getElementById(\''+panelId+'\').style.display=\'none\';document.getElementById(\''+panelId+'\').removeAttribute(\'data-open\');" style="cursor:pointer;font-size:12px;color:#5f5e5a;font-family:system-ui;">&#x2715;</div>'
+    +'</div>'
+    +rows;
+  panel.setAttribute('data-open', sizeKey);
+  panel.style.display = 'block';
+}
+
 function filterWeekLots() {
   var sel=document.getElementById('weekCustFilter');
   var cust=sel?sel.value:'';
@@ -2155,12 +2191,10 @@ function renderWeekly() {
           +'<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;display:grid;grid-template-columns:repeat('+wkDayCount+',1fr);gap:4px;">'
             +dayCells
           +'</div>'
+          +'<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;margin-top:10px;">'
           +(function(){
-            // Build container size mix for this line from weekLots
             var isBottleLine = k2==='line#2';
-            var sizeKey = isBottleLine ? 'bottleSize' : 'jarSize';
-            var bySize={};
-            var lineTotal=0;
+            var bySize={}, sizeToLots={}, lineTotal=0;
             weekLots.forEach(function(l){
               if((l.line||'').trim()!==line) return;
               var ld=lotMap[l.lot]||{};
@@ -2169,28 +2203,45 @@ function renderWeekly() {
                 : (ld.jarSize||'').trim();
               var normalized=jarSizeKey(sz)||'Other';
               bySize[normalized]=(bySize[normalized]||0)+l.finalUnits;
+              if(!sizeToLots[normalized]) sizeToLots[normalized]=[];
+              sizeToLots[normalized].push(l);
               lineTotal+=l.finalUnits;
             });
             if(!lineTotal||Object.keys(bySize).length===0) return '';
             var MIX_COLORS=['#378ADD','#1D9E75','#EF9F27','#D4537E','#7F77DD','#D85A30','#85B7EB','#5DCAA5'];
             var entries=Object.entries(bySize).sort(function(a,b){return b[1]-a[1];});
+            var panelId='mix-panel-'+k2;
+            // Store lot data for each size in a global lookup keyed by panelId
+            if(!window._mixData) window._mixData={};
+            window._mixData[panelId]={};
+            entries.forEach(function(e,i){
+              window._mixData[panelId][e[0]]={color:MIX_COLORS[i%MIX_COLORS.length],lots:sizeToLots[e[0]]};
+            });
             var barSegs=entries.map(function(e,i){
-              var pct=(e[1]/lineTotal*100).toFixed(1);
               var w=(e[1]/lineTotal*100);
-              return '<div style="height:100%;width:'+w+'%;background:'+MIX_COLORS[i%MIX_COLORS.length]+';'+(i===0?'border-radius:4px 0 0 4px;':i===entries.length-1?'border-radius:0 4px 4px 0;':'')+'" title="'+e[0]+': '+pct+'%"></div>';
+              var col=MIX_COLORS[i%MIX_COLORS.length];
+              var radius=i===0?'border-radius:4px 0 0 4px;':i===entries.length-1?'border-radius:0 4px 4px 0;':'';
+              var pct=(e[1]/lineTotal*100).toFixed(1);
+              return '<div onclick="showMixPanel(\''+panelId+'\',\''+e[0].replace(/'/g,'\\\'')+'\')" '
+                +'style="height:100%;width:'+w+'%;background:'+col+';'+radius+'cursor:pointer;transition:opacity .15s;" '
+                +'onmouseover="this.style.opacity=\'.7\'" onmouseout="this.style.opacity=\'1\'" '
+                +'title="'+e[0]+': '+pct+'%"></div>';
             }).join('');
             var legend=entries.map(function(e,i){
               var pct=(e[1]/lineTotal*100).toFixed(1);
-              return '<div style="display:flex;align-items:center;gap:4px;font-size:9px;color:#888780;font-family:system-ui;white-space:nowrap;">'
+              return '<div onclick="showMixPanel(\''+panelId+'\',\''+e[0].replace(/'/g,'\\\'')+'\')" '
+                +'style="display:flex;align-items:center;gap:4px;font-size:9px;color:#888780;font-family:system-ui;white-space:nowrap;cursor:pointer;" '
+                +'onmouseover="this.style.opacity=\'.7\'" onmouseout="this.style.opacity=\'1\'">'
                 +'<div style="width:7px;height:7px;border-radius:2px;background:'+MIX_COLORS[i%MIX_COLORS.length]+';flex-shrink:0;"></div>'
                 +e[0]+' <span style="color:#5f5e5a;">'+pct+'%</span>'
               +'</div>';
             }).join('');
-            return '<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;margin-top:10px;">'
-              +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">'+(isBottleLine?'Container':'Jar')+' size mix</div>'
-              +'<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:6px;gap:1px;">'+barSegs+'</div>'
-              +'<div style="display:flex;flex-wrap:wrap;gap:6px 12px;">'+legend+'</div>'
-            +'</div>';
+            return '<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">'
+              +(isBottleLine?'Container':'Jar')+' size mix '
+              +'<span style="color:#444441;font-size:8px;text-transform:none;letter-spacing:0;">· click to drill down</span></div>'
+              +'<div style="display:flex;height:10px;border-radius:4px;overflow:hidden;margin-bottom:6px;">'+barSegs+'</div>'
+              +'<div style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-bottom:4px;">'+legend+'</div>'
+              +'<div id="'+panelId+'" style="display:none;background:#0d0f10;border:0.5px solid #2c2c2a;border-radius:6px;padding:8px 10px;margin-top:6px;"></div>';
           })()
         +'</div>'
       +'</div>';
