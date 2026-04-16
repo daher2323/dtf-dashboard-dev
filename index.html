@@ -1495,9 +1495,10 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
 
     // Animate segmented bar
     if(totalGoal) {
-      var w1=Math.min((gaugeData[0].units*e)/totalGoal*100,100);
-      var w2=Math.min((gaugeData[1].units*e)/totalGoal*100,100);
-      var w4=Math.min((gaugeData[2].units*e)/totalGoal*100,100);
+      var barScale = Math.max(totalGoal, gaugeData[0].units+gaugeData[1].units+gaugeData[2].units) * e || totalGoal;
+      var w1=(gaugeData[0].units*e)/barScale*100;
+      var w2=(gaugeData[1].units*e)/barScale*100;
+      var w4=(gaugeData[2].units*e)/barScale*100;
       var totalW=Math.min(w1+w2+w4,100);
       var s1=document.getElementById('banner-seg1');
       var s2=document.getElementById('banner-seg2');
@@ -1507,9 +1508,10 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
       if(s2){s2.style.left=w1+'%';s2.style.width=w2+'%';}
       if(s4){s4.style.left=(w1+w2)+'%';s4.style.width=w4+'%';}
       if(rem){
-        var remaining=Math.max(0,totalGoal-Math.round(todayTotal*e));
-        rem.style.fontSize='11px';rem.style.fontWeight='500';rem.style.color='#888780';
-        rem.textContent=remaining>0?remaining.toLocaleString()+' to go':'';
+        var remaining=Math.round(totalGoal-todayTotal*e);
+        rem.style.fontSize='11px';rem.style.fontWeight='500';
+        if(remaining<=0){rem.style.color='#9FE1CB';rem.textContent='+'+(Math.abs(remaining)).toLocaleString()+' over target';}
+        else{rem.style.color='#888780';rem.textContent=remaining.toLocaleString()+' to go';}
       }
       // Position labels at midpoint of each segment
       var segs=[{id:'line#1',left:0,width:w1},{id:'line#2',left:w1,width:w2},{id:'line#4',left:w1+w2,width:w4}];
