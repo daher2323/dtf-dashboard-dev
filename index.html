@@ -3757,17 +3757,18 @@ function renderMaterials() {
   allMats.forEach(function(m){
     m.lotCount=m.lots.size;
     m.partNums=Array.from(m.partNums).sort();
-    // Month series for sparkline (last 6 months of window)
-    var spark6Keys = monthKeys.slice(-6);
+    // Month series for sparkline — last 6 COMPLETED months (exclude current partial month)
+    var completedKeys = monthKeys.slice(0, monthKeys.length - 1);
+    var spark6Keys = completedKeys.slice(-6);
     m.spark = spark6Keys.map(function(k){ return Math.round(m.byMonth[k]||0); });
-    // Last COMPLETED month (second to last key — current month is still in progress)
-    var lastMoKey = monthKeys.length >= 2 ? monthKeys[monthKeys.length-2] : monthKeys[monthKeys.length-1];
+    // Last COMPLETED month
+    var lastMoKey = completedKeys.length ? completedKeys[completedKeys.length-1] : monthKeys[monthKeys.length-1];
     m.lastMonth = Math.round(m.byMonth[lastMoKey]||0);
-    // 3-month rolling avg — always divide by 3
-    var mo3 = monthKeys.slice(-3).map(function(k){ return m.byMonth[k]||0; });
+    // 3-month rolling avg — last 3 completed months
+    var mo3 = completedKeys.slice(-3).map(function(k){ return m.byMonth[k]||0; });
     m.avg3 = Math.round(mo3.reduce(function(a,b){return a+b;},0)/3);
-    // 6-month rolling avg — always divide by 6
-    var mo6 = monthKeys.slice(-6).map(function(k){ return m.byMonth[k]||0; });
+    // 6-month rolling avg — last 6 completed months
+    var mo6 = completedKeys.slice(-6).map(function(k){ return m.byMonth[k]||0; });
     m.avg6 = Math.round(mo6.reduce(function(a,b){return a+b;},0)/6);
     // vs 6-mo avg: compare 3-mo avg to 6-mo avg (is recent pace higher or lower than baseline?)
     m.vsPct = m.avg6 ? ((m.avg3 - m.avg6) / m.avg6 * 100) : 0;
