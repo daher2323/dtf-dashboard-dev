@@ -733,23 +733,23 @@ function parseMaterials(text) {
   try {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
-    // Find date column — strip ALL non-printable/non-ASCII chars to match
-    var dateCol = keys.find(function(k){ return k.replace(/^\uFEFF/,'').trim() === 'Column 1'; }) || keys[0];
-    window._matDebug = 'Rows: ' + rows.length + ' | Date col: [' + dateCol + '] len=' + dateCol.length;
-    // Sample the first few date values
-    var samples = rows.slice(0,3).map(function(r){ return '"'+(r[dateCol]||'')+'":'+new Date(r[dateCol]||''); }).join(' | ');
-    window._matDebug += ' | Samples: ' + samples;
+    // Google Forms: first column is always the timestamp, regardless of its header name/BOM
+    var dateCol = keys[0];
+    // Sample raw values for debug
+    var sampleVals = rows.slice(0,3).map(function(r){ return '"'+(r[dateCol]||'')+'"'; }).join(', ');
+    window._matDebug = 'Rows: '+rows.length+' | dateCol: "'+dateCol.replace(/[^\x20-\x7E]/g,'?')+'" | samples: '+sampleVals;
     var filtered = rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
     });
     var parsed = filtered.map(function(r){
       var raw = (r[dateCol]||'').trim();
-      // Try multiple date formats: MM/DD/YYYY, M/D/YYYY, YYYY-MM-DD, "April 1, 2025" etc
+      // Google Forms format: "4/1/2025 10:23:45" or "4/1/2025"
       var d = new Date(raw);
-      if (isNaN(d)) {
-        // Try replacing slashes: some locales use DD/MM/YYYY
-        var parts = raw.split('/');
-        if (parts.length === 3) d = new Date(parts[2]+'-'+parts[0].padStart(2,'0')+'-'+parts[1].padStart(2,'0'));
+      if (isNaN(d) && raw) {
+        // Strip time portion and retry
+        var datePart = raw.split(' ')[0];
+        var parts = datePart.split('/');
+        if (parts.length === 3) d = new Date(parseInt(parts[2]), parseInt(parts[0])-1, parseInt(parts[1]));
       }
       return {
         date: isNaN(d) ? null : d,
@@ -759,9 +759,9 @@ function parseMaterials(text) {
         qty: parseFloat(r['Qty Needed']||0)
       };
     }).filter(function(r){ return r.date; });
-    window._matDebug += ' | Valid: ' + filtered.length + ' rows, ' + parsed.length + ' with dates';
+    window._matDebug += ' | filtered: '+filtered.length+' valid rows, '+parsed.length+' with dates';
     return parsed;
-  } catch(e) { window._matDebug = 'Error: ' + e.message; return []; }
+  } catch(e) { window._matDebug = 'Error: '+e.message; return []; }
 }
 
 function applyFreshData(res) {
@@ -3749,7 +3749,7 @@ function renderMaterials() {
     content.innerHTML = '<div style="padding:2rem;font-family:system-ui;">'
       +'<div style="font-size:13px;color:#5f5e5a;margin-bottom:12px;">No material data loaded.</div>'
       +'<div style="font-size:11px;color:#888780;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;padding:12px;margin-bottom:16px;word-break:break-all;line-height:1.6;">'+(window._matDebug||'No debug info available.')+'</div>'
-      +'<button onclick="fetchMaterialsCSV().then(function(t){var r=parseMaterials(t);if(r.length){materialsData=r;}renderMaterials();}" style="padding:6px 14px;border:0.5px solid #444441;border-radius:8px;background:transparent;color:#e8e6e0;font-size:12px;cursor:pointer;font-family:system-ui;">Retry fetch</button>'
+      +'<button onclick="fetchMaterialsCSV().then(function(t){materialsData=parseMaterials(t);renderMaterials();}" style="padding:6px 14px;border:0.5px solid #444441;border-radius:8px;background:transparent;color:#e8e6e0;font-size:12px;cursor:pointer;font-family:system-ui;">Retry fetch</button>'
       +'</div>';
     return;
   }
