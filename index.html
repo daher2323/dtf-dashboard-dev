@@ -3020,7 +3020,6 @@ function safeid(s) {
 
 function computeCustomerData() {
   var allRowsCombined = allRows.concat(allRows25);
-  var allRowsCombined = allRows.concat(allRows25);
   var now = new Date();
   var nowYr = now.getFullYear();
   var curQk = getQuarterKey(now);
@@ -3322,7 +3321,7 @@ function renderCustomerOverview(healthData) {
   if(hdrOuter) hdrOuter.style.display = 'none';
 
   return '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Customer overview &middot; thru '+ytdLabel+'</div>'
-    +rows+'</div>';
+    +rows;
 }
 
 function _triggerExpandedSynopses() {
@@ -4244,103 +4243,6 @@ function renderProcurement() {
 }
 
 function renderCustomers() {
-  var now = new Date();
-  if (!selectedPerfRange) selectedPerfRange = getDefaultPerfRange();
-  var range = selectedPerfRange;
-  var allRowsCombined = allRows.concat(allRows25);
-  var rangeRows = allRowsCombined.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=range.start&&dt<=range.end; });
-
-  var rangeYear = range.start.getFullYear();
-  var compShift = (rangeYear === 2025) ? 1 : -1;
-  var compStart = new Date(range.start.getTime()); compStart.setFullYear(rangeYear + compShift);
-  var compEnd   = new Date(range.end.getTime());   compEnd.setFullYear(range.end.getFullYear() + compShift);
-  var compYearLabel = String(compStart.getFullYear());
-
-  var rangeRows25 = allRowsCombined.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=compStart&&dt<=compEnd; });
-
-  // Build current-period customer totals from raw rows
-  var byCust = {};
-  rangeRows.forEach(function(r){
-    var prod=(r['Product']||'').trim(); if(!prod) return;
-    var c=prod.split('-')[0].trim(); if(!c) return;
-    if(!byCust[c]) byCust[c]={units:0,lots:new Set()};
-    byCust[c].units+=num(r['Final Units']);
-    var lot=(r['Lot Number']||'').trim(); if(lot) byCust[c].lots.add(lot);
-  });
-  Object.keys(byCust).forEach(function(k){ byCust[k].lots=byCust[k].lots.size; });
-  var allCustSorted=Object.entries(byCust).sort(function(a,b){return b[1].units-a[1].units;});
-  var maxCU=allCustSorted[0]?allCustSorted[0][1].units:1;
-  var totalUnits=allCustSorted.reduce(function(s,e){return s+e[1].units;},0);
-
-  // Build comparison-period customer totals
-  var byCust25raw={};
-  allRowsCombined.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=compStart&&dt<=compEnd; }).forEach(function(r){
-    var prod=(r['Product']||'').trim(); if(!prod) return;
-    var c=prod.split('-')[0].trim(); if(!c) return;
-    var ck=c.toLowerCase();
-    if(!byCust25raw[ck]) byCust25raw[ck]={units:0,lots:new Set(),displayName:c};
-    byCust25raw[ck].units+=num(r['Final Units']);
-    var lot=(r['Lot Number']||'').trim(); if(lot) byCust25raw[ck].lots.add(lot);
-  });
-  Object.keys(byCust25raw).forEach(function(k){ byCust25raw[k].lots=byCust25raw[k].lots.size; });
-  function getCust25(name){ return byCust25raw[(name||'').toLowerCase()]||null; }
-  var total25units=Object.values(byCust25raw).reduce(function(s,v){return s+v.units;},0);
-
-  var visibleCusts = custLimit===0 ? allCustSorted : allCustSorted.slice(0,custLimit);
-  var showSummaryRow = custLimit===0;
-
-  var custHTML = visibleCusts.map(function(e,i){
-    var c=e[0],cd=e[1];
-    var avg2=cd.lots?Math.round(cd.units/cd.lots):0;
-    var bw=Math.round((cd.units/maxCU)*100);
-    var sp=totalUnits?((cd.units/totalUnits)*100).toFixed(1):0;
-    var cd25=getCust25(c);
-    var compUnits  = cd25?'<span style="color:#5f5e5a;font-weight:400"> ('+cd25.units.toLocaleString()+')</span>':'';
-    var avg225     = cd25&&cd25.lots?Math.round(cd25.units/cd25.lots):null;
-    var compAvg    = avg225!==null?'<span style="color:#5f5e5a;font-weight:400"> ('+avg225.toLocaleString()+')</span>':'';
-    var sp25       = total25units&&cd25?((cd25.units/total25units)*100).toFixed(1):null;
-    var compSp     = sp25!==null?'<span style="color:#5f5e5a;font-weight:400"> ('+sp25+'%)</span>':'';
-    var compLots   = cd25?'<span style="color:#5f5e5a;font-weight:400"> ('+cd25.lots+')</span>':'';
-    var yoyCell='<td style="text-align:right">';
-    if(cd25&&cd25.units){
-      var yPos=(cd.units-cd25.units)>=0, yPct=((cd.units-cd25.units)/cd25.units*100);
-      var yBg=yPos?'#085041':'#791F1F', yTxt=yPos?'#9FE1CB':'#F09595';
-      yoyCell+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+yPct.toFixed(1)+'%</span>';
-    } else { yoyCell+='\u2014'; }
-    yoyCell+='</td>';
-    return '<tr>'
-      +'<td style="color:#5f5e5a;font-size:11px;width:24px">'+(i+1)+'</td>'
-      +'<td style="font-weight:500">'+c+'</td>'
-      +'<td style="text-align:right">'+cd.units.toLocaleString()+compUnits+'</td>'
-      +'<td style="padding:6px 10px;width:90px"><div style="background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:#94A3B8;border-radius:2px"></div></div></td>'
-      +yoyCell
-      +'<td style="text-align:right;color:#888780">'+cd.lots+compLots+'</td>'
-      +'<td style="text-align:right;color:#888780">'+avg2.toLocaleString()+compAvg+'</td>'
-      +'<td style="text-align:right;color:#888780">'+sp+'%'+compSp+'</td>'
-      +'</tr>';
-  }).join('');
-
-  if (showSummaryRow) {
-    var sumUnits=allCustSorted.reduce(function(s,e){return s+e[1].units;},0);
-    var sumLots=allCustSorted.reduce(function(s,e){return s+e[1].lots;},0);
-    var sumAvg=sumLots?Math.round(sumUnits/sumLots):0;
-    var sum25units=Object.values(byCust25raw).reduce(function(s,v){return s+v.units;},0);
-    var sum25lots=Object.values(byCust25raw).reduce(function(s,v){return s+v.lots;},0);
-    var sum25avg=sum25lots?Math.round(sum25units/sum25lots):0;
-    var sPos=(sumUnits-sum25units)>=0, sPct=((sumUnits-sum25units)/sum25units*100);
-    var sBg=sPos?'#085041':'#791F1F', sTxt2=sPos?'#9FE1CB':'#F09595';
-    custHTML+='<tr style="border-top:1.5px solid #444441;background:#1a1d1f;">'
-      +'<td></td><td style="font-weight:500;color:#e8e6e0;font-size:12px;">All '+allCustSorted.length+' customers</td>'
-      +'<td style="text-align:right;font-weight:500">'+sumUnits.toLocaleString()+(sum25units?'<span style="color:#5f5e5a;font-weight:400"> ('+sum25units.toLocaleString()+')</span>':'')+'</td>'
-      +'<td></td>'
-      +'<td style="text-align:right">'+(sum25units?'<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+sBg+';color:'+sTxt2+'">'+(sPos?'+':'')+sPct.toFixed(1)+'%</span>':'\u2014')+'</td>'
-      +'<td style="text-align:right;color:#888780;font-weight:500">'+sumLots+(sum25lots?'<span style="color:#5f5e5a;font-weight:400"> ('+sum25lots+')</span>':'')+'</td>'
-      +'<td style="text-align:right;color:#888780;font-weight:500">'+sumAvg.toLocaleString()+(sum25avg?'<span style="color:#5f5e5a;font-weight:400"> ('+sum25avg.toLocaleString()+')</span>':'')+'</td>'
-      +'<td style="text-align:right;color:#888780;font-weight:500">100%</td>'
-      +'</tr>';
-  }
-
-  // ── Customer overview ──
   var healthData = computeCustomerData();
 
   if (selectedCustomer) {
