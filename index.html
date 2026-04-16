@@ -2183,10 +2183,10 @@ function renderWeekly() {
           +'</div>'
           +'<div style="background:#2c2c2a;"></div>'
           +'<div style="text-align:center;padding:0 10px;">'
-            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">'+(isLiveWeek?'Needed / day':'Status')+'</div>'
-            +(isLiveWeek&&daysRemaining>0
-              ?'<div style="font-size:22px;font-weight:500;color:'+(onPace?'#9FE1CB':'#EF9F27')+';font-family:system-ui;">'+neededPerDay.toLocaleString()+'</div>'
-              :statusLabel?'<div style="font-size:13px;font-weight:500;color:'+statusColor+';padding-top:4px;font-family:system-ui;">'+statusLabel+'</div>'
+            +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Avg / day</div>'
+            +(daysElapsed>0
+              ?'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+Math.round(weekUnits/daysElapsed).toLocaleString()+'</div>'
+                +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+daysElapsed+' day'+(daysElapsed!==1?'s':'')+' this week</div>'
               :'<div style="font-size:13px;color:#5f5e5a;font-family:system-ui;">—</div>'
             )
           +'</div>'
