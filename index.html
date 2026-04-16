@@ -3679,7 +3679,78 @@ function renderMatInline(m, idx) {
   var monthLabels = window._matMonthLabels || [];
   var chartData = monthKeys.map(function(k){ return Math.round(m.byMonth[k]||0); });
 
-  // Per-part breakdown table (for grouped SKUs)
+  // ── Build quarterly rollup from byMonth ──────────────────────────────────
+  var now = new Date();
+  var curQk = getQuarterKey(now);
+  var qtrMap = {};
+  Object.keys(m.byMonth).forEach(function(mk) {
+    var parts = mk.split('-');
+    var dt = new Date(parseInt(parts[0]), parseInt(parts[1])-1, 1);
+    var qk = getQuarterKey(dt);
+    if (!qtrMap[qk]) qtrMap[qk] = 0;
+    qtrMap[qk] += m.byMonth[mk];
+  });
+  // All quarters from first with data to current
+  var allQks = Object.keys(qtrMap).sort();
+  if (allQks.length === 0) allQks = [curQk];
+  var firstQk = allQks[0];
+  var displayQks = [];
+  var dq = new Date(parseInt(firstQk.split('-')[0]), (parseInt(firstQk.split('Q')[1])-1)*3, 1);
+  while (getQuarterKey(dq) <= curQk) {
+    displayQks.push(getQuarterKey(dq));
+    dq.setMonth(dq.getMonth() + 3);
+  }
+  var maxQtrKg = Math.max.apply(null, displayQks.map(function(qk){ return qtrMap[qk]||0; })) || 1;
+  var qtrRows = displayQks.map(function(qk, qi) {
+    var kg = Math.round(qtrMap[qk]||0);
+    var isCur = qk === curQk;
+    var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
+    var rBg = isCur ? 'background:#1a2030;' : '';
+    // vs prev quarter with data
+    var prevKg = null;
+    for (var pi=qi-1; pi>=0; pi--) {
+      var pk = displayQks[pi], pv = Math.round(qtrMap[pk]||0);
+      if (pv > 0) { prevKg = pv; break; }
+    }
+    var delta = '';
+    if (kg > 0 && isCur) {
+      delta = '<span style="font-size:10px;color:#5f5e5a;">In progress</span>';
+    } else if (kg > 0 && prevKg !== null) {
+      var p = (kg-prevKg)/prevKg*100, pos = p>=0;
+      delta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:'+(pos?'#085041':'#791F1F')+';color:'+(pos?'#9FE1CB':'#F09595')+'">'+(pos?'+':'')+p.toFixed(1)+'%</span>';
+    } else if (kg > 0 && prevKg === null) {
+      delta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
+    }
+    var bw = kg ? Math.round((kg/maxQtrKg)*88) : 0;
+    var bCol = isCur ? '#378ADD' : '#4A6580';
+    return '<tr>'\
+      +'<td style="'+tdB+rBg+'padding-left:14px;color:'+(isCur?'#378ADD':'#888780')+';font-weight:'+(isCur?'500':'400')+';">'\
+        +(isCur?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')\
+        +quarterLabel(qk)+(isCur?' <span style="font-size:10px;color:#5f5e5a;font-weight:400;">partial</span>':'')\
+      +'</td>'\
+      +'<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'\u2014')+'</td>'\
+      +'<td style="'+tdB+rBg+'text-align:right;">'+delta+'</td>'\
+      +'<td style="'+tdB+rBg+'padding-right:14px;width:120px;">'\
+        +'<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'\
+          +'<div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:2px;"></div>'\
+        +'</div>'\
+      +'</td>'\
+    +'</tr>';
+  }).join('');
+
+  var qtrTableHTML = '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'\
+    +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Quarterly summary</div>'\
+    +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'\
+    +'<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'\
+      +'<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Quarter</th>'\
+      +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'\
+      +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">vs prev</th>'\
+      +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;white-space:nowrap;">Volume</th>'\
+    +'</tr></thead>'\
+    +'<tbody>'+qtrRows+'</tbody>'\
+    +'</table></div></div>';
+
+  // ── Per-part breakdown table (grouped SKUs) ───────────────────────────────
   var breakdownHTML = '';
   if (m.isGroup) {
     var parts = Object.values(m.partBreakdown).sort(function(a,b){ return b.totalKg - a.totalKg; });
@@ -3687,64 +3758,65 @@ function renderMatInline(m, idx) {
       var pct = m.totalKg ? ((pb.totalKg / m.totalKg) * 100).toFixed(1) : '0';
       var bw  = m.totalKg ? Math.round((pb.totalKg / m.totalKg) * 100) : 0;
       var matLabel = pb.label.indexOf(' \u2014 ') !== -1 ? pb.label.split(' \u2014 ')[1] : pb.label;
-      return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
-        +'<td style="padding:5px 10px;font-size:11px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+pb.partNum+'</td>'
-        +'<td style="padding:5px 10px;font-size:11px;color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+matLabel+'</td>'
-        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+fmt(pb.lastMonth)+'</td>'
-        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.avg3)+'</td>'
-        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.totalKg)+'</td>'
-        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;">'+pb.lotCount+'</td>'
-        +'<td style="padding:5px 14px;width:120px;">'
-          +'<div style="display:flex;align-items:center;gap:6px;">'
-            +'<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
-              +'<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
-            +'</div>'
-            +'<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
-          +'</div>'
-        +'</td>'
+      return '<tr style="border-bottom:0.5px solid #2c2c2a;">'\
+        +'<td style="padding:5px 10px;font-size:11px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+pb.partNum+'</td>'\
+        +'<td style="padding:5px 10px;font-size:11px;color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+matLabel+'</td>'\
+        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+fmt(pb.lastMonth)+'</td>'\
+        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.avg3)+'</td>'\
+        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.totalKg)+'</td>'\
+        +'<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;">'+pb.lotCount+'</td>'\
+        +'<td style="padding:5px 14px;width:120px;">'\
+          +'<div style="display:flex;align-items:center;gap:6px;">'\
+            +'<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'\
+              +'<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'\
+            +'</div>'\
+            +'<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'\
+          +'</div>'\
+        +'</td>'\
       +'</tr>';
     }).join('');
-    breakdownHTML = '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
-      +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Breakdown by part #</div>'
-      +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
-      +'<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
-        +'<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Part #</th>'
-        +'<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Material name</th>'
-        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Last mo</th>'
-        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">3-mo avg</th>'
-        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Window total</th>'
-        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'
-        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">% of group</th>'
-      +'</tr></thead>'
-      +'<tbody>'+breakdownRows+'</tbody>'
+    breakdownHTML = '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'\
+      +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Breakdown by part #</div>'\
+      +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'\
+      +'<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'\
+        +'<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Part #</th>'\
+        +'<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Material name</th>'\
+        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Last mo</th>'\
+        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">3-mo avg</th>'\
+        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Window total</th>'\
+        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'\
+        +'<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">% of group</th>'\
+      +'</tr></thead>'\
+      +'<tbody>'+breakdownRows+'</tbody>'\
       +'</table></div></div>';
   }
 
   panel.innerHTML =
-    '<div style="padding:12px 14px 14px 56px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
-      +'<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap;">'
-        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Last month</div>'
-          +'<div style="font-size:15px;font-weight:500;color:#378ADD;font-family:system-ui;">'+fmt(m.lastMonth)+'</div></div>'
-        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
-        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">3-mo avg</div>'
-          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+fmt(m.avg3)+'</div></div>'
-        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
-        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">6-mo avg</div>'
-          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+fmt(m.avg6)+'</div></div>'
-        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
-        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Window total</div>'
-          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+fmt(m.totalKg)+'</div></div>'
-        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
-        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Lots</div>'
-          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+m.lotCount+'</div></div>'
-      +'</div>'
-      +'<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+unit+' for '+m.name+'">Trend.</canvas></div>'
-      +breakdownHTML
+    '<div style="padding:12px 14px 14px 56px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'\
+      +'<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap;">'\
+        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Last month</div>'\
+          +'<div style="font-size:15px;font-weight:500;color:#378ADD;font-family:system-ui;">'+fmt(m.lastMonth)+'</div></div>'\
+        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'\
+        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">3-mo avg</div>'\
+          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+fmt(m.avg3)+'</div></div>'\
+        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'\
+        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">6-mo avg</div>'\
+          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+fmt(m.avg6)+'</div></div>'\
+        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'\
+        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Window total</div>'\
+          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+fmt(m.totalKg)+'</div></div>'\
+        +'<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'\
+        +'<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Lots</div>'\
+          +'<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+m.lotCount+'</div></div>'\
+      +'</div>'\
+      +'<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+unit+' for '+m.name+'">Trend.</canvas></div>'\
+      +qtrTableHTML\
+      +breakdownHTML\
     +'</div>';
+
   if (window['matChart_'+idx]) { window['matChart_'+idx].destroy(); window['matChart_'+idx]=null; }
   var ctx = document.getElementById('mat-chart-'+idx);
   if (!ctx) return;
-  // Auto-skip labels if too many months
   var skipLabels = monthKeys.length > 12;
   window['matChart_'+idx] = new Chart(ctx, {
     type:'bar',
