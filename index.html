@@ -3957,6 +3957,8 @@ function renderMaterials() {
     var selIdx=matList.findIndex(function(m){return m.name===window._selectedMaterial;});
     if (selIdx>=0) renderMatInline(matList[selIdx],selIdx);
   }
+  // Re-apply search filter if one was active (e.g. after auto-refresh rebuilds the DOM)
+  if (matSearch) filterMaterials();
 }
 
 
