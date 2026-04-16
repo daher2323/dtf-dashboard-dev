@@ -3748,8 +3748,16 @@ function renderMaterials() {
   if (!rows.length) {
     content.innerHTML = '<div style="padding:2rem;font-family:system-ui;">'
       +'<div style="font-size:13px;color:#5f5e5a;margin-bottom:12px;">No material data loaded.</div>'
-      +'<div style="font-size:11px;color:#888780;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;padding:12px;margin-bottom:16px;word-break:break-all;line-height:1.6;">'+(window._matDebug||'No debug info available.')+'</div>'
-      +'<button onclick="fetchMaterialsCSV().then(function(t){materialsData=parseMaterials(t);renderMaterials();}" style="padding:6px 14px;border:0.5px solid #444441;border-radius:8px;background:transparent;color:#e8e6e0;font-size:12px;cursor:pointer;font-family:system-ui;">Retry fetch</button>'
+      +'<div id="mat-debug-box" style="font-size:11px;color:#888780;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;padding:12px;margin-bottom:16px;word-break:break-all;line-height:1.6;">'+(window._matDebug||'No debug info available.')+'</div>'
+      +'<button onclick="'
+        +'var box=document.getElementById(\'mat-debug-box\');'
+        +'if(box)box.textContent=\'Fetching...\';'
+        +'fetchMaterialsCSV().then(function(t){'
+          +'if(box)box.textContent=\'Parsing \'+t.length+\' chars...\';'
+          +'materialsData=parseMaterials(t);'
+          +'if(box)box.textContent=window._matDebug||\'parse done, \'+materialsData.length+\' rows\';'
+          +'renderMaterials();'
+        +'});" style="padding:6px 14px;border:0.5px solid #444441;border-radius:8px;background:transparent;color:#e8e6e0;font-size:12px;cursor:pointer;font-family:system-ui;">Retry fetch</button>'
       +'</div>';
     return;
   }
