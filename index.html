@@ -3995,13 +3995,16 @@ function renderMaterials() {
   var matMaxDate = matDates.length ? new Date(Math.max.apply(null, matDates)) : null;
   function fmtMo(d){ return d.toLocaleDateString('en-US',{month:'short',year:'numeric'}); }
   var allTimeLabel = matMinDate && matMaxDate ? fmtMo(matMinDate)+'–'+fmtMo(matMaxDate) : '';
+  // Snap matWindow=12 back to 6 if we don't have 12 months of data yet
+  if (matWindow===12 && !(matMinDate&&(now-matMinDate)>=1000*60*60*24*365)) matWindow=6;
+
   var allTimeHint = matWindow===0 && allTimeLabel
     ? '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+allTimeLabel+'</span>'
     : '';
   var pickerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
     +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
     +'<button onclick="matWindow=6;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===6)+'">Past 6 months</button>'
-    +'<button onclick="matWindow=12;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===12)+'">Past 12 months</button>'
+    +(matMinDate&&(now-matMinDate)>=1000*60*60*24*365?'<button onclick="matWindow=12;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===12)+'">Past 12 months</button>':'')
     +'<button onclick="matWindow=0;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===0)+'">All time</button>'
     +'</div>'
     +allTimeHint
