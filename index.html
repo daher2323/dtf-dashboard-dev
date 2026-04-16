@@ -687,7 +687,6 @@ function fetchMaterialsCSV() {
         throw new Error('Got HTML instead of CSV');
       }
       if (text.trim().length < 50) throw new Error('Response too short: ' + text.trim().length + ' chars');
-      window._matDebug = 'Fetch OK — ' + text.trim().split('\n').length + ' lines, first line: ' + text.trim().split('\n')[0].substring(0,100);
       return text;
     }).catch(function(e){
       if (retries <= 1) {
