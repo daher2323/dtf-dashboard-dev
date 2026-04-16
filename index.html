@@ -735,8 +735,7 @@ function parseMaterials(text) {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
     // Find date column — strip ALL non-printable/non-ASCII chars to match
-    var dateCol = keys.find(function(k){ return k.replace(/[^\x20-\x7E]/g,'').trim() === 'Column 1'; });
-    if (!dateCol) dateCol = keys[0];
+    var dateCol = keys.find(function(k){ return k.replace(/^\uFEFF/,'').trim() === 'Column 1'; }) || keys[0];
     window._matDebug = 'Rows: ' + rows.length + ' | Date col: [' + dateCol + '] len=' + dateCol.length;
     // Sample the first few date values
     var samples = rows.slice(0,3).map(function(r){ return '"'+(r[dateCol]||'')+'":'+new Date(r[dateCol]||''); }).join(' | ');
