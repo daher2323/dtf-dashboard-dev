@@ -730,22 +730,29 @@ function fetchData() {
 }
 
 function parseMaterials(text) {
-  if (!text) { window._matDebug = 'Fetch returned empty string — CSV did not load.'; return []; }
+  if (!text) { window._matDebug = 'Fetch returned empty string.'; return []; }
   try {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
-    window._matDebug = 'Fetched ' + rows.length + ' rows. Headers: ' + keys.join(' | ');
-    // Find the date column — it may have a BOM or whitespace prefix
-    var dateCol = keys.find(function(k){ return k.replace(/^\W+/,'').toLowerCase()==='column 1'; }) || 'Column 1';
+    // Find date column — strip ALL non-printable/non-ASCII chars to match
+    var dateCol = keys.find(function(k){ return k.replace(/[^\x20-\x7E]/g,'').trim() === 'Column 1'; });
+    if (!dateCol) dateCol = keys[0];
+    window._matDebug = 'Rows: ' + rows.length + ' | Date col: [' + dateCol + '] len=' + dateCol.length;
+    // Sample the first few date values
+    var samples = rows.slice(0,3).map(function(r){ return '"'+(r[dateCol]||'')+'":'+new Date(r[dateCol]||''); }).join(' | ');
+    window._matDebug += ' | Samples: ' + samples;
     var filtered = rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
     });
-    window._matDebug += ' → ' + filtered.length + ' valid rows after filter.';
-    if (filtered.length === 0 && rows.length > 0) {
-      window._matDebug += ' Sample row: ' + JSON.stringify(rows[0]).substring(0, 200);
-    }
-    return filtered.map(function(r){
-      var d = new Date((r[dateCol]||'').trim());
+    var parsed = filtered.map(function(r){
+      var raw = (r[dateCol]||'').trim();
+      // Try multiple date formats: MM/DD/YYYY, M/D/YYYY, YYYY-MM-DD, "April 1, 2025" etc
+      var d = new Date(raw);
+      if (isNaN(d)) {
+        // Try replacing slashes: some locales use DD/MM/YYYY
+        var parts = raw.split('/');
+        if (parts.length === 3) d = new Date(parts[2]+'-'+parts[0].padStart(2,'0')+'-'+parts[1].padStart(2,'0'));
+      }
       return {
         date: isNaN(d) ? null : d,
         lot: (r['Order Lot #']||'').trim(),
@@ -754,7 +761,9 @@ function parseMaterials(text) {
         qty: parseFloat(r['Qty Needed']||0)
       };
     }).filter(function(r){ return r.date; });
-  } catch(e) { window._matDebug = 'Parse error: ' + e.message; return []; }
+    window._matDebug += ' | Valid: ' + filtered.length + ' rows, ' + parsed.length + ' with dates';
+    return parsed;
+  } catch(e) { window._matDebug = 'Error: ' + e.message; return []; }
 }
 
 function applyFreshData(res) {
@@ -769,7 +778,7 @@ function applyFreshData(res) {
     return false;
   }
   allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets; weeklyTargets = newWeeklyTargets;
-  if (newMaterials.length > 0) materialsData = newMaterials;
+  materialsData = newMaterials; // always update, even if empty
   lotMap = buildLotMap(allRows);
   buildProductionDays(true);
   return true;
