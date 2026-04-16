@@ -1763,7 +1763,7 @@ function renderToday() {
         var trackColor=LINE_TRACK[k2]||'#2c2c2a';
         var hdrBg=k2==='line#1'?'#0a1520':k2==='line#2'?'#110f22':'#1a0c14';
         var lots=byLine[line]||[];
-        var totalLineUnits=lots.reduce(function(s,l){return s+l.finalUnits;},0);
+        var totalLineUnits=lots.reduce(function(s,l){return s+l.todayUnits;},0);
         var rows=lots.length===0?'<div style="padding:10px;font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;">No completed lots</div>'
           :lots.map(function(l){
             var parts=(l.product||'').split('-'); var brand=parts[0].trim(); var product=parts.slice(1).join('-').trim()||brand;
@@ -1787,8 +1787,8 @@ function renderToday() {
               +'</div>'
               +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;">'
                 +'<div style="display:flex;align-items:baseline;gap:5px;">'
-                  +'<span style="font-size:24px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.finalUnits.toLocaleString()+'</span>'
-                  +'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>'
+                  +'<span style="font-size:24px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.todayUnits.toLocaleString()+'</span>'
+                  +(l.finalUnits!==l.todayUnits?'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+l.finalUnits.toLocaleString()+' total / '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>':'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>')
                 +'</div>'
                 +(devS?'<span style="font-size:11px;font-weight:500;padding:2px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;">'+devS+'</span>':'')
               +'</div>';
