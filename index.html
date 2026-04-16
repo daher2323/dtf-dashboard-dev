@@ -3760,8 +3760,8 @@ function renderMaterials() {
     // Month series for sparkline (last 6 months of window)
     var spark6Keys = monthKeys.slice(-6);
     m.spark = spark6Keys.map(function(k){ return Math.round(m.byMonth[k]||0); });
-    // Last month usage
-    var lastMoKey = monthKeys[monthKeys.length-1];
+    // Last COMPLETED month (second to last key — current month is still in progress)
+    var lastMoKey = monthKeys.length >= 2 ? monthKeys[monthKeys.length-2] : monthKeys[monthKeys.length-1];
     m.lastMonth = Math.round(m.byMonth[lastMoKey]||0);
     // 3-month rolling avg — always divide by 3
     var mo3 = monthKeys.slice(-3).map(function(k){ return m.byMonth[k]||0; });
