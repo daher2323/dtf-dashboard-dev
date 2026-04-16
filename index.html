@@ -3774,12 +3774,8 @@ function renderMaterials() {
     m.avg6 = Math.round(mo6.reduce(function(a,b){return a+b;},0)/6);
     // vs 6-mo avg: compare 3-mo avg to 6-mo avg (is recent pace higher or lower than baseline?)
     m.vsPct = m.avg6 ? ((m.avg3 - m.avg6) / m.avg6 * 100) : 0;
-    // Trend direction
-    var firstHalf = m.spark.slice(0,3).reduce(function(a,b){return a+b;},0);
-    var secondHalf = m.spark.slice(3).reduce(function(a,b){return a+b;},0);
-    m.trend = Math.abs(secondHalf-firstHalf)<firstHalf*0.1 ? 'flat'
-      : secondHalf > firstHalf*1.1 ? 'up'
-      : secondHalf < firstHalf*0.9 ? 'down' : 'flat';
+    // Trend direction — consistent with vsPct badge (3mo avg vs 6mo avg)
+    m.trend = Math.abs(m.vsPct) < 5 ? 'flat' : m.vsPct > 0 ? 'up' : 'down';
   });
 
   var kgMats=allMats.filter(function(m){return !isSoftgel(m.name);}).sort(function(a,b){return b.totalKg-a.totalKg;});
