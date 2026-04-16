@@ -720,7 +720,7 @@ function fetchMaterialsIfNeeded() {
     var parsed = parseMaterials(t);
     if (parsed.length > 0) {
       materialsData = parsed;
-      if (procView === 'materials') renderMaterials();
+      if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     }
   });
 }
