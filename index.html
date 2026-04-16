@@ -4008,7 +4008,12 @@ function renderMaterials() {
     +'<button onclick="matWindow=0;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===0)+'">All time</button>'
     +'</div>'
     +allTimeHint
-    +'<input id="matSearchInput" type="text" placeholder="Search ingredient or part \u2026" oninput="matSearch=this.value;filterMaterials();" value="'+matSearch.replace(/"/g,'&quot;')+'" style="padding:4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
+    +'<div style="position:relative;display:inline-flex;align-items:center;">'
+    +'<input id="matSearchInput" type="text" placeholder="Search ingredient or part \u2026" oninput="matSearch=this.value;filterMaterials();document.getElementById(\'matSearchClear\').style.display=this.value?\'flex\':\'none\';" value="'+matSearch.replace(/"/g,'&quot;')+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
+    +'<button id="matSearchClear" onclick="matSearch=\'\';document.getElementById(\'matSearchInput\').value=\'\';filterMaterials();this.style.display=\'none\';" style="display:'+(matSearch?'flex':'none')+';position:absolute;right:6px;width:16px;height:16px;border-radius:50%;border:none;background:#444441;cursor:pointer;align-items:center;justify-content:center;padding:0;flex-shrink:0;">'
+    +'<svg width="8" height="8" viewBox="0 0 8 8" fill="none"><line x1="1" y1="1" x2="7" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/><line x1="7" y1="1" x2="1" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/></svg>'
+    +'</button>'
+    +'</div>'
     +'</div>';
 
   content.innerHTML = pickerHTML
