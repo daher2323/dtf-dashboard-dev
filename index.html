@@ -709,9 +709,19 @@ function fetchData() {
     fetchWithRetry(CSV_2026),
     fetchWithRetry(CSV_2025),
     fetchWithRetry(CSV_TARGETS).catch(function(){ return ''; }),
-    fetchCSVSimple(CSV_WEEKLY_TARGETS),
-    fetchMaterialsCSV()
+    fetchCSVSimple(CSV_WEEKLY_TARGETS)
   ]);
+}
+
+function fetchMaterialsIfNeeded() {
+  if (materialsData.length > 0) return;
+  fetchMaterialsCSV().then(function(t){
+    var parsed = parseMaterials(t);
+    if (parsed.length > 0) {
+      materialsData = parsed;
+      if (procView === 'materials') renderMaterials();
+    }
+  });
 }
 
 function parseMaterials(text) {
@@ -745,14 +755,12 @@ function applyFreshData(res) {
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
   var newWeeklyTargets = parseWeeklyTargets(res[3]||'');
-  var newMaterials = parseMaterials(res[4]||'');
   if (newRows.length < 3) { console.warn('Refresh aborted: too few rows'); return false; }
   if (allRows.length > 0 && newRows.length < allRows.length) {
     console.warn('Refresh aborted: new data (' + newRows.length + ' rows) has fewer rows than current (' + allRows.length + '). Keeping existing data.');
     return false;
   }
   allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets; weeklyTargets = newWeeklyTargets;
-  materialsData = newMaterials; // always update, even if empty
   lotMap = buildLotMap(allRows);
   buildProductionDays(true);
   return true;
@@ -801,6 +809,8 @@ function loadDashboard() {
     renderSubBar();
     render();
     startRefreshTimers();
+    // Fetch materials in background — doesn't block main load
+    fetchMaterialsIfNeeded();
   }).catch(function(e){
     console.error('Load failed:', e);
     document.getElementById('loading').textContent = 'Connection issue — retrying in 10 seconds...';
@@ -3807,7 +3817,7 @@ function renderMaterials() {
 }
 
 function renderProcurement() {
-  if (procView === 'materials') { renderMaterials(); return; }
+  if (procView === 'materials') { fetchMaterialsIfNeeded(); renderMaterials(); return; }
   var now = new Date();
   var curQk = getQuarterKey(now);
   var cutoff = new Date(2025, 0, 1);
