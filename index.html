@@ -2044,13 +2044,27 @@ function renderWeekly() {
   var unitsNeeded=Math.max(0,weeklyTarget-weekUnits);
   var neededPerDay=daysRemaining>0?Math.round(unitsNeeded/daysRemaining):0;
 
-  // Historical avg daily rate for on-pace check
-  var d2=prepData(); var lineAvg2=d2.lineAvg;
-  var historicalDailyAvg=ALL_LINES.reduce(function(s,line){return s+(lineAvg2[line]||0);},0)||Math.round(annualTarget/52/5);
-
-  // On pace = needed rate is achievable (within 10% of historical avg), or already done
-  var onPace = daysRemaining===0 ? weekUnits>=weeklyTarget*TARGET_HIT_THRESHOLD
-    : neededPerDay <= Math.round(historicalDailyAvg * 1.10);
+  // On pace = cumulative actual >= cumulative daily targets through completed days
+  // (mirrors per-line logic — skips today since it's still in progress)
+  var cumTarget=0, cumActual=0;
+  wkDates.slice(0, daysElapsed).forEach(function(d){
+    var dk=dateKey(d);
+    if(isLiveWeek && dk===dateKey(now)) return; // skip today — still in progress
+    var dayTotal=ALL_LINES.reduce(function(s,line){return s+((dailyTargets[dk]||{})[line]||0);},0);
+    cumTarget+=dayTotal;
+  });
+  // cumActual = all week units minus today's units (completed days only)
+  var todayKey=dateKey(now);
+  var todayUnitsWeek=isLiveWeek?weekRows.reduce(function(s,r){
+    var dt=new Date(r['Date']); if(isNaN(dt)) return s;
+    return dateKey(dt)===todayKey?s+num(r['Final Units']):s;
+  },0):0;
+  cumActual=weekUnits-(isLiveWeek?todayUnitsWeek:0);
+  var onPace = daysRemaining===0
+    ? weekUnits>=weeklyTarget*TARGET_HIT_THRESHOLD
+    : cumTarget===0
+      ? cumActual>=0  // no daily targets set — can't judge, default to neutral (won't show badge)
+      : (cumActual/cumTarget)>=TARGET_HIT_THRESHOLD;
 
   var vsTarget=weekUnits-weeklyTarget;
   var vsTargetPct=weeklyTarget?Math.round((vsTarget/weeklyTarget)*100):0;
