@@ -759,7 +759,7 @@ function parseMaterials(text) {
         material: (r['Material Name']||'').trim(),
         qty: parseFloat(r['Qty Needed']||0)
       };
-    }).filter(function(r){ return r.date; });
+    }).filter(function(r){ return r.date && r.date >= new Date(2025, 9, 1); });
   } catch(e) { return []; }
 }
 
@@ -3855,7 +3855,7 @@ function renderMaterials() {
   // Lookback window
   var windowEnd = now;
   var windowStart = matWindow === 0
-    ? new Date(2000, 0, 1)
+    ? new Date(2025, 9, 1)
     : new Date(now.getFullYear(), now.getMonth() - matWindow + 1, 1);
 
   var filteredRows = rows.filter(function(r){ return r.date >= windowStart && r.date <= windowEnd; });
@@ -3989,12 +3989,22 @@ function renderMaterials() {
       +'</tr>';
   }).join('');
 
+  // Compute data date range for "All time" label
+  var matDates = materialsData.map(function(r){ return r.date; }).filter(Boolean);
+  var matMinDate = matDates.length ? new Date(Math.min.apply(null, matDates)) : null;
+  var matMaxDate = matDates.length ? new Date(Math.max.apply(null, matDates)) : null;
+  function fmtMo(d){ return d.toLocaleDateString('en-US',{month:'short',year:'numeric'}); }
+  var allTimeLabel = matMinDate && matMaxDate ? fmtMo(matMinDate)+'–'+fmtMo(matMaxDate) : '';
+  var allTimeHint = matWindow===0 && allTimeLabel
+    ? '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+allTimeLabel+'</span>'
+    : '';
   var pickerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
     +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
     +'<button onclick="matWindow=6;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===6)+'">Past 6 months</button>'
     +'<button onclick="matWindow=12;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===12)+'">Past 12 months</button>'
     +'<button onclick="matWindow=0;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===0)+'">All time</button>'
     +'</div>'
+    +allTimeHint
     +'<input id="matSearchInput" type="text" placeholder="Search ingredient or part \u2026" oninput="matSearch=this.value;filterMaterials();" value="'+matSearch.replace(/"/g,'&quot;')+'" style="padding:4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
     +'</div>';
 
@@ -4020,7 +4030,7 @@ function renderMaterials() {
     +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">3-mo avg</th>'
     +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">6-mo avg</th>'
     +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">3mo vs 6mo</th>'
-    +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">'+(matWindow===0?'All time total':matWindow+' mo total')+'</th>'
+    +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">'+(matWindow===0?('All time total'+(allTimeLabel?' <span style="font-size:9px;font-weight:400;color:#5f5e5a;">('+allTimeLabel+')</span>':'')):matWindow+' mo total')+'</th>'
     +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;">Lots</th>'
     +'</tr></thead><tbody>'+tableRows+'</tbody></table></div></div>';
 
