@@ -809,8 +809,10 @@ function loadDashboard() {
   fetchData().then(function(results) {
     var rows = parseCSV(results[0]).filter(isValid);
     var rows25 = parseCSV(results[1]).filter(isValid);
-    if (rows.length < 3) {
-      document.getElementById('loading').textContent = 'Data appears incomplete — retrying...';
+    // Reject suspiciously small datasets — Google Sheets CDN occasionally serves stale/empty CSVs
+    var minRows = allRows.length > 0 ? Math.floor(allRows.length * 0.8) : 50;
+    if (rows.length < minRows) {
+      document.getElementById('loading').textContent = 'Data appears incomplete (' + rows.length + ' rows) — retrying...';
       setTimeout(loadDashboard, 4000);
       return;
     }
@@ -827,6 +829,15 @@ function loadDashboard() {
     startRefreshTimers();
     // Fetch materials in background — doesn't block main load
     fetchMaterialsIfNeeded();
+    // Safety net: if daily view looks empty after load, re-fetch once after a short delay
+    // Guards against Google Sheets CDN serving a stale response on first hit
+    if (topView === 'summary' && subView === 'today') {
+      setTimeout(function() {
+        if (allRows.length > 0) {
+          refreshAndRender(false);
+        }
+      }, 8000);
+    }
   }).catch(function(e){
     console.error('Load failed:', e);
     document.getElementById('loading').textContent = 'Connection issue — retrying in 10 seconds...';
