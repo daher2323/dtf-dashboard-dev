@@ -923,8 +923,14 @@ function startRefreshTimers() {
     if(topView==='summary'&&subView==='today') refreshAndRender(false);
   }, 60*1000);
   document.addEventListener('visibilitychange', function(){
-    checkDateRollover();
-    if(document.visibilityState==='visible' && Date.now()-lastRefreshTime > 45000) refreshAndRender(true);
+    if(document.visibilityState==='visible') {
+      checkDateRollover();
+      // Always snap to latest day when returning to tab on daily view
+      if(topView==='summary' && subView==='today') {
+        selectedDayIdx = productionDays.length - 1;
+      }
+      if(Date.now()-lastRefreshTime > 45000) refreshAndRender(true);
+    }
   });
 }
 
