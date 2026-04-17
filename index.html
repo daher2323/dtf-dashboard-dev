@@ -2064,7 +2064,10 @@ function renderWeekly() {
   var targetIsEstimated=targetSource==='est';
   var targetIsFullySet=targetSource==='set'||targetSource==='daily';
   var day=now.getDay();
-  var daysElapsed=isLiveWeek?(day===0?wkDayCount:day===6?wkDayCount:Math.min(day,wkDayCount)):wkDayCount;
+  var etHourWeek=parseInt(new Date().toLocaleString('en-US',{hour:'numeric',hour12:false,timeZone:'America/New_York'}));
+  var todayComplete=!isLiveWeek||(etHourWeek>=16);
+  // Don't count today as a full elapsed day until after 4PM ET
+  var daysElapsed=isLiveWeek?(day===0?wkDayCount:day===6?wkDayCount:todayComplete?Math.min(day,wkDayCount):Math.min(day-1,wkDayCount)):wkDayCount;
   var daysRemaining=isLiveWeek?Math.max(0,wkDayCount-daysElapsed):0;
 
   // Last week same days elapsed — apples to apples
