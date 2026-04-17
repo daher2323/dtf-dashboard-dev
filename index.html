@@ -1545,28 +1545,24 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
         if(remaining<=0){rem.style.color='#9FE1CB';rem.textContent='+'+(Math.abs(remaining)).toLocaleString()+' over target';}
         else{rem.style.color='#888780';rem.textContent=remaining.toLocaleString()+' to go';}
       }
-      // Position labels at midpoint of each segment with collision avoidance
+      // Position labels at midpoint of each segment
       var segs=[{id:'line#1',left:0,width:w1},{id:'line#2',left:w1,width:w2},{id:'line#4',left:w1+w2,width:w4}];
-      var trackEl = document.getElementById('banner-track');
-      var trackW = trackEl ? trackEl.offsetWidth : 600;
-      var labelPx = []; // track label center positions in px for collision detection
-      segs.forEach(function(s, si){
+      var positions=[];
+      segs.forEach(function(s,si){
         var leg=document.getElementById('banner-leg-'+s.id);
         if(!leg) return;
         var units=Math.round((gaugeData.find(function(g){return lk(g.line||ALL_LINES[g.idx]||'')===s.id;})||{units:0}).units*e);
         leg.textContent=s.id.replace('line#','Line #')+' — '+units.toLocaleString();
-        if(s.width>1){
+        if(s.width>2){
           leg.style.display='block';
-          var idealPct = s.left + s.width/2;
-          var idealPx = idealPct/100 * trackW;
-          var halfLbl = leg.offsetWidth/2 || 40;
-          // Nudge away from previous label if too close
-          var minPx = si>0 && labelPx[si-1]!==undefined ? labelPx[si-1] + halfLbl*2 + 6 : halfLbl;
-          var posPx = Math.max(minPx, idealPx);
-          // Clamp to track bounds
-          posPx = Math.min(posPx, trackW - halfLbl);
-          labelPx[si] = posPx;
-          leg.style.left = (posPx/trackW*100)+'%';
+          // Ideal position is midpoint of segment
+          var pos=s.left+s.width/2;
+          // Nudge right if too close to previous label (minimum 12% gap)
+          if(si>0 && positions[si-1]!==undefined && pos-positions[si-1]<12) pos=positions[si-1]+12;
+          // Clamp within bar
+          pos=Math.max(2,Math.min(98,pos));
+          positions[si]=pos;
+          leg.style.left=pos+'%';
         } else {
           leg.style.display='none';
         }
