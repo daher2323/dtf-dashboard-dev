@@ -730,14 +730,15 @@ function fetchMaterialsIfNeeded() {
   if (materialsData.length > 0) return;
   fetchMaterialsCSV().then(function(t){
     console.log('Materials CSV length:', t ? t.length : 'null/empty');
-    console.log('Materials CSV first 200 chars:', t ? t.substring(0,200) : 'none');
+    console.log('Materials CSV first 300 chars:', t ? t.substring(0,300) : 'none');
+    console.log('Materials CSV last 200 chars:', t && t.length > 200 ? t.substring(t.length-200) : 'short');
     var parsed = parseMaterials(t);
     console.log('Parsed materials rows:', parsed.length);
     if (parsed.length > 0) {
       materialsData = parsed;
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     } else {
-      console.log('parseMaterials returned 0 rows — CSV may be empty or unparseable');
+      console.log('parseMaterials returned 0 rows');
     }
   });
 }
@@ -748,6 +749,9 @@ function parseMaterials(text) {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
     var dateCol = keys[0]; // Google Forms: first column is always the timestamp
+    console.log('CSV row count:', rows.length);
+    console.log('CSV headers:', rows[0] ? Object.keys(rows[0]).join(' | ') : 'none');
+    console.log('CSV row 1 sample:', rows[1] ? JSON.stringify(rows[1]) : 'none');
     return rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
     }).map(function(r){
