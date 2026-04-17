@@ -2225,8 +2225,8 @@ function renderWeekly() {
           +'<div style="text-align:center;padding:0 10px;">'
             +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">Avg / day</div>'
             +(daysElapsed>0
-              ?(function(){ var compDays=isLiveWeek?Math.max(1,daysElapsed-1):daysElapsed; var compUnits=isLiveWeek?cumActual:weekUnits; return '<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+Math.round(compUnits/compDays).toLocaleString()+'</div>'; })()
-                +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+(isLiveWeek?(Math.max(1,daysElapsed-1)+' completed day'+(Math.max(1,daysElapsed-1)!==1?'s':'')):(daysElapsed+' day'+(daysElapsed!==1?'s':'')))+' this week</div>'
+              ?(function(){ var compDays=isLiveWeek?Math.max(1,daysElapsed):daysElapsed; var compUnits=isLiveWeek?weekUnits:weekUnits; return '<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+Math.round(compUnits/compDays).toLocaleString()+'</div>'; })()
+                +'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+(isLiveWeek?(daysElapsed+' day'+(daysElapsed!==1?'s':'')):(daysElapsed+' day'+(daysElapsed!==1?'s':'')))+' this week</div>'
               :'<div style="font-size:13px;color:#5f5e5a;font-family:system-ui;">—</div>'
             )
           +'</div>'
