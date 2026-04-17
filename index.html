@@ -2232,7 +2232,12 @@ function renderWeekly() {
       var borderColor=k2==='line#1'?'#061d35':k2==='line#2'?'#1a1840':'#4B1528';
       var u=weekByLine[line]||0;
       var lineShareFrac=totalAvgPerDay?(lineAvg[line]||0)/totalAvgPerDay:0;
-      var lineWeeklyShare=Math.round(weeklyTarget*lineShareFrac);
+      // Use sum of actual daily targets for this line if available, otherwise estimate
+      var lineWeeklyShareExact=wkDates.reduce(function(s,d){
+        var t=(dailyTargets[dateKey(d)]||{})[line]||0; return s+t;
+      },0);
+      var lineWeeklyShare=lineWeeklyShareExact>0?lineWeeklyShareExact:Math.round(weeklyTarget*lineShareFrac);
+      var lineTargetIsExact=lineWeeklyShareExact>0;
       var sharePct=lineWeeklyShare?Math.min(Math.round((u/lineWeeklyShare)*100),100):0;
       var weekElapsedPct=Math.round((daysElapsed/wkDayCount)*100);
       // On track = actual units >= cumulative daily targets for completed days only (not today)
@@ -2304,7 +2309,7 @@ function renderWeekly() {
         +'<div style="padding:12px 14px;">'
           +'<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px;">'
             +'<div style="font-size:26px;font-weight:500;color:'+color+';font-family:system-ui;">'+u.toLocaleString()+'</div>'
-            +(lineWeeklyShare?'<div style="font-size:11px;color:#5f5e5a;font-family:system-ui;">of ~'+lineWeeklyShare.toLocaleString()+'</div>':'')
+            +(lineWeeklyShare?'<div style="font-size:11px;color:#5f5e5a;font-family:system-ui;">of '+(lineTargetIsExact?'':'~')+lineWeeklyShare.toLocaleString()+'</div>':'')
           +'</div>'
           +'<div style="background:#2c2c2a;border-radius:4px;height:8px;overflow:hidden;margin-bottom:5px;"><div style="height:100%;width:'+sharePct+'%;background:'+color+';border-radius:4px;"></div></div>'
           +'<div style="display:flex;justify-content:space-between;font-size:10px;font-family:system-ui;margin-bottom:10px;">'
