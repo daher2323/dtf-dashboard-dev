@@ -3702,7 +3702,7 @@ function renderMatInline(m, idx) {
   var panel = document.getElementById('mat-inline-'+idx);
   if (!panel) return;
   var unit = matUnit(m.name);
-  function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unit:'—'; }
+  function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unit:'\u2014'; }
   var monthKeys = window._matMonthKeys || [];
   var monthLabels = window._matMonthLabels || [];
   var chartData = monthKeys.map(function(k){ return Math.round(m.byMonth[k]||0); });
@@ -3755,7 +3755,7 @@ function renderMatInline(m, idx) {
         + (isCur?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')
         + quarterLabel(qk)+(isCur?' <span style="font-size:10px;color:#5f5e5a;font-weight:400;">partial</span>':'')
       + '</td>'
-      + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
+      + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'\u2014')+'</td>'
       + '<td style="'+tdB+rBg+'text-align:right;">'+delta+'</td>'
       + '<td style="'+tdB+rBg+'padding-right:14px;width:120px;">'
         + '<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
@@ -3784,7 +3784,7 @@ function renderMatInline(m, idx) {
     var breakdownRows = parts.map(function(pb) {
       var pct = m.totalKg ? ((pb.totalKg / m.totalKg) * 100).toFixed(1) : '0';
       var bw2 = m.totalKg ? Math.round((pb.totalKg / m.totalKg) * 100) : 0;
-      var matLabel = pb.label.indexOf(' — ') !== -1 ? pb.label.split(' — ')[1] : pb.label;
+      var matLabel = pb.label.indexOf(' \u2014 ') !== -1 ? pb.label.split(' \u2014 ')[1] : pb.label;
       return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
         + '<td style="padding:5px 10px;font-size:11px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+pb.partNum+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+matLabel+'</td>'
@@ -3837,6 +3837,7 @@ function renderMatInline(m, idx) {
           + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+m.lotCount+'</div></div>'
       + '</div>'
       + '<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+unit+' for '+m.name+'">Trend.</canvas></div>'
+      + '<div id="mat-month-drill-'+idx+'" style="margin-top:0;"></div>'
       + qtrTableHTML
       + breakdownHTML
     + '</div>';
@@ -3847,9 +3848,16 @@ function renderMatInline(m, idx) {
   var skipLabels = monthKeys.length > 12;
   window['matChart_'+idx] = new Chart(ctx, {
     type:'bar',
-    data:{labels:monthLabels,datasets:[{data:chartData,backgroundColor:'#1a3a5c',borderColor:'#378ADD',borderWidth:1,borderRadius:3}]},
+    data:{labels:monthLabels,datasets:[{data:chartData,backgroundColor:monthKeys.map(function(){ return '#1a3a5c'; }),borderColor:'#378ADD',borderWidth:1,borderRadius:3}]},
     options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:20}},
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return Math.round(c.raw).toLocaleString()+' '+unit;}}}},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return Math.round(c.raw).toLocaleString()+' '+unit+' \u2014 click to see products';}}}},
+      onClick:function(evt, elements) {
+        if (!elements || !elements.length) return;
+        var barIdx = elements[0].index;
+        var mk = monthKeys[barIdx];
+        var label = monthLabels[barIdx];
+        renderMatMonthDrill(m, idx, mk, label, barIdx);
+      },
       scales:{
         x:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},autoSkip:skipLabels,maxRotation:skipLabels?45:0},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}},
         y:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},callback:function(v){return Math.round(v).toLocaleString();}},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}}
@@ -3865,6 +3873,114 @@ function renderMatInline(m, idx) {
       c2.restore();
     }}]
   });
+}
+
+function renderMatMonthDrill(m, idx, mk, label, barIdx) {
+  var drill = document.getElementById('mat-month-drill-'+idx);
+  if (!drill) return;
+
+  // Toggle off if same bar clicked again
+  if (drill.dataset.activeMonth === mk) {
+    drill.innerHTML = '';
+    drill.dataset.activeMonth = '';
+    // Reset bar colors
+    var chart = window['matChart_'+idx];
+    if (chart) {
+      var monthKeys = window._matMonthKeys || [];
+      chart.data.datasets[0].backgroundColor = monthKeys.map(function(){ return '#1a3a5c'; });
+      chart.update();
+    }
+    return;
+  }
+  drill.dataset.activeMonth = mk;
+
+  // Highlight clicked bar
+  var chart = window['matChart_'+idx];
+  if (chart) {
+    var monthKeys = window._matMonthKeys || [];
+    chart.data.datasets[0].backgroundColor = monthKeys.map(function(k, i){ return i === barIdx ? '#378ADD' : '#1a3a5c'; });
+    chart.update();
+  }
+
+  // Build lot list for this material in this month (use ALL materialsData, not window-filtered)
+  var yr = parseInt(mk.split('-')[0]);
+  var mo = parseInt(mk.split('-')[1]);
+  var matchingLots = {};
+  materialsData.forEach(function(r) {
+    if (!r.date) return;
+    if (r.date.getFullYear() !== yr || r.date.getMonth()+1 !== mo) return;
+    // Match by group name or direct material name
+    var groupName = r.partNum && SKU_GROUPS[r.partNum] ? SKU_GROUPS[r.partNum] : r.material;
+    if (groupName !== m.name && r.material !== m.name) return;
+    var lot = r.lot; if (!lot) return;
+    if (!matchingLots[lot]) matchingLots[lot] = 0;
+    matchingLots[lot] += r.qty;
+  });
+
+  // Join to production data to get product names
+  var allRowsCombined = allRows.concat(allRows25);
+  var byProduct = {};
+  Object.keys(matchingLots).forEach(function(lot) {
+    var kg = matchingLots[lot];
+    // Find product from production rows
+    var prodRow = allRowsCombined.find(function(r){ return (r['Lot Number']||'').trim() === lot; });
+    var product = prodRow ? (prodRow['Product']||'').trim() : null;
+    // Try lotMap as well
+    if (!product && lotMap[lot]) product = lotMap[lot].product;
+    if (!product) product = 'Unknown (lot '+lot+')';
+    // Parse customer and product name
+    var parts = product.split('-');
+    var customer = parts[0].trim();
+    var prodName = parts.slice(1).join('-').trim() || product;
+    var key = product;
+    if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0};
+    byProduct[key].lots.add(lot);
+    byProduct[key].kg += kg;
+  });
+
+  var sorted = Object.values(byProduct).sort(function(a,b){ return b.kg - a.kg; });
+  var unit = matUnit(m.name);
+  var totalKg = sorted.reduce(function(s,p){ return s+p.kg; }, 0);
+
+  if (!sorted.length) {
+    drill.innerHTML = '<div style="margin-top:10px;border-top:0.5px solid #2c2c2a;padding-top:10px;font-size:11px;color:#5f5e5a;font-family:system-ui;">No production data found for this month.</div>';
+    return;
+  }
+
+  var rows = sorted.map(function(p) {
+    var pct = totalKg ? ((p.kg/totalKg)*100).toFixed(1) : '0';
+    var bw = totalKg ? Math.round((p.kg/totalKg)*100) : 0;
+    return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<td style="padding:5px 10px;font-size:11px;color:#5f5e5a;white-space:nowrap;">'+p.customer+'</td>'
+      + '<td style="padding:5px 10px;font-size:12px;font-weight:500;color:#e8e6e0;">'+p.product+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+p.lots.size+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
+      + '<td style="padding:5px 14px;width:120px;">'
+        + '<div style="display:flex;align-items:center;gap:6px;">'
+          + '<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
+            + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
+          + '</div>'
+          + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
+        + '</div>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+
+  drill.innerHTML = '<div style="margin-top:10px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+      + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">Products using this material \u2014 '+label+'</div>'
+      + '<button onclick="document.getElementById(\'mat-month-drill-'+idx+'\').dataset.activeMonth=\'\';document.getElementById(\'mat-month-drill-'+idx+'\').innerHTML=\'\';" style="font-size:10px;color:#5f5e5a;background:none;border:none;cursor:pointer;font-family:system-ui;padding:0;">&#x2715; close</button>'
+    + '</div>'
+    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Customer</th>'
+      + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Product</th>'
+      + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'
+      + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">kg used</th>'
+      + '<th style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
+    + '</tr></thead>'
+    + '<tbody>'+rows+'</tbody>'
+    + '</table></div></div>';
 }
 
 function renderMaterials() {
