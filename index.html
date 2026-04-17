@@ -3873,6 +3873,11 @@ function renderMatInline(m, idx) {
       + breakdownHTML
     + '</div>';
 
+  // Restore drill state if it was open before refresh
+  if (window._matDrillState && window._matDrillState[idx]) {
+    var ds = window._matDrillState[idx];
+    setTimeout(function(){ renderMatMonthDrill(m, idx, ds.mk, ds.label, ds.barIdx); }, 50);
+  }
   if (window['matChart_'+idx]) { window['matChart_'+idx].destroy(); window['matChart_'+idx]=null; }
   var ctx = document.getElementById('mat-chart-'+idx);
   if (!ctx) return;
@@ -3914,6 +3919,7 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
   if (drill.dataset.activeMonth === mk) {
     drill.innerHTML = '';
     drill.dataset.activeMonth = '';
+    if (window._matDrillState) delete window._matDrillState[idx];
     // Reset bar colors
     var chart = window['matChart_'+idx];
     if (chart) {
@@ -3924,6 +3930,8 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
     return;
   }
   drill.dataset.activeMonth = mk;
+  window._matDrillState = window._matDrillState || {};
+  window._matDrillState[idx] = {mk:mk, label:label, barIdx:barIdx};
 
   // Highlight clicked bar
   var chart = window['matChart_'+idx];
@@ -3964,9 +3972,12 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
     var customer = parts[0].trim();
     var prodName = parts.slice(1).join('-').trim() || product;
     var key = product;
-    if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0};
+    // Sum final units from lotMap
+    var lotUnits = lotMap[lot] ? lotMap[lot].finalUnits : 0;
+    if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0, units:0};
     byProduct[key].lots.add(lot);
     byProduct[key].kg += kg;
+    byProduct[key].units += lotUnits;
   });
 
   var sorted = Object.values(byProduct).sort(function(a,b){ return b.kg - a.kg; });
@@ -3985,6 +3996,7 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<td style="padding:5px 10px;font-size:11px;color:#5f5e5a;white-space:nowrap;">'+p.customer+'</td>'
       + '<td style="padding:5px 10px;font-size:12px;font-weight:500;color:#e8e6e0;">'+p.product+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+p.lots.size+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+(p.units?p.units.toLocaleString():'—')+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
       + '<td style="padding:5px 14px;width:120px;">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
@@ -4000,13 +4012,14 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
   drill.innerHTML = '<div style="margin-top:10px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
       + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">Products using this material \u2014 '+label+'</div>'
-      + '<button onclick="document.getElementById(\'mat-month-drill-'+idx+'\').dataset.activeMonth=\'\';document.getElementById(\'mat-month-drill-'+idx+'\').innerHTML=\'\';" style="font-size:10px;color:#5f5e5a;background:none;border:none;cursor:pointer;font-family:system-ui;padding:0;">&#x2715; close</button>'
+      + '<button onclick="document.getElementById(\'mat-month-drill-'+idx+'\').dataset.activeMonth=\'\';document.getElementById(\'mat-month-drill-'+idx+'\').innerHTML=\'\';if(window._matDrillState)delete window._matDrillState['+idx+'];" style="font-size:10px;color:#5f5e5a;background:none;border:none;cursor:pointer;font-family:system-ui;padding:0;">&#x2715; close</button>'
     + '</div>'
     + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Customer</th>'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Product</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'
+      + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Units</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">kg used</th>'
       + '<th style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
     + '</tr></thead>'
