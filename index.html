@@ -1784,7 +1784,9 @@ function renderToday() {
             var devS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'';
             var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
             var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
-            var containerStr=[l.bottleSize||l.jarSize,[l.lidSize,l.lidColor,l.lidProfile].filter(Boolean).join(' ')].filter(Boolean).join(' / ');
+            function cleanLid(v){ return v&&!/^(n\/a|none|n\/a n\/a|n\/a n\/a n\/a)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; }
+            var lidStr=[l.lidSize,l.lidColor,l.lidProfile].map(cleanLid).filter(Boolean).join(' ');
+            var containerStr=[l.bottleSize||l.jarSize,lidStr].filter(Boolean).join(' / ');
             var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
               +'<div>'
               +(l.lot?'<div style="font-size:11px;font-weight:500;color:#5f5e5a;font-family:system-ui;margin-bottom:2px;">#'+l.lot+'</div>':'')
@@ -1911,7 +1913,7 @@ function buildWeekLotsGrid(lots) {
           +'</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+brand+'</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+product+'</div>'
-          +([l.bottleSize||l.jarSize,[l.lidSize,l.lidColor,l.lidProfile].filter(Boolean).join(' ')].filter(Boolean).length?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+[l.bottleSize||l.jarSize,[l.lidSize,l.lidColor,l.lidProfile].filter(Boolean).join(' ')].filter(Boolean).join(' / ')+'</div>':'')
+          +(function(){ function cL(v){ return v&&!/^(n\/a|none)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; } var ls=[l.lidSize,l.lidColor,l.lidProfile].map(cL).filter(Boolean).join(' '); var cs=[l.bottleSize||l.jarSize,ls].filter(Boolean).join(' / '); return cs?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+cs+'</div>':''; })()
           +'</div>'
           +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
           +'</div>'
