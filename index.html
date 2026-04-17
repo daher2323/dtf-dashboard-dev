@@ -729,10 +729,15 @@ function fetchData() {
 function fetchMaterialsIfNeeded() {
   if (materialsData.length > 0) return;
   fetchMaterialsCSV().then(function(t){
+    console.log('Materials CSV length:', t ? t.length : 'null/empty');
+    console.log('Materials CSV first 200 chars:', t ? t.substring(0,200) : 'none');
     var parsed = parseMaterials(t);
+    console.log('Parsed materials rows:', parsed.length);
     if (parsed.length > 0) {
       materialsData = parsed;
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+    } else {
+      console.log('parseMaterials returned 0 rows — CSV may be empty or unparseable');
     }
   });
 }
