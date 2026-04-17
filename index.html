@@ -1545,15 +1545,31 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
         if(remaining<=0){rem.style.color='#9FE1CB';rem.textContent='+'+(Math.abs(remaining)).toLocaleString()+' over target';}
         else{rem.style.color='#888780';rem.textContent=remaining.toLocaleString()+' to go';}
       }
-      // Position labels at midpoint of each segment
+      // Position labels at midpoint of each segment with collision avoidance
       var segs=[{id:'line#1',left:0,width:w1},{id:'line#2',left:w1,width:w2},{id:'line#4',left:w1+w2,width:w4}];
-      segs.forEach(function(s){
+      var trackEl = document.getElementById('banner-track');
+      var trackW = trackEl ? trackEl.offsetWidth : 600;
+      var labelPx = []; // track label center positions in px for collision detection
+      segs.forEach(function(s, si){
         var leg=document.getElementById('banner-leg-'+s.id);
         if(!leg) return;
         var units=Math.round((gaugeData.find(function(g){return lk(g.line||ALL_LINES[g.idx]||'')===s.id;})||{units:0}).units*e);
         leg.textContent=s.id.replace('line#','Line #')+' — '+units.toLocaleString();
-        if(s.width>2){ leg.style.display='block'; leg.style.left=(s.left+s.width/2)+'%'; }
-        else { leg.style.display='none'; }
+        if(s.width>1){
+          leg.style.display='block';
+          var idealPct = s.left + s.width/2;
+          var idealPx = idealPct/100 * trackW;
+          var halfLbl = leg.offsetWidth/2 || 40;
+          // Nudge away from previous label if too close
+          var minPx = si>0 && labelPx[si-1]!==undefined ? labelPx[si-1] + halfLbl*2 + 6 : halfLbl;
+          var posPx = Math.max(minPx, idealPx);
+          // Clamp to track bounds
+          posPx = Math.min(posPx, trackW - halfLbl);
+          labelPx[si] = posPx;
+          leg.style.left = (posPx/trackW*100)+'%';
+        } else {
+          leg.style.display='none';
+        }
       });
     }
     if(t>=1){
