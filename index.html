@@ -1536,9 +1536,12 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
       var s2=document.getElementById('banner-seg2');
       var s4=document.getElementById('banner-seg4');
       var rem=document.getElementById('banner-remaining');
+      // When over target, fill bar edge-to-edge by stretching last active segment
+      var overTarget = (gaugeData[0].units+gaugeData[1].units+gaugeData[2].units) > totalGoal;
+      var w4adj = overTarget ? Math.max(w4, 100-w1-w2) : w4;
       if(s1){s1.style.width=w1+'%';}
       if(s2){s2.style.left=w1+'%';s2.style.width=w2+'%';}
-      if(s4){s4.style.left=(w1+w2)+'%';s4.style.width=w4+'%';}
+      if(s4){s4.style.left=(w1+w2)+'%';s4.style.width=w4adj+'%';}
       if(rem){
         var remaining=Math.round(totalGoal-todayTotal*e);
         rem.style.fontSize='11px';rem.style.fontWeight='500';
