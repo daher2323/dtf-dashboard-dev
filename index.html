@@ -4173,24 +4173,28 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
     matchingLots[lot] += r.qty;
   });
 
-  // Join to production data to get product names
+  // Join to production data to get product names + final-unit totals.
+  // Materials drilldowns can span prior years (Dec 2025 view shown in 2026), so
+  // we have to look at both allRows (current year) and allRows25 (prior year).
+  // Pre-build a lot→units sum across the combined set to avoid an O(n*m) scan
+  // when the drill has many lots.
   var allRowsCombined = allRows.concat(allRows25);
+  var unitsByLot = {};
+  var productByLot = {};
+  allRowsCombined.forEach(function(r) {
+    var lot = (r['Lot Number']||'').trim(); if (!lot) return;
+    unitsByLot[lot] = (unitsByLot[lot] || 0) + num(r['Final Units']);
+    if (!productByLot[lot] && r['Product']) productByLot[lot] = (r['Product']||'').trim();
+  });
   var byProduct = {};
   Object.keys(matchingLots).forEach(function(lot) {
     var kg = matchingLots[lot];
-    // Find product from production rows
-    var prodRow = allRowsCombined.find(function(r){ return (r['Lot Number']||'').trim() === lot; });
-    var product = prodRow ? (prodRow['Product']||'').trim() : null;
-    // Try lotMap as well
-    if (!product && lotMap[lot]) product = lotMap[lot].product;
-    if (!product) product = 'Unknown (lot '+lot+')';
-    // Parse customer and product name
+    var product = productByLot[lot] || (lotMap[lot] && lotMap[lot].product) || ('Unknown (lot '+lot+')');
     var parts = product.split('-');
     var customer = parts[0].trim();
     var prodName = parts.slice(1).join('-').trim() || product;
     var key = product;
-    // Sum final units from lotMap
-    var lotUnits = lotMap[lot] ? lotMap[lot].finalUnits : 0;
+    var lotUnits = unitsByLot[lot] || 0;
     if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0, units:0};
     byProduct[key].lots.add(lot);
     byProduct[key].kg += kg;
