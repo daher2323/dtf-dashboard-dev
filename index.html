@@ -298,6 +298,99 @@ function jsStr(s) {
     .replace(/"/g, '&quot;');
 }
 
+// Parse a Date cell to a local-TZ calendar date (midnight in browser's local TZ).
+// Handles M/D/YYYY, M/D/YY, MM/DD/YYYY, and YYYY-MM-DD (ISO date-only).
+// Refuses strings containing 'T', 'Z', or a numeric timezone offset so that a
+// datetime like "2026-04-18T00:00:00Z" never silently shifts to the previous day
+// in Eastern time. Returns null if the string can't be parsed as a plain date.
+function parseLocalDate(s) {
+  if (!s) return null;
+  var str = String(s).trim();
+  if (!str) return null;
+  // Google Sheets date-with-time CSV cells: "4/18/2026 9:30:00" — match the date prefix.
+  var us = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\b|$)/);
+  if (us) {
+    var mo = parseInt(us[1], 10), dy = parseInt(us[2], 10), yr = parseInt(us[3], 10);
+    if (yr < 100) yr += 2000;
+    // Reject out-of-range months/days so a D/M/YYYY-locale cell isn't silently misread.
+    if (mo < 1 || mo > 12 || dy < 1 || dy > 31) return null;
+    var d = new Date(yr, mo - 1, dy);
+    return isNaN(d) ? null : d;
+  }
+  var iso = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[\sT]|$)/);
+  if (iso) {
+    var isoMo = parseInt(iso[2], 10), isoDy = parseInt(iso[3], 10);
+    if (isoMo < 1 || isoMo > 12 || isoDy < 1 || isoDy > 31) return null;
+    var d2 = new Date(parseInt(iso[1], 10), isoMo - 1, isoDy);
+    return isNaN(d2) ? null : d2;
+  }
+  // Anything with a 'T', 'Z', or timezone offset is a timestamp — refuse so we never shift days.
+  if (/[TZ]|[+\-]\d{2}:?\d{2}$/.test(str)) return null;
+  // Last resort: browser's Date parser. Normalize to local midnight of that day.
+  var fb = new Date(str);
+  if (isNaN(fb)) return null;
+  return new Date(fb.getFullYear(), fb.getMonth(), fb.getDate());
+}
+
+// Normalize a Line cell to the canonical 'Line #N' form used by ALL_LINES.
+// Defense-in-depth: Google Sheets data validation is expected to enforce this,
+// but paste-as-value or a future edit can bypass DV — we still want the data.
+// Returns null if no digit can be extracted or the line isn't one we track.
+function canonicalLine(raw) {
+  if (raw == null) return null;
+  var m = String(raw).match(/\d+/);
+  if (!m) return null;
+  var canon = 'Line #' + m[0];
+  return ALL_LINES.indexOf(canon) !== -1 ? canon : null;
+}
+
+// Diagnostic counter for skipped/orphaned rows per refresh. No visible UI —
+// managers and leadership use the admin login, and error badges would be noisy.
+// Developers can inspect the most recent skip breakdown from the browser console:
+//   __dtfSkipped()        → summary counts + last refresh timestamp
+//   __dtfSkipped(true)    → also returns a capped list of example rows per reason
+var _skipStats = null;
+function _resetSkipStats() {
+  _skipStats = {
+    at: new Date(),
+    invalid_date: 0, missing_lot: 0, missing_product: 0,
+    sentinel: 0, orphan_line: 0,
+    examples: { invalid_date: [], missing_lot: [], missing_product: [], sentinel: [], orphan_line: [] }
+  };
+}
+function _recordSkip(reason, sample) {
+  if (!_skipStats) _resetSkipStats();
+  if (_skipStats[reason] == null) return;
+  _skipStats[reason]++;
+  var ex = _skipStats.examples[reason];
+  if (ex && ex.length < 5 && sample) ex.push(sample);
+}
+function _logSkipSummary() {
+  if (!_skipStats) return;
+  var total = _skipStats.invalid_date + _skipStats.missing_lot + _skipStats.missing_product + _skipStats.sentinel + _skipStats.orphan_line;
+  if (total === 0) return;
+  console.warn('[DTF] Refresh skipped ' + total + ' row(s): '
+    + 'invalid_date=' + _skipStats.invalid_date
+    + ', missing_lot=' + _skipStats.missing_lot
+    + ', missing_product=' + _skipStats.missing_product
+    + ', sentinel=' + _skipStats.sentinel
+    + ', orphan_line=' + _skipStats.orphan_line
+    + '. Call __dtfSkipped(true) for examples.');
+}
+window.__dtfSkipped = function(withExamples) {
+  if (!_skipStats) return { message: 'No refresh has completed yet.' };
+  var out = {
+    at: _skipStats.at,
+    invalid_date: _skipStats.invalid_date,
+    missing_lot: _skipStats.missing_lot,
+    missing_product: _skipStats.missing_product,
+    sentinel: _skipStats.sentinel,
+    orphan_line: _skipStats.orphan_line
+  };
+  if (withExamples) out.examples = _skipStats.examples;
+  return out;
+};
+
 function toggleMsPanel(id) {
   if (_openMsId === id) { closeMsPanel(); return; }
   closeMsPanel();
@@ -634,12 +727,23 @@ function parseCSV(text) {
 function isValid(r) {
   if (!r || typeof r !== 'object') return false;
   var d=(r['Date']||'').trim(), l=(r['Lot Number']||'').trim(), p=(r['Product']||'').trim();
-  if (!d||!l||!p) return false;
-  if (p.startsWith('#')||l.startsWith('#')||d.startsWith('#')) return false;
-  var suspect = /loading|#error|#ref|#n\/a|#value|#name|#div/i;
-  if (suspect.test(p) || suspect.test(l) || suspect.test(d)) return false;
-  var dt = new Date(d); if (isNaN(dt)) return false;
-  var yr = dt.getFullYear(); if (yr < 2020 || yr > (CURRENT_YEAR || new Date().getFullYear()) + 5) return false;
+  if (!d) { _recordSkip('invalid_date', {date:d, lot:l, product:p}); return false; }
+  if (!l) { _recordSkip('missing_lot',  {date:d, lot:l, product:p}); return false; }
+  if (!p) { _recordSkip('missing_product', {date:d, lot:l, product:p}); return false; }
+  // Reject cells whose entire trimmed value is a Google Sheets error sentinel.
+  // (Previous substring match rejected any product name containing 'loading'.)
+  var suspect = /^(loading|#error|#ref|#n\/?a|#value|#name|#div|#num|#null)[!?\s]*$/i;
+  if (suspect.test(p) || suspect.test(l) || suspect.test(d)) {
+    _recordSkip('sentinel', {date:d, lot:l, product:p});
+    return false;
+  }
+  var dt = parseLocalDate(d);
+  if (!dt) { _recordSkip('invalid_date', {date:d, lot:l, product:p}); return false; }
+  var yr = dt.getFullYear();
+  if (yr < 2020 || yr > (CURRENT_YEAR || new Date().getFullYear()) + 5) {
+    _recordSkip('invalid_date', {date:d, lot:l, product:p, reason:'year_out_of_range'});
+    return false;
+  }
   return true;
 }
 
@@ -824,18 +928,23 @@ function parseMaterials(text) {
 }
 
 function applyFreshData(res) {
+  _resetSkipStats();
   var newRows = parseCSV(res[0]).filter(isValid);
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
   var newWeeklyTargets = parseWeeklyTargets(res[3]||'');
-  if (newRows.length < 3) { console.warn('Refresh aborted: too few rows'); return false; }
-  if (allRows.length > 0 && newRows.length < allRows.length) {
-    console.warn('Refresh aborted: new data (' + newRows.length + ' rows) has fewer rows than current (' + allRows.length + '). Keeping existing data.');
+  if (newRows.length < 3) { console.warn('[DTF] Refresh aborted: too few rows (' + newRows.length + '). Keeping existing data.'); return false; }
+  // Allow shrinkage up to 15% so normal operator cleanup (dup-row deletes, minor
+  // edits) doesn't freeze the dashboard. Larger drops still reject — those
+  // usually mean a stale/empty CDN response, not a real edit.
+  if (allRows.length > 0 && newRows.length < Math.floor(allRows.length * 0.85)) {
+    console.warn('[DTF] Refresh aborted: new data has ' + newRows.length + ' rows vs current ' + allRows.length + ' (>15% shrink). Keeping existing data.');
     return false;
   }
   allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets; weeklyTargets = newWeeklyTargets;
   lotMap = buildLotMap(allRows);
   buildProductionDays(true);
+  _logSkipSummary();
   return true;
 }
 
@@ -844,8 +953,7 @@ function buildProductionDays(preserveSelection) {
   var todayStr = (now.getMonth()+1)+'/'+now.getDate()+'/'+now.getFullYear();
   var seen = new Set();
   allRows.concat(allRows25).forEach(function(r){
-    var d = (r['Date']||'').trim(); if (!d) return;
-    var dt = new Date(d); if (isNaN(dt)) return;
+    var dt = parseLocalDate(r['Date']); if (!dt) return;
     seen.add((dt.getMonth()+1)+'/'+dt.getDate()+'/'+dt.getFullYear());
   });
   var days = Array.from(seen).sort(function(a,b){ return new Date(a)-new Date(b); });
@@ -864,6 +972,7 @@ function loadDashboard() {
   document.getElementById('loading').textContent = 'Loading production data...';
   document.getElementById('loading').style.display = 'block';
   fetchData().then(function(results) {
+    _resetSkipStats();
     var rows = parseCSV(results[0]).filter(isValid);
     var rows25 = parseCSV(results[1]).filter(isValid);
     // Reject suspiciously small datasets — Google Sheets CDN occasionally serves stale/empty CSVs
@@ -878,6 +987,7 @@ function loadDashboard() {
     weeklyTargets = parseWeeklyTargets(results[3]||'');
     lotMap = buildLotMap(allRows);
     buildProductionDays(false);
+    _logSkipSummary();
     lastRefreshTime = Date.now();
     document.getElementById('loading').style.display = 'none';
     document.getElementById('content').style.display = 'block';
@@ -1725,17 +1835,25 @@ function renderToday() {
   var etHour=parseInt(new Date().toLocaleString('en-US',{hour:'numeric',hour12:false,timeZone:'America/New_York'}));
   var dayComplete=!isLive||(etHour>=16);
 
+  var viewDateObj = parseLocalDate(viewStr) || new Date(viewStr);
   function matchDate(rowDate) {
-    if(!rowDate) return false;
-    var dt=new Date(rowDate); if(isNaN(dt)) return false;
-    var vd=new Date(viewStr);
-    return dt.getFullYear()===vd.getFullYear()&&dt.getMonth()===vd.getMonth()&&dt.getDate()===vd.getDate();
+    var dt = parseLocalDate(rowDate);
+    if (!dt || !viewDateObj) return false;
+    return dt.getFullYear()===viewDateObj.getFullYear()
+        && dt.getMonth()===viewDateObj.getMonth()
+        && dt.getDate()===viewDateObj.getDate();
   }
 
   var todayByLine={};
   allRows.forEach(function(r){
     if(!matchDate(r['Date'])) return;
-    var line=(r['Line']||'').trim(); if(!line) return;
+    var line = canonicalLine(r['Line']);
+    if (!line) {
+      if ((r['Line']||'').trim() && num(r['Final Units']) > 0) {
+        _recordSkip('orphan_line', {date:r['Date'], lot:r['Lot Number'], line:r['Line'], units:r['Final Units']});
+      }
+      return;
+    }
     todayByLine[line]=(todayByLine[line]||0)+num(r['Final Units']);
   });
 
@@ -1751,14 +1869,14 @@ function renderToday() {
     if(!todayLotData[lot]) todayLotData[lot]={product:'',projected:0,line:'',startTime:'',status:''};
     if(r['Product']) todayLotData[lot].product=r['Product'];
     if(r['Projected Units']) todayLotData[lot].projected=num(r['Projected Units']);
-    if(r['Line']) todayLotData[lot].line=(r['Line']||'').trim();
+    var cl = canonicalLine(r['Line']);
+    if (cl) todayLotData[lot].line = cl;
     if(r['Start Time']) todayLotData[lot].startTime=(r['Start Time']||'').trim();
     if(r['Complete or Partial']) todayLotData[lot].status=(r['Complete or Partial']||'').trim();
   });
-  var viewDateObj=new Date(viewStr);
   var runningTotalByLot={};
   allRows.forEach(function(r){
-    var dt=new Date(r['Date']); if(isNaN(dt)||dt>viewDateObj) return;
+    var dt = parseLocalDate(r['Date']); if(!dt || dt>viewDateObj) return;
     var lot=(r['Lot Number']||'').trim(); if(!lot) return;
     runningTotalByLot[lot]=(runningTotalByLot[lot]||0)+num(r['Final Units']);
   });
@@ -1776,7 +1894,12 @@ function renderToday() {
     if(st.includes('complete')||st.includes('partial')){
       completedToday.push({lot:lot,product:product,projected:projected,finalUnits:runningTotal,todayUnits:todayUnits,status:todayStatus,line:line,rowIdx:lotData?lotData.rowIdx:0,bottleSize:lotData?lotData.bottleSize:'',jarSize:lotData?lotData.jarSize:'',lidSize:lotData?lotData.lidSize:'',lidColor:lotData?lotData.lidColor:'',lidProfile:lotData?lotData.lidProfile:''});
     } else {
-      if(!runningByLine[line]) runningByLine[line]=[];
+      // Running lots with an unrecognized line would be silently dropped by the render loop;
+      // record so __dtfSkipped() can surface it in the console.
+      if (!runningByLine[line]) {
+        _recordSkip('orphan_line', {date:viewStr, lot:lot, line:line||'(empty)', product:product});
+        return;
+      }
       runningByLine[line].push({product:product,projected:projected,startTime:startTime});
     }
   });
@@ -1805,10 +1928,10 @@ function renderToday() {
     recLineRank[line] = (recs.top5byLine[line]||[]).findIndex(function(d){ return d.date===viewStr; });
   });
 
-  var ytdRows=allRows.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt<=viewDateObj; });
+  var ytdRows=allRows.filter(function(r){ var dt=parseLocalDate(r['Date']); return !!dt&&dt<=viewDateObj; });
   var ytdUnits=Object.values(buildLotMap(ytdRows)).filter(Boolean).reduce(function(s,l){return s+l.finalUnits;},0);
   var viewMo=viewDateObj.getMonth(), viewDy=viewDateObj.getDate();
-  var total25banner=allRows25.filter(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; return (dt.getMonth()<viewMo)||(dt.getMonth()===viewMo&&dt.getDate()<=viewDy); }).reduce(function(s,r){return s+num(r['Final Units']);},0);
+  var total25banner=allRows25.filter(function(r){ var dt=parseLocalDate(r['Date']); if(!dt) return false; return (dt.getMonth()<viewMo)||(dt.getMonth()===viewMo&&dt.getDate()<=viewDy); }).reduce(function(s,r){return s+num(r['Final Units']);},0);
   var viewDayOfYear=Math.round((new Date(viewDateObj.getFullYear(),viewDateObj.getMonth(),viewDateObj.getDate())-new Date(viewDateObj.getFullYear(),0,0))/86400000);
   var yearProjBanner=viewDayOfYear?Math.round((ytdUnits/viewDayOfYear)*365):0;
   var targetPctBanner=Math.round((yearProjBanner/YEAR_TARGET)*100);
@@ -1871,7 +1994,12 @@ function renderToday() {
     completedHTML='<div style="font-size:12px;color:#5f5e5a;font-style:italic;padding:6px 0">'+(isLive?'No completed lots yet today':'No completed lots for this day')+'</div>';
   } else {
     var byLine={'Line #1':[],'Line #2':[],'Line #4':[]};
-    completedToday.forEach(function(l){ if(byLine[l.line]) byLine[l.line].push(l); else byLine[l.line]=[l]; });
+    completedToday.forEach(function(l){
+      if (byLine[l.line]) { byLine[l.line].push(l); return; }
+      // Unrecognized line on a completed lot — record so it shows up in __dtfSkipped().
+      // With Google Sheets data validation this should never fire; included as belt-and-braces.
+      _recordSkip('orphan_line', {date:viewStr, lot:l.lot, line:l.line||'(empty)', product:l.product, status:l.status});
+    });
     // Sort each line's lots by rowIdx — order they appear in the sheet = completion order
     Object.keys(byLine).forEach(function(line){ byLine[line].sort(function(a,b){ return (a.rowIdx||0)-(b.rowIdx||0); }); });
     completedHTML='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:start">'
