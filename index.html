@@ -203,6 +203,16 @@ var YEAR_TARGETS = {
   2026: 3927000
 };
 
+// Per-year Lot # reference sheets. Each row: Lot #, Brand Name, Product Name,
+// Exp. Date, Amt, Brand Name - Product Name. Used as a fallback when a lot
+// drawn in the materials sheet doesn't appear in the production log
+// (e.g. bulk powder shipments). Same year-rollover pattern as CSV_BY_YEAR —
+// add a new entry when a new-year tab is published.
+var CSV_LOT_INDEX_BY_YEAR = {
+  2025: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=902688868&single=true&output=csv',
+  2026: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=1261158834&single=true&output=csv'
+};
+
 function resolveConfiguredYear(y) {
   if (CSV_BY_YEAR[y] && YEAR_TARGETS[y]) return y;
   var years = Object.keys(CSV_BY_YEAR).filter(function(k){ return YEAR_TARGETS[k]; }).map(Number).sort(function(a,b){ return a-b; });
@@ -229,6 +239,8 @@ var CSV_TARGETS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6
 var CSV_WEEKLY_TARGETS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=329792715&single=true&output=csv';
 var CSV_MATERIALS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=0&single=true&output=csv';
 var materialsData = [];
+var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
+var lotIndexLoaded = false;
 var TARGET_HIT_THRESHOLD = 0.99; // 99% = within 1% tolerance
 var ALL_LINES = ['Line #1', 'Line #2', 'Line #4'];
 var LINE_COLOR = {'line#1':'#378ADD','line#2':'#7F77DD','line#4':'#D4537E'};
@@ -898,6 +910,46 @@ function fetchMaterialsIfNeeded() {
   });
 }
 
+// Parse a Lot # reference sheet (columns: Lot #, Brand Name, Product Name,
+// Exp. Date, Amt, Brand Name - Product Name). Returns a lot→{combined} map
+// where `combined` matches the production-log "Customer - Product" format.
+function parseLotIndex(text) {
+  if (!text) return {};
+  try {
+    var rows = parseCSV(text);
+    var out = {};
+    rows.forEach(function(r){
+      var lot = (r['Lot #']||'').trim(); if (!lot) return;
+      var brand = (r['Brand Name']||'').trim();
+      var product = (r['Product Name']||'').trim();
+      var combined = (r['Brand Name - Product Name']||'').trim();
+      // Skip placeholder rows where only the lot number is filled in.
+      if (!brand && !product && (!combined || combined === '-' || combined === ' - ')) return;
+      if (!combined) combined = (brand + ' - ' + product).trim();
+      out[lot] = { combined: combined, brand: brand, product: product };
+    });
+    return out;
+  } catch(e) { return {}; }
+}
+
+function fetchLotIndexIfNeeded() {
+  if (lotIndexLoaded) return;
+  var urls = Object.keys(CSV_LOT_INDEX_BY_YEAR).map(function(y){ return CSV_LOT_INDEX_BY_YEAR[y]; });
+  if (!urls.length) { lotIndexLoaded = true; return; }
+  Promise.all(urls.map(function(u){ return fetchCSVSimple(u); })).then(function(texts){
+    var merged = {};
+    texts.forEach(function(t){
+      var partial = parseLotIndex(t);
+      Object.keys(partial).forEach(function(k){ merged[k] = partial[k]; });
+    });
+    lotIndex = merged;
+    lotIndexLoaded = true;
+    // If the user is already sitting on the materials view, re-render so any
+    // previously-"Unknown" lots pick up their brand/product from the index.
+    if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+  });
+}
+
 function parseMaterials(text) {
   if (!text) return [];
   try {
@@ -994,8 +1046,9 @@ function loadDashboard() {
     renderSubBar();
     render();
     startRefreshTimers();
-    // Fetch materials in background — doesn't block main load
+    // Fetch materials + lot index in background — don't block main load
     fetchMaterialsIfNeeded();
+    fetchLotIndexIfNeeded();
     // Safety net: if daily view looks empty after load, re-fetch once after a short delay
     // Guards against Google Sheets CDN serving a stale response on first hit
     if (topView === 'summary' && subView === 'today') {
@@ -4186,10 +4239,18 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
     unitsByLot[lot] = (unitsByLot[lot] || 0) + num(r['Final Units']);
     if (!productByLot[lot] && r['Product']) productByLot[lot] = (r['Product']||'').trim();
   });
+  // Resolve each material lot to a Customer/Product pair. Lookup order:
+  //   1. Production CSV row (allRowsCombined → productByLot / lotMap)
+  //   2. Lot # reference sheet (lotIndex) — catches bulk-powder shipments and
+  //      other lots that never hit the production line
+  //   3. "Unknown (lot N)" placeholder so the lot is still traceable
   var byProduct = {};
   Object.keys(matchingLots).forEach(function(lot) {
     var kg = matchingLots[lot];
-    var product = productByLot[lot] || (lotMap[lot] && lotMap[lot].product) || ('Unknown (lot '+lot+')');
+    var product = productByLot[lot]
+               || (lotMap[lot] && lotMap[lot].product)
+               || (lotIndex[lot] && lotIndex[lot].combined)
+               || ('Unknown (lot '+lot+')');
     var parts = product.split('-');
     var customer = parts[0].trim();
     var prodName = parts.slice(1).join('-').trim() || product;
@@ -4462,7 +4523,7 @@ function renderMaterials() {
 
 
 function renderProcurement() {
-  if (procView === 'materials') { fetchMaterialsIfNeeded(); renderMaterials(); return; }
+  if (procView === 'materials') { fetchMaterialsIfNeeded(); fetchLotIndexIfNeeded(); renderMaterials(); return; }
   var now = new Date();
   var curQk = getQuarterKey(now);
   var cutoff = new Date(TRACKING_START);
