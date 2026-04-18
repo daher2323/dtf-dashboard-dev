@@ -923,13 +923,28 @@ function parseLotIndex(text) {
       var brand = (r['Brand Name']||'').trim();
       var product = (r['Product Name']||'').trim();
       var combined = (r['Brand Name - Product Name']||'').trim();
+      var amt = (r['Amt']||'').trim();
       // Skip placeholder rows where only the lot number is filled in.
       if (!brand && !product && (!combined || combined === '-' || combined === ' - ')) return;
       if (!combined) combined = (brand + ' - ' + product).trim();
-      out[lot] = { combined: combined, brand: brand, product: product };
+      out[lot] = { combined: combined, brand: brand, product: product, amt: amt };
     });
     return out;
   } catch(e) { return {}; }
+}
+
+// Parse an "Amt" cell from the Lot # sheet. Handles plain numbers ("1510"),
+// comma-separated ("185,125 servings"), and k-suffixed shorthand ("25.2k servings").
+// Returns { value, unit } or null.
+function parseAmt(s) {
+  if (!s) return null;
+  var str = String(s).trim();
+  var m = str.match(/^([0-9,]+(?:\.[0-9]+)?)\s*(k|K)?\s*(.*)$/);
+  if (!m) return null;
+  var n = parseFloat(m[1].replace(/,/g, ''));
+  if (isNaN(n)) return null;
+  if (m[2]) n *= 1000;
+  return { value: Math.round(n), unit: (m[3] || '').trim() };
 }
 
 function fetchLotIndexIfNeeded() {
@@ -4247,19 +4262,31 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
   var byProduct = {};
   Object.keys(matchingLots).forEach(function(lot) {
     var kg = matchingLots[lot];
-    var product = productByLot[lot]
-               || (lotMap[lot] && lotMap[lot].product)
-               || (lotIndex[lot] && lotIndex[lot].combined)
+    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
+    var lotIdxEntry = lotIndex[lot];
+    var product = productionProd
+               || (lotIdxEntry && lotIdxEntry.combined)
                || ('Unknown (lot '+lot+')');
     var parts = product.split('-');
     var customer = parts[0].trim();
     var prodName = parts.slice(1).join('-').trim() || product;
     var key = product;
-    var lotUnits = unitsByLot[lot] || 0;
-    if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0, units:0};
+    // Units source depends on where the lot resolved:
+    //   - Production: use summed Final Units from the production CSV
+    //   - Lot # sheet only (bulk): use the Amt field ("185,125 servings", "25.2k servings", etc.)
+    var lotUnits = 0;
+    var lotUnitLabel = '';
+    if (productionProd) {
+      lotUnits = unitsByLot[lot] || 0;
+    } else if (lotIdxEntry && lotIdxEntry.amt) {
+      var parsed = parseAmt(lotIdxEntry.amt);
+      if (parsed) { lotUnits = parsed.value; lotUnitLabel = parsed.unit; }
+    }
+    if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0, units:0, unitLabel:''};
     byProduct[key].lots.add(lot);
     byProduct[key].kg += kg;
     byProduct[key].units += lotUnits;
+    if (lotUnitLabel && !byProduct[key].unitLabel) byProduct[key].unitLabel = lotUnitLabel;
   });
 
   var sorted = Object.values(byProduct).sort(function(a,b){ return b.kg - a.kg; });
@@ -4279,7 +4306,7 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<td style="padding:5px 10px;font-size:11px;color:#5f5e5a;white-space:nowrap;vertical-align:top;">'+esc(p.customer)+'</td>'
       + '<td style="padding:5px 10px;font-size:12px;font-weight:500;color:#e8e6e0;vertical-align:top;">'+esc(p.product)+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;color:#888780;vertical-align:top;">'+lotList+'</td>'
-      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?p.units.toLocaleString():'—')+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?(p.units.toLocaleString()+(p.unitLabel?' '+esc(p.unitLabel):'')):'—')+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
       + '<td style="padding:5px 14px;width:120px;">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
