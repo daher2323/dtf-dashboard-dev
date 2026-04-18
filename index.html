@@ -4213,11 +4213,12 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
   var rows = sorted.map(function(p) {
     var pct = totalKg ? ((p.kg/totalKg)*100).toFixed(1) : '0';
     var bw = totalKg ? Math.round((p.kg/totalKg)*100) : 0;
+    var lotList = Array.from(p.lots).sort().map(esc).join(', ');
     return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
-      + '<td style="padding:5px 10px;font-size:11px;color:#5f5e5a;white-space:nowrap;">'+p.customer+'</td>'
-      + '<td style="padding:5px 10px;font-size:12px;font-weight:500;color:#e8e6e0;">'+p.product+'</td>'
-      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+p.lots.size+'</td>'
-      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+(p.units?p.units.toLocaleString():'—')+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;color:#5f5e5a;white-space:nowrap;vertical-align:top;">'+esc(p.customer)+'</td>'
+      + '<td style="padding:5px 10px;font-size:12px;font-weight:500;color:#e8e6e0;vertical-align:top;">'+esc(p.product)+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;color:#888780;vertical-align:top;">'+lotList+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?p.units.toLocaleString():'—')+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
       + '<td style="padding:5px 14px;width:120px;">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
@@ -4239,7 +4240,7 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Customer</th>'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Product</th>'
-      + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'
+      + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lot #s</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Units</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">kg used</th>'
       + '<th style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
