@@ -744,7 +744,9 @@ function isValid(r) {
   if (!p) { _recordSkip('missing_product', {date:d, lot:l, product:p}); return false; }
   // Reject cells whose entire trimmed value is a Google Sheets error sentinel.
   // (Previous substring match rejected any product name containing 'loading'.)
-  var suspect = /^(loading|#error|#ref|#n\/?a|#value|#name|#div|#num|#null)[!?\s]*$/i;
+  // Trailing class must include "." and "…" — Sheets renders "Loading..." while
+  // async formulas (IMPORTRANGE, QUERY, array) are still computing.
+  var suspect = /^(loading|#error|#ref|#n\/?a|#value|#name|#div|#num|#null)[!?.\s\u2026]*$/i;
   if (suspect.test(p) || suspect.test(l) || suspect.test(d)) {
     _recordSkip('sentinel', {date:d, lot:l, product:p});
     return false;
