@@ -255,6 +255,23 @@ var LINE_BG    = {'line#1':'#0C447C','line#2':'#3C3489','line#4':'#72243E'};
 var LINE_TXT   = {'line#1':'#85B7EB','line#2':'#AFA9EC','line#4':'#ED93B1'};
 var LINE_TYPE  = {'line#1':'Powder','line#2':'Capsules','line#4':'Powder'};
 
+// Planning Status palette — used by the Open Orders chart / legend.
+// Light, saturated-on-dark values that reuse the existing line palette where
+// practical so status colors feel visually consistent with the rest of the app.
+var ORDERS_STATUS_COLOR = {
+  'Customer Driven':     '#85B7EB',
+  'Ready to be Planned': '#9FE1CB',
+  'Not Enough Labels':   '#F09595',
+  'Hold':                '#FAC775',
+  'Process':             '#AFA9EC',
+  'Scheduled':           '#ED93B1',
+  'Packaging Pulled':    '#6EC6B8',
+  'Complete/RTS':        '#888780',
+  '(blank)':             '#444441'
+};
+// Preferred ordering when listing statuses (exec report order).
+var ORDERS_STATUS_ORDER = ['Customer Driven','Not Enough Labels','Packaging Pulled','Process','Ready to be Planned','Scheduled','Hold','Complete/RTS','(blank)'];
+
 var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets = {};
 var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders'
 var topView = 'summary', subView = 'today';
@@ -4691,6 +4708,23 @@ function computeYTDDailyAvgByType() {
   };
 }
 
+// A row is classified as Sample Pack / Bulk Powder (rather than Production
+// Units) when Bottles/Jars is "N/A" (no retail packaging), OR the Order Amount
+// is literally 1 (convention for bulk-powder orders where the real volume is
+// encoded in the product name, not the amount).
+function isSamplePackOrBulk(r) {
+  return (r['Bottles/Jars']||'').trim() === 'N/A' || num(r['Order Amount']) === 1;
+}
+
+// Short number formatting for chart centers (612,173 -> "612K").
+function shortNum(n) {
+  if (!n) return '0';
+  var abs = Math.abs(n);
+  if (abs >= 1e6) return (n/1e6).toFixed(1).replace(/\.0$/,'') + 'M';
+  if (abs >= 1e3) return Math.round(n/1e3) + 'K';
+  return String(Math.round(n));
+}
+
 function computeOrderStats() {
   var powder  = openOrdersPowder  || [];
   var capsule = openOrdersCapsule || [];
@@ -4727,6 +4761,24 @@ function computeOrderStats() {
   }
   add(powder,'powder'); add(capsule,'capsule');
 
+  // Per-type × per-status × (production | sample) breakdown used by the chart.
+  // Only on-the-books rows (Complete/RTS excluded).
+  function makeTypeBuckets(){ return { prod: {}, samp: {}, totalProd: 0, totalSamp: 0, statusSet: {} }; }
+  var typeB = { powder: makeTypeBuckets(), capsule: makeTypeBuckets() };
+  function bucket(rows, key) {
+    rows.forEach(function(r){
+      var st = s(r) || '(blank)';
+      var u = num(r['Order Amount']);
+      var cat = isSamplePackOrBulk(r) ? 'samp' : 'prod';
+      if (!typeB[key][cat][st]) typeB[key][cat][st] = 0;
+      typeB[key][cat][st] += u;
+      typeB[key][cat==='prod' ? 'totalProd' : 'totalSamp'] += u;
+      typeB[key].statusSet[st] = true;
+    });
+  }
+  bucket(powderBooks, 'powder');
+  bucket(capsuleBooks, 'capsule');
+
   return {
     powderBooksCount: powderBooks.length,
     capsuleBooksCount: capsuleBooks.length,
@@ -4737,7 +4789,8 @@ function computeOrderStats() {
     unplannedCount: unplannedCount,
     unplannedUnits: unplannedUnits,
     labelBlocked: labelBlocked,
-    statusBreakdown: br
+    statusBreakdown: br,
+    typeBuckets: typeB
   };
 }
 
@@ -4787,17 +4840,78 @@ function renderOrdersSummary() {
         stats.powderBooksUnits.toLocaleString() + ' / ' + stats.capsuleBooksUnits.toLocaleString() + ' units')
     + '</div>';
 
-  var splitBarHTML =
-      '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:12px 16px;margin-bottom:16px;">'
-    + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Powder vs Capsule (on the books)</div>'
-    + '<div style="display:flex;height:18px;border-radius:6px;overflow:hidden;background:#2c2c2a;">'
-    +   '<div style="width:'+pctP+'%;background:'+LINE_COLOR['line#1']+';"></div>'
-    +   '<div style="width:'+pctC+'%;background:'+LINE_COLOR['line#2']+';"></div>'
-    + '</div>'
-    + '<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;font-family:system-ui;">'
-    +   '<span style="color:'+LINE_COLOR['line#1']+';">Powder \u2014 '+stats.powderBooksUnits.toLocaleString()+' units</span>'
-    +   '<span style="color:'+LINE_COLOR['line#2']+';">Capsule \u2014 '+stats.capsuleBooksUnits.toLocaleString()+' units</span>'
-    + '</div>'
+  // Big "Units On The Books" chart: one dual-ring doughnut per type
+  // (outer ring = Production Units by status, inner ring = Sample Packs by status).
+  function orderedStatuses(typeBucket){
+    var set = typeBucket.statusSet;
+    var seen = {};
+    var ordered = ORDERS_STATUS_ORDER.filter(function(s){ return set[s]; });
+    ordered.forEach(function(s){ seen[s] = true; });
+    // Tack on any unexpected statuses not in ORDERS_STATUS_ORDER.
+    Object.keys(set).forEach(function(s){ if (!seen[s]) ordered.push(s); });
+    return ordered;
+  }
+  function legendRows(typeBucket){
+    var statuses = orderedStatuses(typeBucket);
+    var rows = statuses.map(function(st){
+      var p = typeBucket.prod[st] || 0, sv = typeBucket.samp[st] || 0, t = p + sv;
+      var col = ORDERS_STATUS_COLOR[st] || '#888780';
+      return '<tr>'
+        + '<td style="padding:4px 6px;color:#e8e6e0;white-space:nowrap;">'
+        +   '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:'+col+';margin-right:6px;vertical-align:middle;"></span>'+esc(st)
+        + '</td>'
+        + '<td style="text-align:right;padding:4px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+p.toLocaleString()+'</td>'
+        + '<td style="text-align:right;padding:4px 6px;color:#888780;font-variant-numeric:tabular-nums;">'+(sv?sv.toLocaleString():'\u2014')+'</td>'
+        + '<td style="text-align:right;padding:4px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+t.toLocaleString()+'</td>'
+        + '</tr>';
+    }).join('');
+    var totP = typeBucket.totalProd, totS = typeBucket.totalSamp, totT = totP + totS;
+    rows += '<tr style="border-top:0.5px solid #2c2c2a;">'
+      + '<td style="padding:6px 6px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-size:10px;font-weight:500;">Grand Total</td>'
+      + '<td style="text-align:right;padding:6px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+totP.toLocaleString()+'</td>'
+      + '<td style="text-align:right;padding:6px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+totS.toLocaleString()+'</td>'
+      + '<td style="text-align:right;padding:6px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:700;">'+totT.toLocaleString()+'</td>'
+      + '</tr>';
+    return rows;
+  }
+  function chartCardHTML(typeKey, title, typeBucket){
+    var totT = typeBucket.totalProd + typeBucket.totalSamp;
+    var canvasId = 'orders-donut-' + typeKey;
+    return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:12px;padding:16px;">'
+      + '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">'
+      +   '<div>'
+      +     '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">'+title+'</div>'
+      +     '<div style="font-size:11px;color:#5f5e5a;margin-top:2px;font-family:system-ui;">'+typeBucket.totalProd.toLocaleString()+' production \u00b7 '+typeBucket.totalSamp.toLocaleString()+' sample packs</div>'
+      +   '</div>'
+      +   '<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;font-variant-numeric:tabular-nums;line-height:1;">'+totT.toLocaleString()+'</div>'
+      + '</div>'
+      + '<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">'
+      +   '<div style="width:240px;height:240px;position:relative;flex-shrink:0;">'
+      +     '<canvas id="'+canvasId+'"></canvas>'
+      +     '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;">'
+      +       '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Total</div>'
+      +       '<div style="font-size:26px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;margin-top:2px;">'+shortNum(totT)+'</div>'
+      +       '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">units</div>'
+      +     '</div>'
+      +   '</div>'
+      +   '<div style="flex:1;min-width:260px;">'
+      +     '<table style="width:100%;border-collapse:collapse;font-family:system-ui;font-size:12px;">'
+      +       '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+      +         '<th style="text-align:left;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Status</th>'
+      +         '<th style="text-align:right;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Prod</th>'
+      +         '<th style="text-align:right;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Sample</th>'
+      +         '<th style="text-align:right;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Total</th>'
+      +       '</tr></thead>'
+      +       '<tbody>'+legendRows(typeBucket)+'</tbody>'
+      +     '</table>'
+      +   '</div>'
+      + '</div>'
+      + '</div>';
+  }
+  var chartSectionHTML =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">'
+    + chartCardHTML('powder', 'Powders On The Books', stats.typeBuckets.powder)
+    + chartCardHTML('capsule','Capsules On The Books', stats.typeBuckets.capsule)
     + '</div>';
 
   function weeksBox(label, weeks, units, avgPerDay, days, color) {
@@ -4866,7 +4980,61 @@ function renderOrdersSummary() {
       }).join('')
     + '</div>';
 
-  content.innerHTML = topStripHTML + splitBarHTML + weeksHTML + labelsHTML + statusHTML;
+  content.innerHTML = topStripHTML + chartSectionHTML + weeksHTML + labelsHTML + statusHTML;
+
+  // Instantiate the two dual-ring doughnut charts. Outer ring = Production
+  // Units, inner ring = Sample Packs. Both colored by Planning Status.
+  ['powder','capsule'].forEach(function(typeKey){
+    var tb = stats.typeBuckets[typeKey];
+    var canvas = document.getElementById('orders-donut-' + typeKey);
+    if (!canvas || typeof Chart === 'undefined') return;
+    var statuses = orderedStatuses(tb);
+    if (!statuses.length) {
+      // No data for this type — show a placeholder.
+      var ctxP = canvas.getContext('2d');
+      ctxP.fillStyle = '#2c2c2a';
+      ctxP.beginPath(); ctxP.arc(canvas.width/2, canvas.height/2, 70, 0, Math.PI*2); ctxP.stroke();
+      return;
+    }
+    var prodVals   = statuses.map(function(s){ return tb.prod[s] || 0; });
+    var sampleVals = statuses.map(function(s){ return tb.samp[s] || 0; });
+    var colors     = statuses.map(function(s){ return ORDERS_STATUS_COLOR[s] || '#888780'; });
+    // Lighter fill for sample packs to visually differentiate the inner ring.
+    var sampleColors = colors.map(function(c){ return c + '88'; });  // ~53% alpha
+    charts['orders-donut-' + typeKey] = new Chart(canvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: statuses,
+        datasets: [
+          { label: 'Production Units', data: prodVals,   backgroundColor: colors,       borderColor: '#141618', borderWidth: 2, hoverOffset: 6 },
+          { label: 'Sample Packs',     data: sampleVals, backgroundColor: sampleColors, borderColor: '#141618', borderWidth: 2, hoverOffset: 6 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '52%',
+        animation: { animateRotate: true, duration: 700 },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1e2124',
+            borderColor: '#2c2c2a',
+            borderWidth: 1,
+            titleColor: '#e8e6e0',
+            bodyColor: '#e8e6e0',
+            padding: 10,
+            callbacks: {
+              label: function(ctx){
+                var val = ctx.raw || 0;
+                return ctx.dataset.label + ' \u2014 ' + ctx.label + ': ' + val.toLocaleString() + ' units';
+              }
+            }
+          }
+        }
+      }
+    });
+  });
 }
 
 function renderProcurement() {
