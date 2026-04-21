@@ -813,7 +813,20 @@ function isValid(r) {
   // Trailing class must include "." and "…" — Sheets renders "Loading..." while
   // async formulas (IMPORTRANGE, QUERY, array) are still computing.
   var suspect = /^(loading|#error|#ref|#n\/?a|#value|#name|#div|#num|#null)[!?.\s\u2026]*$/i;
-  if (suspect.test(p) || suspect.test(l) || suspect.test(d)) {
+  // Product is "Brand - Product" — when either source cell is mid-recalc the
+  // concatenated value becomes something like "Loading... - Loading..." which
+  // is not a full-string sentinel match. Split on the " - " separator and
+  // reject if ANY segment is a sentinel; the row is mid-computation regardless.
+  function anyPartSentinel(s) {
+    if (!s) return false;
+    if (suspect.test(s)) return true;
+    var parts = s.split(' - ');
+    for (var i = 0; i < parts.length; i++) {
+      if (suspect.test(parts[i].trim())) return true;
+    }
+    return false;
+  }
+  if (anyPartSentinel(p) || suspect.test(l) || suspect.test(d)) {
     _recordSkip('sentinel', {date:d, lot:l, product:p});
     return false;
   }
