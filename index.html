@@ -5249,9 +5249,6 @@ function renderOrdersSummary() {
           : '')
       + '</div>';
 
-    var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
-    if (filtersActive) summaryLine += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
-
     // Brand-grouped body (the version you preferred) — brand header + nested
     // product rows, sorted brand-by-max-weeks, product-by-weeks desc.
     var colTemplate = '78px 1fr 100px 80px 150px 190px';
@@ -5290,7 +5287,20 @@ function renderOrdersSummary() {
           }).join('');
     }
 
-    var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
+    // Break the blocked-unit total into production + samples so this summary
+    // reconciles with the Summary tab's "Labels ready %" (which is production-
+    // only). Sample portion is parenthetical since the production number is
+    // the one that maps to capacity.
+    var filteredProdUnits = 0, filteredSampleUnits = 0;
+    filtered.forEach(function(lb){
+      var u = num(lb.row['Order Amount']);
+      if (isSamplePackOrBulk(lb.row)) filteredSampleUnits += u;
+      else                            filteredProdUnits   += u;
+    });
+    var mixNote = filteredSampleUnits > 0
+      ? ' <span style="color:#888780;">(' + filteredProdUnits.toLocaleString() + ' production + ' + filteredSampleUnits.toLocaleString() + ' samples)</span>'
+      : '';
+    var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units' + mixNote + ' across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
     if (filtersActive) summaryLine += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
 
     // Powder / Capsule count pills — reflect the current filter.
