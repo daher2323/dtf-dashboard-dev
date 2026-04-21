@@ -4796,7 +4796,9 @@ function renderMaterials() {
 
 function renderOrders() {
   fetchOpenOrdersIfNeeded(false);
-  if (ordersView === 'summary') { renderOrdersSummary(); return; }
+  // renderOrdersSummary builds the whole page and picks which sections to
+  // inject based on ordersView (summary / labels / planning).
+  renderOrdersSummary();
 }
 
 // YTD average daily output per line group. Powders = Line #1 + #4, Capsules = #2.
