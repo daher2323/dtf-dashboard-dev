@@ -5093,60 +5093,51 @@ function renderOrdersSummary() {
     var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
     if (filtersActive) summaryLine += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
 
-    // Flat, weeks-desc sorted table — no more brand grouping. Brand is a column.
-    var colTemplate = '72px 1.1fr 1.9fr 90px 72px 1.3fr';
+    // Brand-grouped body (the version you preferred) — brand header + nested
+    // product rows, sorted brand-by-max-weeks, product-by-weeks desc.
+    var colTemplate = '78px 1fr 100px 80px 180px';
     var bodyHTML;
     if (filtered.length === 0) {
-      bodyHTML = '<div style="padding:24px 2px;text-align:center;color:#888780;font-size:12px;font-family:system-ui;font-style:italic;">No blocked orders match the current filter.</div>';
+      bodyHTML = '<div style="padding:18px 2px;text-align:center;color:#888780;font-size:12px;font-family:system-ui;font-style:italic;">No blocked orders match the current filter.</div>';
     } else {
-      var flatRows = filtered.slice().sort(function(a,b){
-        var dw = num(b.row['# of Weeks on the Books']) - num(a.row['# of Weeks on the Books']);
-        if (dw) return dw;
-        return num(b.row['Order Amount']) - num(a.row['Order Amount']);
-      });
-      var headerCells = '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:12px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:6px 2px;border-bottom:0.5px solid #4a2020;position:sticky;top:0;background:#1a0a08;z-index:1;">'
-        +   '<div>Type</div><div>Brand</div><div>Product</div>'
-        +   '<div style="text-align:right;">Units</div><div style="text-align:right;">Weeks</div><div>Promise / Notes</div>'
-        + '</div>';
-      var dataRows = flatRows.map(function(lb){
-        var r = lb.row;
-        var typeColor = lb.type === 'Powder' ? LINE_COLOR['line#1'] : LINE_COLOR['line#2'];
-        var typeBg    = lb.type === 'Powder' ? LINE_BG['line#1']    : LINE_BG['line#2'];
-        var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
-        var weeksNum = num(weeksRaw);
-        var weeksLabel = weeksRaw ? weeksRaw + ' wk' : '\u2014';
-        var weeksColor = weeksNum >= 20 ? '#F09595' : weeksNum >= 8 ? '#FAC775' : '#888780';
-        return '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:12px;padding:8px 2px;border-bottom:0.5px dashed #3a1818;font-size:12px;font-family:system-ui;align-items:center;">'
-          + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+lb.type+'</span></div>'
-          + '<div style="color:#e8e6e0;font-weight:500;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(r['Brand Name']||'')+'</div>'
-          + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(r['Product Name']||'')+'</div>'
-          + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
-          + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:'+(weeksNum>=8?'500':'400')+';">'+esc(weeksLabel)+'</div>'
-          + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(r['Promise Date / Notes']||'')+'</div>'
-          + '</div>';
-      }).join('');
-      bodyHTML = '<div style="max-height:360px;overflow-y:auto;padding-right:6px;">'+headerCells+dataRows+'</div>';
+      bodyHTML = '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:0 2px 6px;border-bottom:0.5px solid #4a2020;">'
+        +   '<div>Type</div><div>Product</div><div style="text-align:right;">Units</div><div style="text-align:right;">Weeks</div><div>Promise / Notes</div>'
+        + '</div>'
+        + brandNames.map(function(brand){
+            var info = byBrand[brand];
+            var brandHeader = '<div style="padding:10px 2px 6px;display:flex;align-items:baseline;justify-content:space-between;gap:12px;border-top:0.5px solid #4a2020;">'
+              + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;font-family:system-ui;">'+esc(brand)+'</div>'
+              + '<div style="font-size:11px;color:#F09595;font-family:system-ui;font-variant-numeric:tabular-nums;">'+info.items.length+' product'+(info.items.length===1?'':'s')+' \u00b7 '+info.units.toLocaleString()+' units</div>'
+              + '</div>';
+            var rows = info.items.map(function(lb){
+              var r = lb.row;
+              var typeColor = lb.type === 'Powder' ? LINE_COLOR['line#1'] : LINE_COLOR['line#2'];
+              var typeBg    = lb.type === 'Powder' ? LINE_BG['line#1']    : LINE_BG['line#2'];
+              var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
+              var weeksNum = num(weeksRaw);
+              var weeksLabel = weeksRaw ? weeksRaw + ' wk' : '\u2014';
+              // Age color: muted by default, amber >=8 weeks, red >=20 weeks.
+              var weeksColor = weeksNum >= 20 ? '#F09595' : weeksNum >= 8 ? '#FAC775' : '#888780';
+              return '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:10px;padding:6px 2px;border-bottom:0.5px dashed #3a1818;font-size:12px;font-family:system-ui;align-items:center;">'
+                + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+lb.type+'</span></div>'
+                + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Product Name']||'')+'">'+esc(r['Product Name']||'')+'</div>'
+                + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
+                + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:'+(weeksNum>=8?'500':'400')+';">'+esc(weeksLabel)+'</div>'
+                + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Promise Date / Notes']||'')+'">'+esc(r['Promise Date / Notes']||'')+'</div>'
+                + '</div>';
+            }).join('');
+            return brandHeader + rows;
+          }).join('');
     }
 
-    // Powder / Capsule count pills for the header (reflect current filter).
-    var powderBlockedCount  = 0, capsuleBlockedCount = 0;
-    filtered.forEach(function(lb){ if (lb.type==='Powder') powderBlockedCount++; else if (lb.type==='Capsule') capsuleBlockedCount++; });
-    var powderPill  = powderBlockedCount  ? '<span style="padding:2px 9px;border-radius:5px;background:#791F1F;color:#F09595;font-size:10px;font-weight:500;font-family:system-ui;white-space:nowrap;">'+powderBlockedCount+' Powder</span>' : '';
-    var capsulePill = capsuleBlockedCount ? '<span style="padding:2px 9px;border-radius:5px;background:#2c2c2a;color:#AFA9EC;font-size:10px;font-weight:500;font-family:system-ui;white-space:nowrap;">'+capsuleBlockedCount+' Capsule</span>' : '';
+    var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
+    if (filtersActive) summaryLine += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
 
-    // Red circle alert icon, 16px.
-    var alertIcon = '<svg width="16" height="16" viewBox="0 0 16 16" style="flex-shrink:0;"><circle cx="8" cy="8" r="7" fill="#E24B4A"/><rect x="7.2" y="4" width="1.6" height="5.2" rx="0.3" fill="#1a0a08"/><circle cx="8" cy="11.4" r="0.95" fill="#1a0a08"/></svg>';
-
-    var summaryShort = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units';
-    if (filtersActive) summaryShort += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
-
-    labelsHTML = '<div style="background:#1a0a08;border:0.5px solid #791F1F;border-left:3px solid #E24B4A;border-radius:12px;padding:16px 18px;margin-bottom:16px;">'
-      + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-      +   alertIcon
-      +   '<div style="font-size:11px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Labels Blocker</div>'
-      +   '<div style="font-size:12px;color:#888780;font-family:system-ui;">'+summaryShort+'</div>'
-      +   powderPill
-      +   capsulePill
+    labelsHTML = '<div style="background:#2a0f0f;border:1px solid #791F1F;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+      +   '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L15 14H1z" stroke="#F09595" stroke-width="1.3" stroke-linejoin="round"/><line x1="8" y1="6" x2="8" y2="10" stroke="#F09595" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="12" r="0.6" fill="#F09595"/></svg>'
+      +   '<div style="font-size:12px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Labels blocker</div>'
+      +   '<div style="font-size:12px;color:#F09595;font-family:system-ui;">'+summaryLine+'</div>'
       + '</div>'
       + filterControls
       + bodyHTML
