@@ -4834,13 +4834,23 @@ function computeOrderStats() {
   function add(rows, kind){
     rows.forEach(function(r){
       var st = s(r) || '(blank)';
-      if (!br[st]) br[st] = { count:0, units:0, powder:0, capsule:0, powderUnits:0, capsuleUnits:0 };
+      if (!br[st]) br[st] = { count:0, units:0, powder:0, capsule:0, powderUnits:0, capsuleUnits:0, powderSamples:0, capsuleSamples:0 };
       if (!rowsByStatus[st]) rowsByStatus[st] = { powder:[], capsule:[] };
       br[st].count++;
       var u = num(r['Order Amount']);
       br[st].units += u;
-      if (kind==='powder') { br[st].powder++;  br[st].powderUnits  += u; rowsByStatus[st].powder.push(r); }
-      else                 { br[st].capsule++; br[st].capsuleUnits += u; rowsByStatus[st].capsule.push(r); }
+      var sample = isSamplePackOrBulk(r);
+      if (kind==='powder') {
+        br[st].powder++;
+        br[st].powderUnits += u;
+        if (sample) br[st].powderSamples++;
+        rowsByStatus[st].powder.push(r);
+      } else {
+        br[st].capsule++;
+        br[st].capsuleUnits += u;
+        if (sample) br[st].capsuleSamples++;
+        rowsByStatus[st].capsule.push(r);
+      }
     });
   }
   add(powder,'powder'); add(capsule,'capsule');
@@ -5076,6 +5086,11 @@ function renderOrdersSummary() {
     if (ordersStatusTypeFilter === 'capsule') return r.capsuleUnits || 0;
     return (r.powderUnits||0) + (r.capsuleUnits||0);
   }
+  function rowSamples(r) {
+    if (ordersStatusTypeFilter === 'powder')  return r.powderSamples  || 0;
+    if (ordersStatusTypeFilter === 'capsule') return r.capsuleSamples || 0;
+    return (r.powderSamples||0) + (r.capsuleSamples||0);
+  }
   // Filtered, unit-sorted list of statuses (largest first); rows with zero
   // in the current filter are dropped so the table only shows active buckets.
   var statusList = Object.keys(stats.statusBreakdown).map(function(st){
@@ -5100,11 +5115,12 @@ function renderOrdersSummary() {
     + '<button onclick="setOrdersStatusTypeFilter(\'capsule\')" style="'+typeBtnStyle(ordersStatusTypeFilter==='capsule')+'">Capsule</button>'
     + '</div>';
 
-  // Column grid: status pill | horizontal bar (fills) | orders | units | % of total
-  var stColTpl = '180px 1fr 80px 110px 80px';
+  // Column grid: status pill | horizontal bar (fills) | orders | samples | units | % of total
+  var stColTpl = '180px 1fr 80px 90px 110px 80px';
   var stHeadersHTML = '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:6px 2px 8px;border-bottom:0.5px solid #2c2c2a;">'
     + '<div>Status</div><div></div>'
     + '<div style="text-align:right;">Orders</div>'
+    + '<div style="text-align:right;">Samples</div>'
     + '<div style="text-align:right;">Units</div>'
     + '<div style="text-align:right;">% of Total</div>'
     + '</div>';
@@ -5112,11 +5128,12 @@ function renderOrdersSummary() {
   var stRowsHTML = statusList.map(function(item){
     var st = item.status;
     var r  = item.data;
-    var orders = rowOrders(r);
-    var units  = rowUnits(r);
-    var pct    = grandUnits ? (units / grandUnits * 100) : 0;
-    var barPct = maxUnits   ? (units / maxUnits   * 100) : 0;
-    var isOpen = ordersDrilldownStatus === st;
+    var orders  = rowOrders(r);
+    var samples = rowSamples(r);
+    var units   = rowUnits(r);
+    var pct     = grandUnits ? (units / grandUnits * 100) : 0;
+    var barPct  = maxUnits   ? (units / maxUnits   * 100) : 0;
+    var isOpen  = ordersDrilldownStatus === st;
 
     var bad = /^(Not Enough Labels|Hold)$/.test(st);
     var unp = /^(Customer Driven|Ready to be Planned|Not Enough Labels)$/.test(st);
@@ -5135,6 +5152,7 @@ function renderOrdersSummary() {
       +   '<div style="height:100%;width:'+barPct+'%;background:'+barColor+';border-radius:4px;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
       + '</div>'
       + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+orders.toLocaleString()+'</div>'
+      + '<div style="text-align:right;color:'+(samples?'#888780':'#444441')+';font-variant-numeric:tabular-nums;">'+samples.toLocaleString()+'</div>'
       + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+units.toLocaleString()+'</div>'
       + '<div style="text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+pct.toFixed(1)+'%</div>'
       + '</div>';
