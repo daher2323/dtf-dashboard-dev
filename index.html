@@ -311,6 +311,7 @@ var labelsBrandFilter = 'all';   // 'all' | <brand name>
 var labelsWeeksFilter = 'all';   // 'all' | '4' | '8'
 var ordersStatusTypeFilter = 'all'; // 'all' | 'powder' | 'capsule'
 var ordersDrilldownStatus = null;   // null | <status name> — which row is expanded
+var labelsBlockerCollapsed = false; // default expanded; toggle to hide body (filters + list)
 
 // Part number -> display group name. Parts listed here roll up under one row.
 var SKU_GROUPS = {
@@ -1475,6 +1476,12 @@ function setOrdersStatusTypeFilter(v) {
 function toggleOrdersDrilldown(status) {
   closeMsPanel();
   ordersDrilldownStatus = (ordersDrilldownStatus === status) ? null : status;
+  render();
+}
+
+function toggleLabelsBlockerCollapsed() {
+  closeMsPanel();
+  labelsBlockerCollapsed = !labelsBlockerCollapsed;
   render();
 }
 
@@ -5133,14 +5140,23 @@ function renderOrdersSummary() {
     var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
     if (filtersActive) summaryLine += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
 
+    // Collapse/expand button — down chevron when collapsed (opens down),
+    // up chevron when expanded (closes up).
+    var chevronRot = labelsBlockerCollapsed ? '0' : '180';
+    var collapseBtnLabel = labelsBlockerCollapsed ? 'Expand' : 'Collapse';
+    var collapseBtn = '<button onclick="toggleLabelsBlockerCollapsed()" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#F09595;font-size:11px;cursor:pointer;font-family:system-ui;transition:background .12s;" onmouseover="this.style.background=\'#3a1818\'" onmouseout="this.style.background=\'transparent\'" title="'+collapseBtnLabel+' Labels Blocker">'
+      + collapseBtnLabel
+      + '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="transform:rotate('+chevronRot+'deg);transition:transform .2s;"><polyline points="2,4 5,7 8,4" stroke="#F09595" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      + '</button>';
+
     labelsHTML = '<div style="background:#2a0f0f;border:1px solid #791F1F;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
       + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
       +   '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L15 14H1z" stroke="#F09595" stroke-width="1.3" stroke-linejoin="round"/><line x1="8" y1="6" x2="8" y2="10" stroke="#F09595" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="12" r="0.6" fill="#F09595"/></svg>'
       +   '<div style="font-size:12px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Labels blocker</div>'
       +   '<div style="font-size:12px;color:#F09595;font-family:system-ui;">'+summaryLine+'</div>'
+      +   collapseBtn
       + '</div>'
-      + filterControls
-      + bodyHTML
+      + (labelsBlockerCollapsed ? '' : (filterControls + bodyHTML))
       + '</div>';
   }
 
