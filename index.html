@@ -1443,8 +1443,10 @@ function renderSubBar() {
       + '</div>';
   } else if (mainSection === 'orders') {
     sb.innerHTML =
-      '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-      + '<button onclick="setOrdersView(\'summary\')" style="'+navBtnStyle(ordersView==='summary')+'">Summary</button>'
+      '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      + '<button onclick="setOrdersView(\'summary\')"  style="'+navBtnStyle(ordersView==='summary')+'">Summary</button>'
+      + '<button onclick="setOrdersView(\'labels\')"   style="'+navBtnStyle(ordersView==='labels')+'">Labels</button>'
+      + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'
       + '</div>';
   }
 }
@@ -5482,7 +5484,13 @@ function renderOrdersSummary() {
     + emptyStatus
     + '</div>';
 
-  content.innerHTML = weeksHTML + customerChartHTML + labelsHTML + statusHTML;
+  // Each sub-tab scopes to a single focused section. All compute still happens
+  // above (cheap); this just picks what to render.
+  var viewHTML;
+  if (ordersView === 'labels')        viewHTML = labelsHTML || '<div style="padding:24px;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">No orders are blocked by labels.</div>';
+  else if (ordersView === 'planning') viewHTML = statusHTML;
+  else                                viewHTML = weeksHTML + customerChartHTML;
+  content.innerHTML = viewHTML;
 }
 
 function renderProcurement() {
