@@ -312,6 +312,8 @@ var labelsWeeksFilter = 'all';   // 'all' | '4' | '8'
 var ordersStatusTypeFilter = 'all'; // 'all' | 'powder' | 'capsule'
 var ordersDrilldownStatus = null;   // null | <status name> — which row is expanded
 var labelsBlockerCollapsed = false; // default expanded; toggle to hide body (filters + list)
+var customerChartView = 'all';      // 'all' | 'powder' | 'capsule'
+var customerChartLimit = '10';      // '10' | '25' | 'all'
 
 // Part number -> display group name. Parts listed here roll up under one row.
 var SKU_GROUPS = {
@@ -1482,6 +1484,18 @@ function toggleOrdersDrilldown(status) {
 function toggleLabelsBlockerCollapsed() {
   closeMsPanel();
   labelsBlockerCollapsed = !labelsBlockerCollapsed;
+  render();
+}
+
+function setCustomerChartView(v) {
+  closeMsPanel();
+  customerChartView = v || 'all';
+  render();
+}
+
+function setCustomerChartLimit(v) {
+  closeMsPanel();
+  customerChartLimit = v || '10';
   render();
 }
 
@@ -4957,26 +4971,36 @@ function renderOrdersSummary() {
   var pWeeksUnpl  = pWeeklyCap > 0 ? pUnplanned / pWeeklyCap : null;
   var cWeeksUnpl  = cWeeklyCap > 0 ? cUnplanned / cWeeklyCap : null;
 
-  // Top strip — 4 scalar summaries. All unit values are production-only
-  // (samples excluded), so they reconcile exactly with the Weeks of Work
-  // card totals below.
+  // Top strip — 4 scalar summaries. Counts and percentages use the same
+  // onBooks (Complete/RTS excluded) basis as the rest of the page.
   var unplannedOrderPct = stats.totalBooksCount
     ? Math.round(stats.unplannedCount / stats.totalBooksCount * 100)
     : 0;
-  var totalProdCombined     = pProd + cProd;
-  var unplannedProdCombined = pUnplanned + cUnplanned;
+  // Brands on the Books — distinct Brand Names across both tabs (onBooks).
+  var brandSet = {};
+  (stats.rowsByStatus ? Object.keys(stats.rowsByStatus) : []).forEach(function(st){
+    var rb = stats.rowsByStatus[st];
+    (rb.powder  || []).forEach(function(r){ var b = (r['Brand Name']||'').trim(); if (b) brandSet[b] = true; });
+    (rb.capsule || []).forEach(function(r){ var b = (r['Brand Name']||'').trim(); if (b) brandSet[b] = true; });
+  });
+  var brandsCount = Object.keys(brandSet).length;
+  // Labels Ready % — share of production units that are NOT "Not Enough Labels".
+  var totalProdCombined = pProd + cProd;
+  var blockedProdUnits  = (pProdBucket['Not Enough Labels']||0) + (cProdBucket['Not Enough Labels']||0);
+  var labelsReadyPct    = totalProdCombined > 0 ? Math.round((totalProdCombined - blockedProdUnits) / totalProdCombined * 100) : 100;
+  var labelsReadyColor  = labelsReadyPct >= 70 ? '#9FE1CB' : labelsReadyPct >= 50 ? '#FAC775' : '#F09595';
   var topStripHTML =
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">'
     + _ordersCard('Orders on the books', stats.totalBooksCount.toLocaleString(),
         stats.powderBooksCount + ' powder \u00b7 ' + stats.capsuleBooksCount + ' capsule')
-    + _ordersCard('Production units on the books', totalProdCombined.toLocaleString(),
-        'Excludes samples (separate process)')
+    + _ordersCard('Brands on the books', brandsCount.toLocaleString(),
+        'Distinct brand names with open orders')
     + _ordersCard('Orders unplanned', stats.unplannedCount.toLocaleString(),
         unplannedOrderPct + '% of orders \u2014 Customer Driven, Ready to be Planned, Not Enough Labels',
         stats.unplannedCount > 0 ? '#FAC775' : '#e8e6e0')
-    + _ordersCard('Production units unplanned', unplannedProdCombined.toLocaleString(),
-        'Customer Driven, Ready to be Planned, Not Enough Labels',
-        unplannedProdCombined > 0 ? '#FAC775' : '#e8e6e0')
+    + _ordersCard('Labels ready', labelsReadyPct + '%',
+        blockedProdUnits.toLocaleString() + ' production units blocked by labels',
+        labelsReadyColor)
     + '</div>';
 
   var POWDER_WEEKS_MAX  = 20;
@@ -5021,6 +5045,116 @@ function renderOrdersSummary() {
   var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
     + weeksCard('Production units on the books', pProd + cProd,           pProd,      pWeeksBooks, cProd,      cWeeksBooks, LINE_COLOR['line#1'], LINE_COLOR['line#2'], '#e8e6e0')
     + weeksCard('Production units unplanned',    pUnplanned + cUnplanned, pUnplanned, pWeeksUnpl,  cUnplanned, cWeeksUnpl,  '#FAC775',             '#FAC775',             '#FAC775')
+    + '</div>';
+
+  // ── Customer Breakdown ────────────────────────────────────────────────
+  // Split-bar chart per customer (Brand). In All view, bars are split into
+  // powder (blue) + capsule (purple) segments proportional to each type's
+  // contribution. In Powder / Capsule view, bars use the single line color
+  // and rows drop off when they have zero in that type. Units use all
+  // on-the-books (production + samples + bulk) so a customer's full
+  // commitment is visible; Complete/RTS is excluded (via powderBooks /
+  // capsuleBooks already being onBooks-filtered).
+  var customerMap = {};
+  function _addToCustomerMap(rows, kind) {
+    rows.forEach(function(r){
+      var b = (r['Brand Name']||'').trim();
+      if (!b) return;
+      if (!customerMap[b]) customerMap[b] = { powder:0, capsule:0 };
+      customerMap[b][kind] += num(r['Order Amount']);
+    });
+  }
+  _addToCustomerMap(powderBooks,  'powder');
+  _addToCustomerMap(capsuleBooks, 'capsule');
+  var customersAll = Object.keys(customerMap).map(function(b){
+    var c = customerMap[b];
+    var total = customerChartView === 'powder' ? c.powder
+              : customerChartView === 'capsule' ? c.capsule
+              : (c.powder + c.capsule);
+    return { name:b, powder:c.powder, capsule:c.capsule, total:total };
+  }).filter(function(x){ return x.total > 0; })
+    .sort(function(a,b){ return b.total - a.total; });
+  var maxCustomerTotal = customersAll.length ? customersAll[0].total : 0;
+  var customerLimit = customerChartLimit === 'all' ? customersAll.length : parseInt(customerChartLimit, 10);
+  var customersVisible = customersAll.slice(0, customerLimit);
+  var customersHidden  = customersAll.slice(customerLimit);
+  var hiddenUnits = customersHidden.reduce(function(a,c){ return a + c.total; }, 0);
+
+  function customerPillStyle(active) {
+    return 'padding:4px 12px;border-radius:5px;border:1.5px solid '+(active?'#378ADD':'transparent')+';background:'+(active?'#0C447C':'transparent')+';color:'+(active?'#85B7EB':'#888780')+';font-weight:'+(active?'500':'400')+';font-size:11px;cursor:pointer;font-family:system-ui;transition:all .15s;';
+  }
+  var customerViewToggle = '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:7px;">'
+    + '<button onclick="setCustomerChartView(\'all\')"     style="'+customerPillStyle(customerChartView==='all')+'">All</button>'
+    + '<button onclick="setCustomerChartView(\'powder\')"  style="'+customerPillStyle(customerChartView==='powder')+'">Powder</button>'
+    + '<button onclick="setCustomerChartView(\'capsule\')" style="'+customerPillStyle(customerChartView==='capsule')+'">Capsule</button>'
+    + '</div>';
+  var customerLimitToggle = '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:7px;">'
+    + '<button onclick="setCustomerChartLimit(\'10\')"  style="'+customerPillStyle(customerChartLimit==='10')+'">Top 10</button>'
+    + '<button onclick="setCustomerChartLimit(\'25\')"  style="'+customerPillStyle(customerChartLimit==='25')+'">Top 25</button>'
+    + '<button onclick="setCustomerChartLimit(\'all\')" style="'+customerPillStyle(customerChartLimit==='all')+'">All</button>'
+    + '</div>';
+
+  var customerRowColTpl = '170px 1fr 110px';
+  var customerRowsHTML = customersVisible.map(function(c){
+    var pPct = maxCustomerTotal ? (c.powder  / maxCustomerTotal * 100) : 0;
+    var cPct = maxCustomerTotal ? (c.capsule / maxCustomerTotal * 100) : 0;
+    var totalPct = maxCustomerTotal ? (c.total / maxCustomerTotal * 100) : 0;
+    var barHTML;
+    if (customerChartView === 'all') {
+      barHTML = '<div style="height:10px;background:#1a1d20;border-radius:5px;overflow:hidden;display:flex;">'
+        + '<div style="background:'+LINE_COLOR['line#1']+';width:'+pPct+'%;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
+        + '<div style="background:'+LINE_COLOR['line#2']+';width:'+cPct+'%;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
+        + '</div>';
+    } else {
+      var solo = customerChartView === 'powder' ? LINE_COLOR['line#1'] : LINE_COLOR['line#2'];
+      barHTML = '<div style="height:10px;background:#1a1d20;border-radius:5px;overflow:hidden;">'
+        + '<div style="height:100%;width:'+totalPct+'%;background:'+solo+';border-radius:5px;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
+        + '</div>';
+    }
+    // Subtext line — kept present even in single-type views to hold a uniform
+    // row height (using non-breaking space so the block is tall enough).
+    var subtext;
+    if (customerChartView === 'all') {
+      var pLabel = c.powder  ? c.powder.toLocaleString()  + ' powder'  : '\u2014 powder';
+      var cLabel = c.capsule ? c.capsule.toLocaleString() + ' capsule' : '\u2014 capsule';
+      subtext = pLabel + ' \u00b7 ' + cLabel;
+    } else {
+      subtext = '\u00a0'; // &nbsp; to hold the line height
+    }
+    return '<div style="display:grid;grid-template-columns:'+customerRowColTpl+';gap:14px;padding:8px 2px;border-bottom:0.5px solid #2c2c2a;align-items:center;">'
+      + '<div style="min-width:0;">'
+      +   '<div style="color:#e8e6e0;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:system-ui;" title="'+esc(c.name)+'">'+esc(c.name)+'</div>'
+      +   '<div style="color:#5f5e5a;font-size:10px;font-family:system-ui;margin-top:2px;font-variant-numeric:tabular-nums;">'+subtext+'</div>'
+      + '</div>'
+      + barHTML
+      + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;font-size:12px;">'+c.total.toLocaleString()+'</div>'
+      + '</div>';
+  }).join('');
+
+  var customerHiddenFooter = customersHidden.length > 0
+    ? '<div style="padding:10px 2px;font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;text-align:center;border-bottom:0.5px solid #2c2c2a;">+' + customersHidden.length + ' more customer' + (customersHidden.length===1?'':'s') + ' \u00b7 ' + hiddenUnits.toLocaleString() + ' units not shown</div>'
+    : '';
+  var customerLegend = customerChartView === 'all' && customersVisible.length > 0
+    ? '<div style="display:flex;gap:18px;padding:10px 2px 2px;font-size:11px;color:#888780;font-family:system-ui;">'
+    +   '<div style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:2px;background:'+LINE_COLOR['line#1']+';"></span>Powder</div>'
+    +   '<div style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:2px;background:'+LINE_COLOR['line#2']+';"></span>Capsule</div>'
+    + '</div>'
+    : '';
+  var customerEmpty = customersAll.length === 0
+    ? '<div style="padding:20px 0;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">No customers for the selected view.</div>'
+    : '';
+  var customerChartHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">'
+    +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Customer Breakdown</div>'
+    +   '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+    +     customerViewToggle
+    +     customerLimitToggle
+    +   '</div>'
+    + '</div>'
+    + customerRowsHTML
+    + customerEmpty
+    + customerHiddenFooter
+    + customerLegend
     + '</div>';
 
   var labelsHTML = '';
@@ -5335,7 +5469,7 @@ function renderOrdersSummary() {
     + emptyStatus
     + '</div>';
 
-  content.innerHTML = topStripHTML + weeksHTML + labelsHTML + statusHTML;
+  content.innerHTML = topStripHTML + weeksHTML + customerChartHTML + labelsHTML + statusHTML;
 }
 
 function renderProcurement() {
