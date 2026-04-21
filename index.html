@@ -5100,7 +5100,7 @@ function renderOrdersSummary() {
                 + '<div style="color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(r['Product Name']||'')+'">'+esc(r['Product Name']||'')+'</div>'
                 + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
                 + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:'+(weeksNum>=8?'500':'400')+';">'+esc(weeksLabel)+'</div>'
-                + '<div style="color:#888780;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(r['Promise Date / Notes']||'')+'">'+esc(r['Promise Date / Notes']||'')+'</div>'
+                + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Promise Date / Notes']||'')+'">'+esc(r['Promise Date / Notes']||'')+'</div>'
                 + '</div>';
             }).join('');
             return brandHeader + rows;
