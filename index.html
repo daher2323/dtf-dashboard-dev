@@ -5260,7 +5260,7 @@ function renderOrdersSummary() {
       bodyHTML = '<div style="padding:18px 2px;text-align:center;color:#888780;font-size:12px;font-family:system-ui;font-style:italic;">No blocked orders match the current filter.</div>';
     } else {
       bodyHTML = '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:0 2px 6px;border-bottom:0.5px solid #4a2020;">'
-        +   '<div>Type</div><div>Product</div><div style="text-align:right;">Units</div><div style="text-align:right;">Weeks</div><div>Promise / Notes</div>'
+        +   '<div>Type</div><div>Product</div><div style="text-align:right;">Units</div><div style="text-align:right;">Weeks</div><div>Label Status Update</div>'
         + '</div>'
         + brandNames.map(function(brand){
             var info = byBrand[brand];
@@ -5282,7 +5282,7 @@ function renderOrdersSummary() {
                 + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Product Name']||'')+'">'+esc(r['Product Name']||'')+'</div>'
                 + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
                 + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:'+(weeksNum>=8?'500':'400')+';">'+esc(weeksLabel)+'</div>'
-                + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Promise Date / Notes']||'')+'">'+esc(r['Promise Date / Notes']||'')+'</div>'
+                + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Label Status Update']||'')+'">'+esc(r['Label Status Update']||'')+'</div>'
                 + '</div>';
             }).join('');
             return brandHeader + rows;
