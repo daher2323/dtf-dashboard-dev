@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DTF - Operations Center</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 54 54'%3E%3Crect x='2' y='2' width='50' height='50' rx='10' fill='%230C447C' stroke='%23378ADD' stroke-width='1.5'/%3E%3Ctext x='27' y='36' text-anchor='middle' font-size='22' font-weight='700' fill='%2385B7EB' font-family='system-ui,sans-serif' letter-spacing='-1'%3EDTF%3C/text%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -414,13 +415,21 @@ function _logSkipSummary() {
   if (!_skipStats) return;
   var total = _skipStats.invalid_date + _skipStats.missing_lot + _skipStats.missing_product + _skipStats.sentinel + _skipStats.orphan_line;
   if (total === 0) return;
-  console.warn('[DTF] Refresh skipped ' + total + ' row(s): '
+  // Warn only for skips that suggest real data problems (sentinels, orphan
+  // line values). invalid_date / missing_lot / missing_product are usually
+  // just blank auto-expanded rows at the bottom of the sheet — benign —
+  // so those land in console.debug (hidden by default). Call __dtfSkipped()
+  // from the console anytime for the full breakdown + examples.
+  var isSuspicious = _skipStats.sentinel > 0 || _skipStats.orphan_line > 0;
+  var msg = '[DTF] Refresh skipped ' + total + ' row(s): '
     + 'invalid_date=' + _skipStats.invalid_date
     + ', missing_lot=' + _skipStats.missing_lot
     + ', missing_product=' + _skipStats.missing_product
     + ', sentinel=' + _skipStats.sentinel
     + ', orphan_line=' + _skipStats.orphan_line
-    + '. Call __dtfSkipped(true) for examples.');
+    + '. Call __dtfSkipped(true) for examples.';
+  if (isSuspicious) console.warn(msg);
+  else              console.debug(msg);
 }
 window.__dtfSkipped = function(withExamples) {
   if (!_skipStats) return { message: 'No refresh has completed yet.' };
@@ -1124,9 +1133,6 @@ function parseMaterials(text) {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
     var dateCol = keys[0]; // Google Forms: first column is always the timestamp
-    console.log('CSV row count:', rows.length);
-    console.log('CSV headers:', rows[0] ? Object.keys(rows[0]).join(' | ') : 'none');
-    console.log('CSV row 1 sample:', rows[1] ? JSON.stringify(rows[1]) : 'none');
     return rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
     }).map(function(r){
