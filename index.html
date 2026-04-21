@@ -4922,6 +4922,80 @@ function renderOrdersSummary() {
     + weeksBox('Capsule weeks of work (Line #2)', capsuleWeeks, stats.capsuleBooksUnits, avg.capsuleAvg, avg.capsuleDays, LINE_COLOR['line#2'])
     + '</div>';
 
+  // Horizontal stacked bar — one per type, segmented by Planning Status in a
+  // fixed order so Powder and Capsule can be visually compared at a glance.
+  // Dark text on the light status-color segments keeps contrast strong.
+  function buildStackedBar(title, typeBucket) {
+    var set = typeBucket.statusSet;
+    var statuses = ORDERS_STATUS_ORDER.filter(function(s){ return set[s]; });
+    Object.keys(set).forEach(function(s){ if (statuses.indexOf(s) === -1) statuses.push(s); });
+    var total = typeBucket.totalProd + typeBucket.totalSamp;
+    if (total === 0) {
+      return '<div style="margin-bottom:18px;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">'
+        +   '<div style="font-size:11px;font-weight:600;color:#e8e6e0;text-transform:uppercase;letter-spacing:.08em;">'+title+'</div>'
+        +   '<div style="font-size:13px;color:#5f5e5a;font-family:system-ui;">No orders on the books</div>'
+        + '</div>'
+        + '<div style="height:48px;border-radius:8px;background:#0d0f10;border:0.5px dashed #2c2c2a;"></div>'
+        + '</div>';
+    }
+    var segHTML = statuses.map(function(st){
+      var units = (typeBucket.prod[st] || 0) + (typeBucket.samp[st] || 0);
+      if (!units) return '';
+      var pct = units / total * 100;
+      var color = ORDERS_STATUS_COLOR[st] || '#888780';
+      // Label visibility tiers — widest show name + value, medium show value,
+      // narrow show nothing (hover tooltip still works).
+      var showLabel = pct >= 9;
+      var showValue = pct >= 4;
+      var padding = pct >= 4 ? '0 10px' : '0 3px';
+      var content = '';
+      if (showLabel) content += '<div style="font-size:9px;color:#0d0f10;opacity:.72;text-transform:uppercase;letter-spacing:.06em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:1px;">'+esc(st)+'</div>';
+      if (showValue) content += '<div style="font-size:13px;color:#0d0f10;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15;">'+shortNum(units)+'</div>';
+      var title2 = esc(st) + ': ' + units.toLocaleString() + ' units (' + pct.toFixed(1) + '%)';
+      return '<div style="width:'+pct+'%;background:'+color+';display:flex;flex-direction:column;justify-content:center;padding:'+padding+';overflow:hidden;border-right:1px solid rgba(20,22,24,.4);transition:filter .15s;" title="'+title2+'" onmouseover="this.style.filter=\'brightness(1.08)\'" onmouseout="this.style.filter=\'none\'">'
+        + content
+        + '</div>';
+    }).join('');
+    return '<div style="margin-bottom:18px;">'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;gap:12px;">'
+      +   '<div style="font-size:11px;font-weight:600;color:#e8e6e0;text-transform:uppercase;letter-spacing:.08em;">'+title+'</div>'
+      +   '<div style="font-size:20px;font-weight:500;color:#e8e6e0;font-family:system-ui;font-variant-numeric:tabular-nums;line-height:1;">'+total.toLocaleString()+' <span style="font-size:11px;color:#888780;font-weight:400;">units</span></div>'
+      + '</div>'
+      + '<div style="display:flex;height:48px;border-radius:8px;overflow:hidden;background:#0d0f10;box-shadow:inset 0 0 0 0.5px #2c2c2a;">'
+      +   segHTML
+      + '</div>'
+      + '</div>';
+  }
+
+  // Build the shared legend from the union of statuses across both types,
+  // keeping the ORDERS_STATUS_ORDER so the legend reads in the same order
+  // as the bar segments.
+  var legendStatusSet = {};
+  Object.keys(stats.typeBuckets.powder.statusSet).forEach(function(s){ legendStatusSet[s] = true; });
+  Object.keys(stats.typeBuckets.capsule.statusSet).forEach(function(s){ legendStatusSet[s] = true; });
+  var legendStatuses = ORDERS_STATUS_ORDER.filter(function(s){ return legendStatusSet[s]; });
+  Object.keys(legendStatusSet).forEach(function(s){ if (legendStatuses.indexOf(s) === -1) legendStatuses.push(s); });
+  var legendHTML = legendStatuses.map(function(s){
+    var color = ORDERS_STATUS_COLOR[s] || '#888780';
+    return '<div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#888780;font-family:system-ui;">'
+      + '<span style="width:10px;height:10px;border-radius:3px;background:'+color+';flex-shrink:0;"></span>'
+      + esc(s)
+      + '</div>';
+  }).join('');
+
+  var unitsBarHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:12px;padding:18px 20px;margin-bottom:16px;">'
+    + '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:8px;">'
+    +   '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Units On The Books \u2014 By Planning Status</div>'
+    +   '<div style="font-size:11px;color:#5f5e5a;font-family:system-ui;">Bar width proportional to units</div>'
+    + '</div>'
+    + buildStackedBar('Powder',  stats.typeBuckets.powder)
+    + buildStackedBar('Capsule', stats.typeBuckets.capsule)
+    + '<div style="display:flex;flex-wrap:wrap;gap:16px;row-gap:8px;padding-top:14px;border-top:0.5px solid #2c2c2a;">'
+    +   legendHTML
+    + '</div>'
+    + '</div>';
+
   var labelsHTML = '';
   if (stats.labelBlocked.length > 0) {
     // Brand dropdown options come from ALL blocked orders (ignoring active
@@ -5097,7 +5171,7 @@ function renderOrdersSummary() {
     + '</div>';
 
 
-  content.innerHTML = topStripHTML + weeksHTML + labelsHTML + statusHTML;
+  content.innerHTML = topStripHTML + weeksHTML + unitsBarHTML + statusHTML + labelsHTML;
 }
 
 function renderProcurement() {
