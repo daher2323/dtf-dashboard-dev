@@ -4817,10 +4817,12 @@ function computeOrderStats() {
   function add(rows, kind){
     rows.forEach(function(r){
       var st = s(r) || '(blank)';
-      if (!br[st]) br[st] = { count:0, units:0, powder:0, capsule:0 };
+      if (!br[st]) br[st] = { count:0, units:0, powder:0, capsule:0, powderUnits:0, capsuleUnits:0 };
       br[st].count++;
-      br[st].units += num(r['Order Amount']);
-      if (kind==='powder') br[st].powder++; else br[st].capsule++;
+      var u = num(r['Order Amount']);
+      br[st].units += u;
+      if (kind==='powder') { br[st].powder++;  br[st].powderUnits  += u; }
+      else                 { br[st].capsule++; br[st].capsuleUnits += u; }
     });
   }
   add(powder,'powder'); add(capsule,'capsule');
@@ -5121,10 +5123,24 @@ function renderOrdersSummary() {
   var statuses = Object.keys(stats.statusBreakdown).sort(function(a,b){
     return stats.statusBreakdown[b].count - stats.statusBreakdown[a].count;
   });
+  var stColTpl = '1fr 80px 80px 120px 120px';
+  var pClr = LINE_TXT['line#1'];  // powder tint
+  var cClr = LINE_TXT['line#2'];  // capsule tint
   var statusHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
     + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;">Planning Status Breakdown</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 90px 140px 140px;gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:0 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
-    +   '<div>Status</div><div style="text-align:right;">Orders</div><div style="text-align:right;">Units</div><div style="text-align:right;">Powder / Cap</div>'
+    // Grouped header: "ORDERS" spans the first two number columns, "UNITS" spans the second two
+    + '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:0 2px 3px;">'
+    +   '<div></div>'
+    +   '<div style="grid-column:2 / span 2;text-align:center;border-bottom:0.5px solid #2c2c2a;padding-bottom:3px;">Orders</div>'
+    +   '<div style="grid-column:4 / span 2;text-align:center;border-bottom:0.5px solid #2c2c2a;padding-bottom:3px;">Units</div>'
+    + '</div>'
+    // Column sub-headers (powder/cap per group, color-tinted to match lines)
+    + '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
+    +   '<div>Status</div>'
+    +   '<div style="text-align:right;color:'+pClr+';">Powder</div>'
+    +   '<div style="text-align:right;color:'+cClr+';">Cap</div>'
+    +   '<div style="text-align:right;color:'+pClr+';">Powder</div>'
+    +   '<div style="text-align:right;color:'+cClr+';">Cap</div>'
     + '</div>'
     + statuses.map(function(st){
         var row = stats.statusBreakdown[st];
@@ -5132,11 +5148,16 @@ function renderOrdersSummary() {
         var unp = /^(Customer Driven|Ready to be Planned|Not Enough Labels)$/.test(st);
         var pillColor = bad ? '#F09595' : unp ? '#FAC775' : st === 'Complete/RTS' ? '#9FE1CB' : '#85B7EB';
         var pillBg    = bad ? '#2a0f0f' : unp ? '#2a1f0a' : st === 'Complete/RTS' ? '#0a2a20' : '#0a1f2a';
-        return '<div style="display:grid;grid-template-columns:1fr 90px 140px 140px;gap:10px;padding:8px 2px;border-bottom:0.5px solid #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
+        // Muted color for zero-count cells so the eye lands on the non-zero values.
+        function cell(val, isZero) {
+          return '<div style="text-align:right;color:'+(isZero?'#444441':'#e8e6e0')+';font-variant-numeric:tabular-nums;">'+val+'</div>';
+        }
+        return '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:10px;padding:8px 2px;border-bottom:0.5px solid #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
           + '<div><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:5px;background:'+pillBg+';color:'+pillColor+';">'+esc(st)+'</span></div>'
-          + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+row.count+'</div>'
-          + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+row.units.toLocaleString()+'</div>'
-          + '<div style="text-align:right;color:#888780;font-variant-numeric:tabular-nums;font-size:11px;">'+row.powder+' / '+row.capsule+'</div>'
+          + cell(row.powder||0,       (row.powder||0)===0)
+          + cell(row.capsule||0,      (row.capsule||0)===0)
+          + cell((row.powderUnits||0).toLocaleString(),  (row.powderUnits||0)===0)
+          + cell((row.capsuleUnits||0).toLocaleString(), (row.capsuleUnits||0)===0)
           + '</div>';
       }).join('')
     + '</div>';
