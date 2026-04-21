@@ -4944,21 +4944,19 @@ function renderOrdersSummary() {
   var pWeeksUnpl  = pWeeklyCap > 0 ? pUnplanned / pWeeklyCap : null;
   var cWeeksUnpl  = cWeeklyCap > 0 ? cUnplanned / cWeeklyCap : null;
 
-  var pctP = stats.totalBooksUnits ? (stats.powderBooksUnits  / stats.totalBooksUnits * 100) : 0;
-  var pctC = stats.totalBooksUnits ? (stats.capsuleBooksUnits / stats.totalBooksUnits * 100) : 0;
-
+  // Top strip is now Orders-focused. The unit totals (and their powder/capsule
+  // breakdown + weeks) live in the combined Weeks of Work cards below, so
+  // nothing on this row duplicates or disagrees with what's underneath.
+  var unplannedOrderPct = stats.totalBooksCount
+    ? Math.round(stats.unplannedCount / stats.totalBooksCount * 100)
+    : 0;
   var topStripHTML =
-      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">'
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">'
     + _ordersCard('Orders on the books', stats.totalBooksCount.toLocaleString(),
         stats.powderBooksCount + ' powder \u00b7 ' + stats.capsuleBooksCount + ' capsule')
-    + _ordersCard('Units on the books', stats.totalBooksUnits.toLocaleString(),
-        'Excludes Complete/RTS')
-    + _ordersCard('Units unplanned', stats.unplannedUnits.toLocaleString(),
-        stats.unplannedCount + ' orders \u2014 Customer Driven, Ready to be Planned, Not Enough Labels',
-        stats.unplannedUnits > 0 ? '#FAC775' : '#e8e6e0')
-    + _ordersCard('Powder / Capsule',
-        Math.round(pctP) + '% / ' + Math.round(pctC) + '%',
-        stats.powderBooksUnits.toLocaleString() + ' / ' + stats.capsuleBooksUnits.toLocaleString() + ' units')
+    + _ordersCard('Orders unplanned', stats.unplannedCount.toLocaleString(),
+        unplannedOrderPct + '% of orders \u2014 Customer Driven, Ready to be Planned, Not Enough Labels',
+        stats.unplannedCount > 0 ? '#FAC775' : '#e8e6e0')
     + '</div>';
 
   function weeksTypeRow(label, units, weeks, weeksColor) {
@@ -4966,22 +4964,24 @@ function renderOrdersSummary() {
     return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:6px 0;">'
       + '<div style="flex-shrink:0;">'
       +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
-      +   '<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
+      +   '<div style="font-size:20px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
       + '</div>'
-      + '<div style="font-size:20px;font-weight:500;color:'+weeksColor+';line-height:1;flex-shrink:0;">'+weeksStr+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
+      + '<div style="font-size:18px;font-weight:500;color:'+weeksColor+';line-height:1;flex-shrink:0;">'+weeksStr+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
       + '</div>';
   }
-  function weeksCard(title, pUnits, pWeeks, cUnits, cWeeks, pClr, cClr) {
-    return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
+  function weeksCard(title, total, pUnits, pWeeks, cUnits, cWeeks, pClr, cClr, totalClr) {
+    return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;">'
       + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">'+title+'</div>'
+      + '<div style="font-size:30px;font-weight:500;color:'+totalClr+';font-variant-numeric:tabular-nums;line-height:1;">'+total.toLocaleString()+'<span style="font-size:12px;color:#888780;font-weight:400;margin-left:6px;">units total</span></div>'
+      + '<div style="height:0.5px;background:#2c2c2a;margin:12px 0 4px;"></div>'
       + weeksTypeRow('Powder (Line #1 + #4)', pUnits, pWeeks, pClr)
       + '<div style="height:0.5px;background:#2c2c2a;margin:4px 0;"></div>'
       + weeksTypeRow('Capsule (Line #2)',     cUnits, cWeeks, cClr)
       + '</div>';
   }
   var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
-    + weeksCard('Production units on the books', pProd,      pWeeksBooks, cProd,      cWeeksBooks, LINE_COLOR['line#1'], LINE_COLOR['line#2'])
-    + weeksCard('Production units unplanned',    pUnplanned, pWeeksUnpl,  cUnplanned, cWeeksUnpl,  '#FAC775',             '#FAC775')
+    + weeksCard('Production units on the books', pProd + cProd,           pProd,      pWeeksBooks, cProd,      cWeeksBooks, LINE_COLOR['line#1'], LINE_COLOR['line#2'], '#e8e6e0')
+    + weeksCard('Production units unplanned',    pUnplanned + cUnplanned, pUnplanned, pWeeksUnpl,  cUnplanned, cWeeksUnpl,  '#FAC775',             '#FAC775',             '#FAC775')
     + '</div>';
 
   var labelsHTML = '';
