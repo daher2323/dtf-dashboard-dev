@@ -5058,6 +5058,7 @@ function renderOrdersSummary() {
   var customerMap = {};
   function _addToCustomerMap(rows, kind) {
     rows.forEach(function(r){
+      if (isSamplePackOrBulk(r)) return;  // production units only, same basis as Weeks of Work
       var b = (r['Brand Name']||'').trim();
       if (!b) return;
       if (!customerMap[b]) customerMap[b] = { powder:0, capsule:0 };
