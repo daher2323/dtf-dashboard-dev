@@ -256,19 +256,31 @@ var LINE_BG    = {'line#1':'#0C447C','line#2':'#3C3489','line#4':'#72243E'};
 var LINE_TXT   = {'line#1':'#85B7EB','line#2':'#AFA9EC','line#4':'#ED93B1'};
 var LINE_TYPE  = {'line#1':'Powder','line#2':'Capsules','line#4':'Powder'};
 
-// Planning Status palette — used by the Open Orders chart / legend.
-// Light, saturated-on-dark values that reuse the existing line palette where
-// practical so status colors feel visually consistent with the rest of the app.
+// Planning Status bar colors — used for the inline bars in the breakdown table
+// and any other status-keyed color usage. Saturated on-dark values that pair
+// with the ORDERS_STATUS_PILL backgrounds below.
 var ORDERS_STATUS_COLOR = {
-  'Customer Driven':     '#85B7EB',
-  'Ready to be Planned': '#9FE1CB',
-  'Not Enough Labels':   '#F09595',
-  'Hold':                '#FAC775',
-  'Process':             '#AFA9EC',
-  'Scheduled':           '#ED93B1',
-  'Packaging Pulled':    '#6EC6B8',
-  'Complete/RTS':        '#888780',
+  'Not Enough Labels':   '#E24B4A',
+  'Scheduled':           '#1D9E75',
+  'Process':             '#378ADD',
+  'Customer Driven':     '#7F77DD',
+  'Ready to be Planned': '#EF9F27',
+  'Packaging Pulled':    '#444441',
+  'Complete/RTS':        '#2c2c2a',
+  'Hold':                '#F09595',
   '(blank)':             '#444441'
+};
+// Status pill backgrounds + text colors, matched to each bar color above.
+var ORDERS_STATUS_PILL = {
+  'Not Enough Labels':   { bg:'#791F1F', color:'#F09595' },
+  'Scheduled':           { bg:'#085041', color:'#9FE1CB' },
+  'Process':             { bg:'#0C447C', color:'#85B7EB' },
+  'Customer Driven':     { bg:'#26215C', color:'#AFA9EC' },
+  'Ready to be Planned': { bg:'#633806', color:'#FAC775' },
+  'Packaging Pulled':    { bg:'#2c2c2a', color:'#888780' },
+  'Complete/RTS':        { bg:'#1a1d20', color:'#5f5e5a' },
+  'Hold':                { bg:'#2a0f0f', color:'#F09595' },
+  '(blank)':             { bg:'#1a1d20', color:'#5f5e5a' }
 };
 // Preferred ordering when listing statuses (exec report order).
 var ORDERS_STATUS_ORDER = ['Customer Driven','Not Enough Labels','Packaging Pulled','Process','Ready to be Planned','Scheduled','Hold','Complete/RTS','(blank)'];
@@ -299,7 +311,6 @@ var labelsBrandFilter = 'all';   // 'all' | <brand name>
 var labelsWeeksFilter = 'all';   // 'all' | '4' | '8'
 var ordersStatusTypeFilter = 'all'; // 'all' | 'powder' | 'capsule'
 var ordersDrilldownStatus = null;   // null | <status name> — which row is expanded
-var labelsBlockerCollapsed = false; // collapses the brand-list body, keeps header visible
 
 // Part number -> display group name. Parts listed here roll up under one row.
 var SKU_GROUPS = {
@@ -1464,12 +1475,6 @@ function setOrdersStatusTypeFilter(v) {
 function toggleOrdersDrilldown(status) {
   closeMsPanel();
   ordersDrilldownStatus = (ordersDrilldownStatus === status) ? null : status;
-  render();
-}
-
-function toggleLabelsBlockerCollapsed() {
-  closeMsPanel();
-  labelsBlockerCollapsed = !labelsBlockerCollapsed;
   render();
 }
 
@@ -4944,39 +4949,65 @@ function renderOrdersSummary() {
   var pWeeksUnpl  = pWeeklyCap > 0 ? pUnplanned / pWeeklyCap : null;
   var cWeeksUnpl  = cWeeklyCap > 0 ? cUnplanned / cWeeklyCap : null;
 
-  // Top strip is now Orders-focused. The unit totals (and their powder/capsule
-  // breakdown + weeks) live in the combined Weeks of Work cards below, so
-  // nothing on this row duplicates or disagrees with what's underneath.
+  // Top strip — 4 scalar summaries. All unit values are production-only
+  // (samples excluded), so they reconcile exactly with the Weeks of Work
+  // card totals below.
   var unplannedOrderPct = stats.totalBooksCount
     ? Math.round(stats.unplannedCount / stats.totalBooksCount * 100)
     : 0;
+  var totalProdCombined     = pProd + cProd;
+  var unplannedProdCombined = pUnplanned + cUnplanned;
   var topStripHTML =
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">'
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">'
     + _ordersCard('Orders on the books', stats.totalBooksCount.toLocaleString(),
         stats.powderBooksCount + ' powder \u00b7 ' + stats.capsuleBooksCount + ' capsule')
+    + _ordersCard('Production units on the books', totalProdCombined.toLocaleString(),
+        'Excludes samples (separate process)')
     + _ordersCard('Orders unplanned', stats.unplannedCount.toLocaleString(),
         unplannedOrderPct + '% of orders \u2014 Customer Driven, Ready to be Planned, Not Enough Labels',
         stats.unplannedCount > 0 ? '#FAC775' : '#e8e6e0')
+    + _ordersCard('Production units unplanned', unplannedProdCombined.toLocaleString(),
+        'Customer Driven, Ready to be Planned, Not Enough Labels',
+        unplannedProdCombined > 0 ? '#FAC775' : '#e8e6e0')
     + '</div>';
 
-  function weeksTypeRow(label, units, weeks, weeksColor) {
+  var POWDER_WEEKS_MAX  = 20;
+  var CAPSULE_WEEKS_MAX = 24;
+  function weeksProgressBar(weeks, maxWeeks, fillColor) {
+    var pct = weeks === null ? 0 : Math.min(weeks / maxWeeks, 1) * 100;
     var weeksStr = weeks === null ? '\u2014' : weeks.toFixed(1);
-    return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:6px 0;">'
-      + '<div style="flex-shrink:0;">'
-      +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
-      +   '<div style="font-size:20px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
+    return '<div style="margin-top:8px;">'
+      + '<div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;">'
+      +   '<div style="height:100%;width:'+pct+'%;background:'+fillColor+';border-radius:3px;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
       + '</div>'
-      + '<div style="font-size:18px;font-weight:500;color:'+weeksColor+';line-height:1;flex-shrink:0;">'+weeksStr+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:10px;color:#5f5e5a;font-family:system-ui;">'
+      +   '<span>0 wks</span>'
+      +   '<span style="color:'+fillColor+';font-weight:500;font-variant-numeric:tabular-nums;">'+weeksStr+' wks on the books</span>'
+      +   '<span>'+maxWeeks+' wks</span>'
+      + '</div>'
+      + '</div>';
+  }
+  function weeksTypeRow(label, units, weeks, fillColor, maxWeeks) {
+    var weeksStr = weeks === null ? '\u2014' : weeks.toFixed(1);
+    return '<div style="padding:8px 0;">'
+      + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">'
+      +   '<div style="flex-shrink:0;">'
+      +     '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
+      +     '<div style="font-size:20px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
+      +   '</div>'
+      +   '<div style="font-size:18px;font-weight:500;color:'+fillColor+';line-height:1;flex-shrink:0;">'+weeksStr+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
+      + '</div>'
+      + weeksProgressBar(weeks, maxWeeks, fillColor)
       + '</div>';
   }
   function weeksCard(title, total, pUnits, pWeeks, cUnits, cWeeks, pClr, cClr, totalClr) {
     return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;">'
       + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">'+title+'</div>'
       + '<div style="font-size:30px;font-weight:500;color:'+totalClr+';font-variant-numeric:tabular-nums;line-height:1;">'+total.toLocaleString()+'<span style="font-size:12px;color:#888780;font-weight:400;margin-left:6px;">units total</span></div>'
-      + '<div style="height:0.5px;background:#2c2c2a;margin:12px 0 4px;"></div>'
-      + weeksTypeRow('Powder (Line #1 + #4)', pUnits, pWeeks, pClr)
+      + '<div style="height:0.5px;background:#2c2c2a;margin:14px 0 4px;"></div>'
+      + weeksTypeRow('Powder (Line #1 + #4)', pUnits, pWeeks, pClr, POWDER_WEEKS_MAX)
       + '<div style="height:0.5px;background:#2c2c2a;margin:4px 0;"></div>'
-      + weeksTypeRow('Capsule (Line #2)',     cUnits, cWeeks, cClr)
+      + weeksTypeRow('Capsule (Line #2)',     cUnits, cWeeks, cClr, CAPSULE_WEEKS_MAX)
       + '</div>';
   }
   var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
@@ -5062,56 +5093,63 @@ function renderOrdersSummary() {
     var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
     if (filtersActive) summaryLine += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
 
-    var colTemplate = '78px 1fr 100px 80px 180px';
+    // Flat, weeks-desc sorted table — no more brand grouping. Brand is a column.
+    var colTemplate = '72px 1.1fr 1.9fr 90px 72px 1.3fr';
     var bodyHTML;
     if (filtered.length === 0) {
-      bodyHTML = '<div style="padding:18px 2px;text-align:center;color:#888780;font-size:12px;font-family:system-ui;font-style:italic;">No blocked orders match the current filter.</div>';
+      bodyHTML = '<div style="padding:24px 2px;text-align:center;color:#888780;font-size:12px;font-family:system-ui;font-style:italic;">No blocked orders match the current filter.</div>';
     } else {
-      bodyHTML = '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:0 2px 6px;border-bottom:0.5px solid #4a2020;">'
-        +   '<div>Type</div><div>Product</div><div style="text-align:right;">Units</div><div style="text-align:right;">Weeks</div><div>Promise / Notes</div>'
-        + '</div>'
-        + brandNames.map(function(brand){
-            var info = byBrand[brand];
-            var brandHeader = '<div style="padding:10px 2px 6px;display:flex;align-items:baseline;justify-content:space-between;gap:12px;border-top:0.5px solid #4a2020;">'
-              + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;font-family:system-ui;">'+esc(brand)+'</div>'
-              + '<div style="font-size:11px;color:#F09595;font-family:system-ui;font-variant-numeric:tabular-nums;">'+info.items.length+' product'+(info.items.length===1?'':'s')+' \u00b7 '+info.units.toLocaleString()+' units</div>'
-              + '</div>';
-            var rows = info.items.map(function(lb){
-              var r = lb.row;
-              var typeColor = lb.type === 'Powder' ? LINE_COLOR['line#1'] : LINE_COLOR['line#2'];
-              var typeBg    = lb.type === 'Powder' ? LINE_BG['line#1']    : LINE_BG['line#2'];
-              var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
-              var weeksNum = num(weeksRaw);
-              var weeksLabel = weeksRaw ? weeksRaw + ' wk' : '\u2014';
-              // Age color: muted by default, amber >=8 weeks, red >=20 weeks.
-              var weeksColor = weeksNum >= 20 ? '#F09595' : weeksNum >= 8 ? '#FAC775' : '#888780';
-              return '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:10px;padding:6px 2px;border-bottom:0.5px dashed #3a1818;font-size:12px;font-family:system-ui;align-items:center;">'
-                + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+lb.type+'</span></div>'
-                + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Product Name']||'')+'">'+esc(r['Product Name']||'')+'</div>'
-                + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
-                + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:'+(weeksNum>=8?'500':'400')+';">'+esc(weeksLabel)+'</div>'
-                + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Promise Date / Notes']||'')+'">'+esc(r['Promise Date / Notes']||'')+'</div>'
-                + '</div>';
-            }).join('');
-            return brandHeader + rows;
-          }).join('');
+      var flatRows = filtered.slice().sort(function(a,b){
+        var dw = num(b.row['# of Weeks on the Books']) - num(a.row['# of Weeks on the Books']);
+        if (dw) return dw;
+        return num(b.row['Order Amount']) - num(a.row['Order Amount']);
+      });
+      var headerCells = '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:12px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:6px 2px;border-bottom:0.5px solid #4a2020;position:sticky;top:0;background:#1a0a08;z-index:1;">'
+        +   '<div>Type</div><div>Brand</div><div>Product</div>'
+        +   '<div style="text-align:right;">Units</div><div style="text-align:right;">Weeks</div><div>Promise / Notes</div>'
+        + '</div>';
+      var dataRows = flatRows.map(function(lb){
+        var r = lb.row;
+        var typeColor = lb.type === 'Powder' ? LINE_COLOR['line#1'] : LINE_COLOR['line#2'];
+        var typeBg    = lb.type === 'Powder' ? LINE_BG['line#1']    : LINE_BG['line#2'];
+        var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
+        var weeksNum = num(weeksRaw);
+        var weeksLabel = weeksRaw ? weeksRaw + ' wk' : '\u2014';
+        var weeksColor = weeksNum >= 20 ? '#F09595' : weeksNum >= 8 ? '#FAC775' : '#888780';
+        return '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:12px;padding:8px 2px;border-bottom:0.5px dashed #3a1818;font-size:12px;font-family:system-ui;align-items:center;">'
+          + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+lb.type+'</span></div>'
+          + '<div style="color:#e8e6e0;font-weight:500;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(r['Brand Name']||'')+'</div>'
+          + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(r['Product Name']||'')+'</div>'
+          + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
+          + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:'+(weeksNum>=8?'500':'400')+';">'+esc(weeksLabel)+'</div>'
+          + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(r['Promise Date / Notes']||'')+'</div>'
+          + '</div>';
+      }).join('');
+      bodyHTML = '<div style="max-height:360px;overflow-y:auto;padding-right:6px;">'+headerCells+dataRows+'</div>';
     }
 
-    var chevronRot = labelsBlockerCollapsed ? '0' : '180';
-    var collapseBtnLabel = labelsBlockerCollapsed ? 'Expand' : 'Collapse';
-    var collapseBtn = '<button onclick="toggleLabelsBlockerCollapsed()" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#F09595;font-size:11px;cursor:pointer;font-family:system-ui;transition:background .12s;" onmouseover="this.style.background=\'#3a1818\'" onmouseout="this.style.background=\'transparent\'" title="'+collapseBtnLabel+' Labels Blocker">'
-      + collapseBtnLabel
-      + '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="transform:rotate('+chevronRot+'deg);transition:transform .2s;"><polyline points="2,4 5,7 8,4" stroke="#F09595" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-      + '</button>';
+    // Powder / Capsule count pills for the header (reflect current filter).
+    var powderBlockedCount  = 0, capsuleBlockedCount = 0;
+    filtered.forEach(function(lb){ if (lb.type==='Powder') powderBlockedCount++; else if (lb.type==='Capsule') capsuleBlockedCount++; });
+    var powderPill  = powderBlockedCount  ? '<span style="padding:2px 9px;border-radius:5px;background:#791F1F;color:#F09595;font-size:10px;font-weight:500;font-family:system-ui;white-space:nowrap;">'+powderBlockedCount+' Powder</span>' : '';
+    var capsulePill = capsuleBlockedCount ? '<span style="padding:2px 9px;border-radius:5px;background:#2c2c2a;color:#AFA9EC;font-size:10px;font-weight:500;font-family:system-ui;white-space:nowrap;">'+capsuleBlockedCount+' Capsule</span>' : '';
 
-    labelsHTML = '<div style="background:#2a0f0f;border:1px solid #791F1F;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
-      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
-      +   '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5L15 14H1z" stroke="#F09595" stroke-width="1.3" stroke-linejoin="round"/><line x1="8" y1="6" x2="8" y2="10" stroke="#F09595" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="12" r="0.6" fill="#F09595"/></svg>'
-      +   '<div style="font-size:12px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Labels blocker</div>'
-      +   '<div style="font-size:12px;color:#F09595;font-family:system-ui;">'+summaryLine+'</div>'
-      +   collapseBtn
+    // Red circle alert icon, 16px.
+    var alertIcon = '<svg width="16" height="16" viewBox="0 0 16 16" style="flex-shrink:0;"><circle cx="8" cy="8" r="7" fill="#E24B4A"/><rect x="7.2" y="4" width="1.6" height="5.2" rx="0.3" fill="#1a0a08"/><circle cx="8" cy="11.4" r="0.95" fill="#1a0a08"/></svg>';
+
+    var summaryShort = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units';
+    if (filtersActive) summaryShort += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
+
+    labelsHTML = '<div style="background:#1a0a08;border:0.5px solid #791F1F;border-left:3px solid #E24B4A;border-radius:12px;padding:16px 18px;margin-bottom:16px;">'
+      + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+      +   alertIcon
+      +   '<div style="font-size:11px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Labels Blocker</div>'
+      +   '<div style="font-size:12px;color:#888780;font-family:system-ui;">'+summaryShort+'</div>'
+      +   powderPill
+      +   capsulePill
       + '</div>'
-      + (labelsBlockerCollapsed ? '' : (filterControls + bodyHTML))
+      + filterControls
+      + bodyHTML
       + '</div>';
   }
 
@@ -5180,10 +5218,9 @@ function renderOrdersSummary() {
     var barPct     = maxProd   ? (prodUnits / maxProd   * 100) : 0;
     var isOpen     = ordersDrilldownStatus === st;
 
-    var bad = /^(Not Enough Labels|Hold)$/.test(st);
-    var unp = /^(Customer Driven|Ready to be Planned|Not Enough Labels)$/.test(st);
-    var pillColor = bad ? '#F09595' : unp ? '#FAC775' : st === 'Complete/RTS' ? '#9FE1CB' : '#85B7EB';
-    var pillBg    = bad ? '#2a0f0f' : unp ? '#2a1f0a' : st === 'Complete/RTS' ? '#0a2a20' : '#0a1f2a';
+    var pill      = ORDERS_STATUS_PILL[st] || { bg:'#1a1d20', color:'#5f5e5a' };
+    var pillColor = pill.color;
+    var pillBg    = pill.bg;
     var barColor  = ORDERS_STATUS_COLOR[st] || '#888780';
     var rowBg = isOpen ? '#1a1d20' : 'transparent';
 
