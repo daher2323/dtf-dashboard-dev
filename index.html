@@ -5064,8 +5064,14 @@ function renderOrdersSummary() {
       customerMap[b][kind] += num(r['Order Amount']);
     });
   }
-  _addToCustomerMap(powderBooks,  'powder');
-  _addToCustomerMap(capsuleBooks, 'capsule');
+  // rowsByStatus is already keyed off the onBooks-filtered powderBooks /
+  // capsuleBooks arrays inside computeOrderStats, so iterating here gives
+  // the same set without needing a separate export.
+  Object.keys(stats.rowsByStatus || {}).forEach(function(st){
+    var rb = stats.rowsByStatus[st] || {};
+    _addToCustomerMap(rb.powder  || [], 'powder');
+    _addToCustomerMap(rb.capsule || [], 'capsule');
+  });
   var customersAll = Object.keys(customerMap).map(function(b){
     var c = customerMap[b];
     var total = customerChartView === 'powder' ? c.powder
