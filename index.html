@@ -4933,18 +4933,31 @@ function renderOrdersSummary() {
   var labelsHTML = '';
   if (stats.labelBlocked.length > 0) {
     var blockedUnits = stats.labelBlocked.reduce(function(a,lb){ return a + num(lb.row['Order Amount']); }, 0);
-    // Group by Brand Name, sort brands by total stuck units desc, sort products
-    // within each brand by units desc.
+    // Group by Brand Name. Within each brand, products are sorted by weeks on
+    // the books desc (oldest first); brands are ordered by the oldest single
+    // stuck item in the brand, so any brand with a long-stuck order surfaces
+    // to the top.
     var byBrand = {};
     stats.labelBlocked.forEach(function(lb){
       var brand = (lb.row['Brand Name']||'').trim() || '(no brand)';
-      if (!byBrand[brand]) byBrand[brand] = { items:[], units:0 };
+      if (!byBrand[brand]) byBrand[brand] = { items:[], units:0, maxWeeks:0 };
       byBrand[brand].items.push(lb);
       byBrand[brand].units += num(lb.row['Order Amount']);
+      var w = num(lb.row['# of Weeks on the Books']);
+      if (w > byBrand[brand].maxWeeks) byBrand[brand].maxWeeks = w;
     });
-    var brandNames = Object.keys(byBrand).sort(function(a,b){ return byBrand[b].units - byBrand[a].units; });
+    var brandNames = Object.keys(byBrand).sort(function(a,b){
+      var dw = byBrand[b].maxWeeks - byBrand[a].maxWeeks;
+      if (dw) return dw;
+      // Tie-break on stuck units so the bigger-impact brand sits higher.
+      return byBrand[b].units - byBrand[a].units;
+    });
     brandNames.forEach(function(b){
-      byBrand[b].items.sort(function(a,c){ return num(c.row['Order Amount']) - num(a.row['Order Amount']); });
+      byBrand[b].items.sort(function(a,c){
+        var dw = num(c.row['# of Weeks on the Books']) - num(a.row['# of Weeks on the Books']);
+        if (dw) return dw;
+        return num(c.row['Order Amount']) - num(a.row['Order Amount']);
+      });
     });
     var colTemplate = '78px 1fr 100px 80px 180px';
     labelsHTML = '<div style="background:#2a0f0f;border:1px solid #791F1F;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
