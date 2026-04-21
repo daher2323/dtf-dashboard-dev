@@ -4922,22 +4922,21 @@ function renderOrdersSummary() {
   var stats = computeOrderStats();
   var avg = computeYTDDailyAvgByType();
   // 5 production days per week (Mon-Fri). Weeks of Work use production units
-  // only (samples run on a separate process) and combined line capacity
-  // (Line #1 + #2 + #4), matching the weekly exec report's single "weeks of
-  // work" number rather than a per-line split.
-  var combinedDailyAvg = avg.powderAvg + avg.capsuleAvg;
-  var combinedWeeklyCap = combinedDailyAvg * 5;
+  // only (samples run on a separate process). Powder weeks use Line #1 + #4
+  // YTD daily average; Capsule weeks use Line #2 YTD daily average.
+  var pWeeklyCap = avg.powderAvg  * 5;
+  var cWeeklyCap = avg.capsuleAvg * 5;
   var pProd = (stats.typeBuckets.powder  && stats.typeBuckets.powder.totalProd)  || 0;
   var cProd = (stats.typeBuckets.capsule && stats.typeBuckets.capsule.totalProd) || 0;
-  var totalProdBooks = pProd + cProd;
   var UNPLANNED_STATUSES = ['Customer Driven','Ready to be Planned','Not Enough Labels'];
   var pProdBucket = (stats.typeBuckets.powder  && stats.typeBuckets.powder.prod)  || {};
   var cProdBucket = (stats.typeBuckets.capsule && stats.typeBuckets.capsule.prod) || {};
-  var unplannedProdUnits = UNPLANNED_STATUSES.reduce(function(sum, st){
-    return sum + (pProdBucket[st]||0) + (cProdBucket[st]||0);
-  }, 0);
-  var totalWeeks     = combinedWeeklyCap > 0 ? totalProdBooks    / combinedWeeklyCap : null;
-  var unplannedWeeks = combinedWeeklyCap > 0 ? unplannedProdUnits / combinedWeeklyCap : null;
+  var pUnplanned = UNPLANNED_STATUSES.reduce(function(sum, st){ return sum + (pProdBucket[st]||0); }, 0);
+  var cUnplanned = UNPLANNED_STATUSES.reduce(function(sum, st){ return sum + (cProdBucket[st]||0); }, 0);
+  var pWeeksBooks = pWeeklyCap > 0 ? pProd      / pWeeklyCap : null;
+  var cWeeksBooks = cWeeklyCap > 0 ? cProd      / cWeeklyCap : null;
+  var pWeeksUnpl  = pWeeklyCap > 0 ? pUnplanned / pWeeklyCap : null;
+  var cWeeksUnpl  = cWeeklyCap > 0 ? cUnplanned / cWeeklyCap : null;
 
   var pctP = stats.totalBooksUnits ? (stats.powderBooksUnits  / stats.totalBooksUnits * 100) : 0;
   var pctC = stats.totalBooksUnits ? (stats.capsuleBooksUnits / stats.totalBooksUnits * 100) : 0;
@@ -4956,24 +4955,27 @@ function renderOrdersSummary() {
         stats.powderBooksUnits.toLocaleString() + ' / ' + stats.capsuleBooksUnits.toLocaleString() + ' units')
     + '</div>';
 
-  function weeksBox(label, units, weeks, hint, unitsColor, weeksColor) {
+  function weeksTypeRow(label, units, weeks, weeksColor) {
     var weeksStr = weeks === null ? '\u2014' : weeks.toFixed(1);
-    return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
-      + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">'+label+'</div>'
-      + '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">'
-      +   '<div style="font-size:26px;font-weight:500;color:'+unitsColor+';font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:12px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
-      +   '<div style="font-size:20px;font-weight:500;color:'+weeksColor+';line-height:1;">'+weeksStr+'<span style="font-size:12px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
+    return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:6px 0;">'
+      + '<div style="flex-shrink:0;">'
+      +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
+      +   '<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
       + '</div>'
-      + '<div style="font-size:11px;color:#5f5e5a;margin-top:8px;font-family:system-ui;">'+hint+'</div>'
+      + '<div style="font-size:20px;font-weight:500;color:'+weeksColor+';line-height:1;flex-shrink:0;">'+weeksStr+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
       + '</div>';
   }
-  var capacityHint = combinedDailyAvg > 0
-    ? Math.round(combinedDailyAvg).toLocaleString() + '/day YTD across Line #1 + #2 + #4 \u00b7 samples excluded (separate process)'
-    : 'No YTD production data yet';
-  var unplannedHint = 'Customer Driven + Ready to be Planned + Not Enough Labels \u00b7 samples excluded';
+  function weeksCard(title, pUnits, pWeeks, cUnits, cWeeks, pClr, cClr) {
+    return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
+      + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">'+title+'</div>'
+      + weeksTypeRow('Powder (Line #1 + #4)', pUnits, pWeeks, pClr)
+      + '<div style="height:0.5px;background:#2c2c2a;margin:4px 0;"></div>'
+      + weeksTypeRow('Capsule (Line #2)',     cUnits, cWeeks, cClr)
+      + '</div>';
+  }
   var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
-    + weeksBox('Production units on the books', totalProdBooks,     totalWeeks,     capacityHint,  '#e8e6e0', '#85B7EB')
-    + weeksBox('Production units unplanned',    unplannedProdUnits, unplannedWeeks, unplannedHint, '#FAC775', '#FAC775')
+    + weeksCard('Production units on the books', pProd,      pWeeksBooks, cProd,      cWeeksBooks, LINE_COLOR['line#1'], LINE_COLOR['line#2'])
+    + weeksCard('Production units unplanned',    pUnplanned, pWeeksUnpl,  cUnplanned, cWeeksUnpl,  '#FAC775',             '#FAC775')
     + '</div>';
 
   var labelsHTML = '';
