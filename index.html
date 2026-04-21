@@ -4841,7 +4841,7 @@ function computeOrderStats() {
   function add(rows, kind){
     rows.forEach(function(r){
       var st = s(r) || '(blank)';
-      if (!br[st]) br[st] = { count:0, units:0, powder:0, capsule:0, powderUnits:0, capsuleUnits:0, powderSamples:0, capsuleSamples:0 };
+      if (!br[st]) br[st] = { count:0, units:0, powder:0, capsule:0, powderUnits:0, capsuleUnits:0, powderSamples:0, capsuleSamples:0, powderSampleUnits:0, capsuleSampleUnits:0 };
       if (!rowsByStatus[st]) rowsByStatus[st] = { powder:[], capsule:[] };
       br[st].count++;
       var u = num(r['Order Amount']);
@@ -4850,12 +4850,12 @@ function computeOrderStats() {
       if (kind==='powder') {
         br[st].powder++;
         br[st].powderUnits += u;
-        if (sample) br[st].powderSamples++;
+        if (sample) { br[st].powderSamples++;  br[st].powderSampleUnits  += u; }
         rowsByStatus[st].powder.push(r);
       } else {
         br[st].capsule++;
         br[st].capsuleUnits += u;
-        if (sample) br[st].capsuleSamples++;
+        if (sample) { br[st].capsuleSamples++; br[st].capsuleSampleUnits += u; }
         rowsByStatus[st].capsule.push(r);
       }
     });
@@ -5118,19 +5118,24 @@ function renderOrdersSummary() {
     if (ordersStatusTypeFilter === 'capsule') return r.capsuleUnits || 0;
     return (r.powderUnits||0) + (r.capsuleUnits||0);
   }
-  function rowSamples(r) {
-    if (ordersStatusTypeFilter === 'powder')  return r.powderSamples  || 0;
-    if (ordersStatusTypeFilter === 'capsule') return r.capsuleSamples || 0;
-    return (r.powderSamples||0) + (r.capsuleSamples||0);
+  function rowSampleUnits(r) {
+    if (ordersStatusTypeFilter === 'powder')  return r.powderSampleUnits  || 0;
+    if (ordersStatusTypeFilter === 'capsule') return r.capsuleSampleUnits || 0;
+    return (r.powderSampleUnits||0) + (r.capsuleSampleUnits||0);
+  }
+  function rowProdUnits(r) {
+    return rowUnits(r) - rowSampleUnits(r);
   }
   // Filtered, unit-sorted list of statuses (largest first); rows with zero
-  // in the current filter are dropped so the table only shows active buckets.
+  // production AND zero sample units in the current filter are dropped.
+  // Sort, bar width, and % of Total all key off Production Units — the
+  // primary metric matching the Weeks of Work cards.
   var statusList = Object.keys(stats.statusBreakdown).map(function(st){
     return { status: st, data: stats.statusBreakdown[st] };
   }).filter(function(it){ return rowUnits(it.data) > 0; })
-    .sort(function(a,b){ return rowUnits(b.data) - rowUnits(a.data); });
-  var grandUnits = statusList.reduce(function(a,it){ return a + rowUnits(it.data); }, 0);
-  var maxUnits   = statusList.length ? rowUnits(statusList[0].data) : 0;
+    .sort(function(a,b){ return rowProdUnits(b.data) - rowProdUnits(a.data); });
+  var grandProd = statusList.reduce(function(a,it){ return a + rowProdUnits(it.data); }, 0);
+  var maxProd   = statusList.reduce(function(m,it){ var v = rowProdUnits(it.data); return v>m?v:m; }, 0);
 
   // Collapse an orphan drilldown (e.g. user filtered to a type where the
   // previously-open status has no rows).
@@ -5147,25 +5152,25 @@ function renderOrdersSummary() {
     + '<button onclick="setOrdersStatusTypeFilter(\'capsule\')" style="'+typeBtnStyle(ordersStatusTypeFilter==='capsule')+'">Capsule</button>'
     + '</div>';
 
-  // Column grid: status pill | horizontal bar (fills) | orders | samples | units | % of total
-  var stColTpl = '180px 1fr 80px 90px 110px 80px';
+  // Column grid: status pill | horizontal bar | orders | production units | sample packs | % of total
+  var stColTpl = '180px 1fr 70px 110px 110px 75px';
   var stHeadersHTML = '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:6px 2px 8px;border-bottom:0.5px solid #2c2c2a;">'
     + '<div>Status</div><div></div>'
     + '<div style="text-align:right;">Orders</div>'
-    + '<div style="text-align:right;">Samples</div>'
-    + '<div style="text-align:right;">Units</div>'
+    + '<div style="text-align:right;">Production Units</div>'
+    + '<div style="text-align:right;">Sample Packs</div>'
     + '<div style="text-align:right;">% of Total</div>'
     + '</div>';
 
   var stRowsHTML = statusList.map(function(item){
     var st = item.status;
     var r  = item.data;
-    var orders  = rowOrders(r);
-    var samples = rowSamples(r);
-    var units   = rowUnits(r);
-    var pct     = grandUnits ? (units / grandUnits * 100) : 0;
-    var barPct  = maxUnits   ? (units / maxUnits   * 100) : 0;
-    var isOpen  = ordersDrilldownStatus === st;
+    var orders     = rowOrders(r);
+    var prodUnits  = rowProdUnits(r);
+    var sampleU    = rowSampleUnits(r);
+    var pct        = grandProd ? (prodUnits / grandProd * 100) : 0;
+    var barPct     = maxProd   ? (prodUnits / maxProd   * 100) : 0;
+    var isOpen     = ordersDrilldownStatus === st;
 
     var bad = /^(Not Enough Labels|Hold)$/.test(st);
     var unp = /^(Customer Driven|Ready to be Planned|Not Enough Labels)$/.test(st);
@@ -5184,8 +5189,8 @@ function renderOrdersSummary() {
       +   '<div style="height:100%;width:'+barPct+'%;background:'+barColor+';border-radius:4px;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
       + '</div>'
       + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+orders.toLocaleString()+'</div>'
-      + '<div style="text-align:right;color:'+(samples?'#888780':'#444441')+';font-variant-numeric:tabular-nums;">'+samples.toLocaleString()+'</div>'
-      + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+units.toLocaleString()+'</div>'
+      + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+prodUnits.toLocaleString()+'</div>'
+      + '<div style="text-align:right;color:'+(sampleU?'#888780':'#444441')+';font-variant-numeric:tabular-nums;">'+(sampleU?sampleU.toLocaleString():'\u2014')+'</div>'
       + '<div style="text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+pct.toFixed(1)+'%</div>'
       + '</div>';
 
