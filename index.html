@@ -1005,8 +1005,38 @@ function parseOpenOrders(text) {
   } catch(e) { return null; }
 }
 
+// sessionStorage cache — restores instantly on page refresh so users don't
+// eat the 10-20s cold-fetch latency twice in the same session. 2-min TTL
+// trades a tiny bit of staleness for a dramatic UX win.
+var OPEN_ORDERS_CACHE_KEY = 'dtf_open_orders_cache_v1';
+var OPEN_ORDERS_CACHE_TTL = 2 * 60 * 1000;
+
+function _loadOpenOrdersCache() {
+  try {
+    var raw = sessionStorage.getItem(OPEN_ORDERS_CACHE_KEY);
+    if (!raw) return;
+    var c = JSON.parse(raw);
+    if (!c || !Array.isArray(c.powder) || !Array.isArray(c.capsule)) return;
+    if (Date.now() - (c.ts || 0) > OPEN_ORDERS_CACHE_TTL) return;
+    openOrdersPowder = c.powder;
+    openOrdersCapsule = c.capsule;
+    openOrdersLastFetch = c.ts;
+  } catch(e) { /* storage disabled or malformed — ignore */ }
+}
+
+function _saveOpenOrdersCache() {
+  try {
+    sessionStorage.setItem(OPEN_ORDERS_CACHE_KEY, JSON.stringify({
+      powder: openOrdersPowder,
+      capsule: openOrdersCapsule,
+      ts: openOrdersLastFetch
+    }));
+  } catch(e) { /* quota exceeded or storage disabled — ignore */ }
+}
+
 // Fetch both open-orders CSVs in the background. Doesn't block page load.
-// Called on demand (entering the Open Orders tab) and by the refresh timer.
+// Called on demand (entering the Open Orders tab), on initial page load for
+// admins (to warm the CDN cache), and by the refresh timer.
 function fetchOpenOrdersIfNeeded(force) {
   if (openOrdersFetchInFlight) return;
   var haveBoth = openOrdersPowder !== null && openOrdersCapsule !== null;
@@ -1023,6 +1053,7 @@ function fetchOpenOrdersIfNeeded(force) {
     if (c !== null) openOrdersCapsule = c;
     openOrdersLastFetch = Date.now();
     openOrdersFetchInFlight = false;
+    _saveOpenOrdersCache();
     if (mainSection === 'orders') render();
   }).catch(function(){
     openOrdersFetchInFlight = false;
@@ -1180,9 +1211,13 @@ function loadDashboard() {
     renderSubBar();
     render();
     startRefreshTimers();
-    // Fetch materials + lot index in background — don't block main load
+    // Fetch materials + lot index + open orders in background — don't block
+    // main load. Warming Open Orders now means the tab is usually ready by
+    // the time the user navigates there (Google Sheets' /pub?output=csv has
+    // highly variable latency — 1-20s for these sheets).
     fetchMaterialsIfNeeded();
     fetchLotIndexIfNeeded();
+    if (userRole === 'admin') fetchOpenOrdersIfNeeded(false);
     // Safety net: if daily view looks empty after load, re-fetch once after a short delay
     // Guards against Google Sheets CDN serving a stale response on first hit
     if (topView === 'summary' && subView === 'today') {
@@ -1282,7 +1317,9 @@ function startRefreshTimers() {
   refreshTimer = setInterval(function(){
     checkDateRollover();
     if(topView==='summary'&&subView==='performance'||topView==='detail') refreshAndRender(false);
-    if(mainSection==='orders') fetchOpenOrdersIfNeeded(true);
+    // Keep open-orders CDN cache warm even when the user is on another tab,
+    // so switching back is instant. Admin-only (viewers can't see the tab).
+    if(userRole==='admin') fetchOpenOrdersIfNeeded(false);
   }, 5*60*1000);
   todayTimer = setInterval(function(){
     checkDateRollover();
@@ -5641,6 +5678,10 @@ function closeExportPopover() {
 }
 
 function confirmExport() { closeExportPopover(); exportDetailExcel(); }
+
+// Restore Open Orders from sessionStorage before anything else — a page
+// refresh inside the same session should feel instant on the Orders tab.
+_loadOpenOrdersCache();
 
 if (sessionStorage.getItem('dtf_auth') === '1') {
   userRole = sessionStorage.getItem('dtf_role') || 'viewer';
