@@ -4852,8 +4852,9 @@ function computeOrderStats() {
     .concat(capsuleBooks.filter(function(r){ return s(r) === 'Not Enough Labels'; })
       .map(function(r){ return {row:r, type:'Capsule'}; }));
 
-  // Full status breakdown — includes Complete/RTS so nothing is hidden.
-  // Row arrays per (status, type) preserved for drill-down rendering.
+  // Status breakdown — excludes Complete/RTS (those are out the door, not open
+  // work). Using the already-onBooks-filtered arrays keeps everything on this
+  // page aligned on the same denominator.
   var br = {};
   var rowsByStatus = {};
   function add(rows, kind){
@@ -4878,7 +4879,7 @@ function computeOrderStats() {
       }
     });
   }
-  add(powder,'powder'); add(capsule,'capsule');
+  add(powderBooks,'powder'); add(capsuleBooks,'capsule');
 
   // Per-type × per-status × (production | sample) breakdown used by the chart.
   // Only on-the-books rows (Complete/RTS excluded).
@@ -5300,6 +5301,21 @@ function renderOrdersSummary() {
   var emptyStatus = statusList.length === 0
     ? '<div style="padding:20px 0;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">No orders for the selected filter.</div>'
     : '';
+  // Total row — sums across the visible statuses for the active type filter.
+  var totalRowHTML = '';
+  if (statusList.length > 0) {
+    var totalOrders  = statusList.reduce(function(a,it){ return a + rowOrders(it.data);      }, 0);
+    var totalProd    = grandProd;
+    var totalSamples = statusList.reduce(function(a,it){ return a + rowSampleUnits(it.data); }, 0);
+    totalRowHTML = '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;padding:12px 6px;margin:0 -6px;border-top:1px solid #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;background:#16181a;border-radius:0 0 6px 6px;">'
+      + '<div style="font-size:11px;font-weight:600;color:#e8e6e0;text-transform:uppercase;letter-spacing:.06em;">Total</div>'
+      + '<div></div>'
+      + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:600;">'+totalOrders.toLocaleString()+'</div>'
+      + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:700;">'+totalProd.toLocaleString()+'</div>'
+      + '<div style="text-align:right;color:'+(totalSamples?'#e8e6e0':'#444441')+';font-variant-numeric:tabular-nums;font-weight:600;">'+(totalSamples?totalSamples.toLocaleString():'\u2014')+'</div>'
+      + '<div style="text-align:right;color:#888780;font-variant-numeric:tabular-nums;">100.0%</div>'
+      + '</div>';
+  }
   var statusHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px;">'
     +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Planning Status Breakdown</div>'
@@ -5307,6 +5323,7 @@ function renderOrdersSummary() {
     + '</div>'
     + stHeadersHTML
     + stRowsHTML
+    + totalRowHTML
     + emptyStatus
     + '</div>';
 
