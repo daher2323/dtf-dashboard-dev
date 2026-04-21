@@ -5097,7 +5097,7 @@ function renderOrdersSummary() {
               var weeksColor = weeksNum >= 20 ? '#F09595' : weeksNum >= 8 ? '#FAC775' : '#888780';
               return '<div style="display:grid;grid-template-columns:'+colTemplate+';gap:10px;padding:6px 2px;border-bottom:0.5px dashed #3a1818;font-size:12px;font-family:system-ui;align-items:center;">'
                 + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+lb.type+'</span></div>'
-                + '<div style="color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(r['Product Name']||'')+'">'+esc(r['Product Name']||'')+'</div>'
+                + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Product Name']||'')+'">'+esc(r['Product Name']||'')+'</div>'
                 + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
                 + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:'+(weeksNum>=8?'500':'400')+';">'+esc(weeksLabel)+'</div>'
                 + '<div style="color:#888780;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Promise Date / Notes']||'')+'">'+esc(r['Promise Date / Notes']||'')+'</div>'
