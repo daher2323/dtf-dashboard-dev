@@ -4961,100 +4961,96 @@ function renderOrdersSummary() {
   var cWeeklyCap = avg.capsuleAvg * 5;
   var pProd = (stats.typeBuckets.powder  && stats.typeBuckets.powder.totalProd)  || 0;
   var cProd = (stats.typeBuckets.capsule && stats.typeBuckets.capsule.totalProd) || 0;
-  var UNPLANNED_STATUSES = ['Customer Driven','Ready to be Planned','Not Enough Labels'];
   var pProdBucket = (stats.typeBuckets.powder  && stats.typeBuckets.powder.prod)  || {};
   var cProdBucket = (stats.typeBuckets.capsule && stats.typeBuckets.capsule.prod) || {};
-  var pUnplanned = UNPLANNED_STATUSES.reduce(function(sum, st){ return sum + (pProdBucket[st]||0); }, 0);
-  var cUnplanned = UNPLANNED_STATUSES.reduce(function(sum, st){ return sum + (cProdBucket[st]||0); }, 0);
-  var pWeeksBooks = pWeeklyCap > 0 ? pProd      / pWeeklyCap : null;
-  var cWeeksBooks = cWeeklyCap > 0 ? cProd      / cWeeklyCap : null;
-  var pWeeksUnpl  = pWeeklyCap > 0 ? pUnplanned / pWeeklyCap : null;
-  var cWeeksUnpl  = cWeeklyCap > 0 ? cUnplanned / cWeeklyCap : null;
-
-  // Top strip — 4 scalar summaries. Counts and percentages use the same
-  // onBooks (Complete/RTS excluded) basis as the rest of the page.
-  var unplannedOrderPct = stats.totalBooksCount
-    ? Math.round(stats.unplannedCount / stats.totalBooksCount * 100)
-    : 0;
-  // Brands on the Books — distinct Brand Names across both tabs (onBooks).
-  var brandSet = {};
-  (stats.rowsByStatus ? Object.keys(stats.rowsByStatus) : []).forEach(function(st){
-    var rb = stats.rowsByStatus[st];
-    (rb.powder  || []).forEach(function(r){ var b = (r['Brand Name']||'').trim(); if (b) brandSet[b] = true; });
-    (rb.capsule || []).forEach(function(r){ var b = (r['Brand Name']||'').trim(); if (b) brandSet[b] = true; });
+  var pWeeksBooks = pWeeklyCap > 0 ? pProd / pWeeklyCap : null;
+  var cWeeksBooks = cWeeklyCap > 0 ? cProd / cWeeklyCap : null;
+  // Per-type brand counts (distinct brands with open orders for that type).
+  var powderBrandSet = {}, capsuleBrandSet = {};
+  Object.keys(stats.rowsByStatus || {}).forEach(function(st){
+    var rb = stats.rowsByStatus[st] || {};
+    (rb.powder  || []).forEach(function(r){ var b = (r['Brand Name']||'').trim(); if (b) powderBrandSet[b]  = true; });
+    (rb.capsule || []).forEach(function(r){ var b = (r['Brand Name']||'').trim(); if (b) capsuleBrandSet[b] = true; });
   });
-  var brandsCount = Object.keys(brandSet).length;
-  // Labels Ready % — share of production units that are NOT "Not Enough Labels".
-  var totalProdCombined = pProd + cProd;
-  var blockedProdUnits  = (pProdBucket['Not Enough Labels']||0) + (cProdBucket['Not Enough Labels']||0);
-  var labelsReadyPct    = totalProdCombined > 0 ? Math.round((totalProdCombined - blockedProdUnits) / totalProdCombined * 100) : 100;
-  var labelsReadyColor  = labelsReadyPct >= 70 ? '#9FE1CB' : labelsReadyPct >= 50 ? '#FAC775' : '#F09595';
+  var powderBrands  = Object.keys(powderBrandSet).length;
+  var capsuleBrands = Object.keys(capsuleBrandSet).length;
+  // Per-type labels-blocked (Not Enough Labels production units) and ready %.
+  var pBlocked = pProdBucket['Not Enough Labels'] || 0;
+  var cBlocked = cProdBucket['Not Enough Labels'] || 0;
+  function _labelsReady(prod, blocked){ return prod > 0 ? Math.round((prod - blocked) / prod * 100) : 100; }
+  function _labelsReadyClr(pct){ return pct >= 70 ? '#1D9E75' : pct >= 50 ? '#EF9F27' : '#E24B4A'; }
+  var pLabelsReady = _labelsReady(pProd, pBlocked);
+  var cLabelsReady = _labelsReady(cProd, cBlocked);
 
   var POWDER_WEEKS_MAX  = 20;
   var CAPSULE_WEEKS_MAX = 24;
-  function weeksProgressBar(weeks, maxWeeks, fillColor) {
-    var pct = weeks === null ? 0 : Math.min(weeks / maxWeeks, 1) * 100;
-    var weeksStr = weeks === null ? '\u2014' : weeks.toFixed(1);
-    return '<div style="margin-top:8px;">'
-      + '<div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;">'
-      +   '<div style="height:100%;width:'+pct+'%;background:'+fillColor+';border-radius:3px;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
-      + '</div>'
-      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:10px;color:#5f5e5a;font-family:system-ui;">'
-      +   '<span>0 wks</span>'
-      +   '<span style="color:'+fillColor+';font-weight:500;font-variant-numeric:tabular-nums;">'+weeksStr+' wks on the books</span>'
-      +   '<span>'+maxWeeks+' wks</span>'
-      + '</div>'
-      + '</div>';
-  }
-  function weeksTypeRow(label, units, weeks, fillColor, maxWeeks) {
-    var weeksStr = weeks === null ? '\u2014' : weeks.toFixed(1);
-    return '<div style="padding:8px 0;">'
-      + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">'
+  function typeCard(cfg) {
+    var weeksStr = cfg.weeks === null ? '\u2014' : cfg.weeks.toFixed(1);
+    var barPct   = cfg.weeks === null ? 0 : Math.min(cfg.weeks / cfg.maxWeeks, 1) * 100;
+    return '<div style="flex:1;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem;">'
+      // Header row: weeks (left) / line + units + daily rate (right)
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px;">'
       +   '<div style="flex-shrink:0;">'
-      +     '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
-      +     '<div style="font-size:20px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
+      +     '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">'+cfg.title+'</div>'
+      +     '<div style="display:flex;align-items:baseline;gap:6px;line-height:1;">'
+      +       '<span style="font-size:28px;font-weight:500;color:'+cfg.color+';font-variant-numeric:tabular-nums;">'+weeksStr+'</span>'
+      +       '<span style="font-size:14px;color:#888780;">weeks</span>'
+      +     '</div>'
       +   '</div>'
-      +   '<div style="font-size:18px;font-weight:500;color:'+fillColor+';line-height:1;flex-shrink:0;">'+weeksStr+'<span style="font-size:11px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
+      +   '<div style="text-align:right;flex-shrink:0;">'
+      +     '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">'+cfg.lineLabel+'</div>'
+      +     '<div style="font-size:13px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;">'+cfg.units.toLocaleString()+' units</div>'
+      +     '<div style="font-size:10px;color:#888780;margin-top:2px;font-variant-numeric:tabular-nums;">+ '+Math.round(cfg.dailyRate).toLocaleString()+'/day YTD</div>'
+      +   '</div>'
       + '</div>'
-      + weeksProgressBar(weeks, maxWeeks, fillColor)
+      // Progress bar + labels
+      + '<div style="height:5px;background:#2c2c2a;border-radius:3px;overflow:hidden;">'
+      +   '<div style="height:100%;width:'+barPct+'%;background:'+cfg.color+';border-radius:3px;transition:width .4s cubic-bezier(.4,0,.2,1);"></div>'
+      + '</div>'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px;margin-bottom:14px;font-size:10px;color:#5f5e5a;font-family:system-ui;">'
+      +   '<span>0 wks</span>'
+      +   '<span style="color:'+cfg.color+';font-weight:500;font-variant-numeric:tabular-nums;">'+weeksStr+' wks on the books</span>'
+      +   '<span>'+cfg.maxWeeks+' wks</span>'
+      + '</div>'
+      // Divider
+      + '<div style="height:0.5px;background:#2c2c2a;margin-bottom:14px;"></div>'
+      // 3 stats in equal columns with vertical dividers
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;">'
+      +   '<div style="padding-right:14px;border-right:0.5px solid #2c2c2a;">'
+      +     '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Orders</div>'
+      +     '<div style="font-size:16px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+cfg.orders.toLocaleString()+'</div>'
+      +     '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">'+cfg.ordersSub+'</div>'
+      +   '</div>'
+      +   '<div style="padding:0 14px;border-right:0.5px solid #2c2c2a;">'
+      +     '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Brands</div>'
+      +     '<div style="font-size:16px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+cfg.brands.toLocaleString()+'</div>'
+      +     '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">distinct brands</div>'
+      +   '</div>'
+      +   '<div style="padding-left:14px;">'
+      +     '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Labels ready</div>'
+      +     '<div style="font-size:16px;color:'+_labelsReadyClr(cfg.labelsReadyPct)+';font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+cfg.labelsReadyPct+'%</div>'
+      +     '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">'+cfg.blockedUnits.toLocaleString()+' units blocked</div>'
+      +   '</div>'
+      + '</div>'
       + '</div>';
   }
-  function weeksStat(label, value, hint, valueColor) {
-    var clr = valueColor || '#e8e6e0';
-    return '<div style="flex:1;min-width:0;">'
-      + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
-      + '<div style="font-size:18px;color:'+clr+';font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+value+'</div>'
-      + '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;font-family:system-ui;">'+hint+'</div>'
-      + '</div>';
-  }
-  function weeksCard(title, statsRowHTML, total, pUnits, pWeeks, cUnits, cWeeks, pClr, cClr, totalClr) {
-    return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;">'
-      + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;">'+title+'</div>'
-      + statsRowHTML
-      + '<div style="height:0.5px;background:#2c2c2a;margin:12px 0;"></div>'
-      + '<div style="font-size:30px;font-weight:500;color:'+totalClr+';font-variant-numeric:tabular-nums;line-height:1;">'+total.toLocaleString()+'<span style="font-size:12px;color:#888780;font-weight:400;margin-left:6px;">units total</span></div>'
-      + '<div style="height:0.5px;background:#2c2c2a;margin:14px 0 4px;"></div>'
-      + weeksTypeRow('Powder (Line #1 + #4)', pUnits, pWeeks, pClr, POWDER_WEEKS_MAX)
-      + '<div style="height:0.5px;background:#2c2c2a;margin:4px 0;"></div>'
-      + weeksTypeRow('Capsule (Line #2)',     cUnits, cWeeks, cClr, CAPSULE_WEEKS_MAX)
-      + '</div>';
-  }
-  // Stats rows for each card — combines what the top strip used to show.
-  var booksStatsHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;">'
-    + weeksStat('Orders', stats.totalBooksCount.toLocaleString(),
-        stats.powderBooksCount + ' powder \u00b7 ' + stats.capsuleBooksCount + ' capsule')
-    + weeksStat('Brands', brandsCount.toLocaleString(),
-        'Distinct brand names')
-    + '</div>';
-  var unplannedStatsHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;">'
-    + weeksStat('Orders unplanned', stats.unplannedCount.toLocaleString(),
-        unplannedOrderPct + '% of orders', '#FAC775')
-    + weeksStat('Labels ready', labelsReadyPct + '%',
-        blockedProdUnits.toLocaleString() + ' production units blocked', labelsReadyColor)
-    + '</div>';
   var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
-    + weeksCard('Production units on the books', booksStatsHTML,     pProd + cProd,           pProd,      pWeeksBooks, cProd,      cWeeksBooks, LINE_COLOR['line#1'], LINE_COLOR['line#2'], '#e8e6e0')
-    + weeksCard('Production units unplanned',    unplannedStatsHTML, pUnplanned + cUnplanned, pUnplanned, pWeeksUnpl,  cUnplanned, cWeeksUnpl,  '#FAC775',             '#FAC775',             '#FAC775')
+    + typeCard({
+        title: 'Powder on the books', weeks: pWeeksBooks, maxWeeks: POWDER_WEEKS_MAX,
+        color: LINE_COLOR['line#1'], lineLabel: 'Line #1 + #4',
+        units: pProd, dailyRate: avg.powderAvg,
+        orders: stats.powderBooksCount, ordersSub: 'powder orders',
+        brands: powderBrands,
+        labelsReadyPct: pLabelsReady, blockedUnits: pBlocked
+      })
+    + typeCard({
+        title: 'Capsule on the books', weeks: cWeeksBooks, maxWeeks: CAPSULE_WEEKS_MAX,
+        color: LINE_COLOR['line#2'], lineLabel: 'Line #2',
+        units: cProd, dailyRate: avg.capsuleAvg,
+        orders: stats.capsuleBooksCount, ordersSub: 'capsule orders',
+        brands: capsuleBrands,
+        labelsReadyPct: cLabelsReady, blockedUnits: cBlocked
+      })
     + '</div>';
 
   // ── Customer Breakdown ────────────────────────────────────────────────
