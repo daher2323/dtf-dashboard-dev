@@ -5141,14 +5141,20 @@ function renderOrdersSummary() {
 
     if (!isOpen) return summaryRow;
 
-    // Drill-down: flat list of matching orders, sorted by Order Amount desc.
+    // Drill-down: flat list of matching orders, sorted by weeks on the books
+    // desc (same rule as Labels Blocker) so the oldest stuck orders surface
+    // first; ties broken by order size.
     var rowsData = stats.rowsByStatus[st] || { powder:[], capsule:[] };
     var drillRows = [];
     if (ordersStatusTypeFilter === 'all' || ordersStatusTypeFilter === 'powder')
       rowsData.powder.forEach(function(r){ drillRows.push({row:r, type:'Powder'}); });
     if (ordersStatusTypeFilter === 'all' || ordersStatusTypeFilter === 'capsule')
       rowsData.capsule.forEach(function(r){ drillRows.push({row:r, type:'Capsule'}); });
-    drillRows.sort(function(a,b){ return num(b.row['Order Amount']) - num(a.row['Order Amount']); });
+    drillRows.sort(function(a,b){
+      var dw = num(b.row['# of Weeks on the Books']) - num(a.row['# of Weeks on the Books']);
+      if (dw) return dw;
+      return num(b.row['Order Amount']) - num(a.row['Order Amount']);
+    });
 
     var drillColTpl = '72px 1.3fr 2.2fr 90px 70px 220px';
     var drillHeaders = '<div style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
