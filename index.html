@@ -4906,94 +4906,18 @@ function renderOrdersSummary() {
         stats.powderBooksUnits.toLocaleString() + ' / ' + stats.capsuleBooksUnits.toLocaleString() + ' units')
     + '</div>';
 
-  // Big "Units On The Books" chart: one dual-ring doughnut per type
-  // (outer ring = Production Units by status, inner ring = Sample Packs by status).
-  function orderedStatuses(typeBucket){
-    var set = typeBucket.statusSet;
-    var seen = {};
-    var ordered = ORDERS_STATUS_ORDER.filter(function(s){ return set[s]; });
-    ordered.forEach(function(s){ seen[s] = true; });
-    // Tack on any unexpected statuses not in ORDERS_STATUS_ORDER.
-    Object.keys(set).forEach(function(s){ if (!seen[s]) ordered.push(s); });
-    return ordered;
-  }
-  function legendRows(typeBucket){
-    var statuses = orderedStatuses(typeBucket);
-    var rows = statuses.map(function(st){
-      var p = typeBucket.prod[st] || 0, sv = typeBucket.samp[st] || 0, t = p + sv;
-      var col = ORDERS_STATUS_COLOR[st] || '#888780';
-      return '<tr>'
-        + '<td style="padding:4px 6px;color:#e8e6e0;white-space:nowrap;">'
-        +   '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:'+col+';margin-right:6px;vertical-align:middle;"></span>'+esc(st)
-        + '</td>'
-        + '<td style="text-align:right;padding:4px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+p.toLocaleString()+'</td>'
-        + '<td style="text-align:right;padding:4px 6px;color:#888780;font-variant-numeric:tabular-nums;">'+(sv?sv.toLocaleString():'\u2014')+'</td>'
-        + '<td style="text-align:right;padding:4px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+t.toLocaleString()+'</td>'
-        + '</tr>';
-    }).join('');
-    var totP = typeBucket.totalProd, totS = typeBucket.totalSamp, totT = totP + totS;
-    rows += '<tr style="border-top:0.5px solid #2c2c2a;">'
-      + '<td style="padding:6px 6px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-size:10px;font-weight:500;">Grand Total</td>'
-      + '<td style="text-align:right;padding:6px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+totP.toLocaleString()+'</td>'
-      + '<td style="text-align:right;padding:6px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;">'+totS.toLocaleString()+'</td>'
-      + '<td style="text-align:right;padding:6px 6px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:700;">'+totT.toLocaleString()+'</td>'
-      + '</tr>';
-    return rows;
-  }
-  function chartCardHTML(typeKey, title, typeBucket){
-    var totT = typeBucket.totalProd + typeBucket.totalSamp;
-    var canvasId = 'orders-donut-' + typeKey;
-    return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:12px;padding:16px;">'
-      + '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">'
-      +   '<div>'
-      +     '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">'+title+'</div>'
-      +     '<div style="font-size:11px;color:#5f5e5a;margin-top:2px;font-family:system-ui;">'+typeBucket.totalProd.toLocaleString()+' production \u00b7 '+typeBucket.totalSamp.toLocaleString()+' sample packs</div>'
-      +   '</div>'
-      +   '<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;font-variant-numeric:tabular-nums;line-height:1;">'+totT.toLocaleString()+'</div>'
-      + '</div>'
-      + '<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">'
-      +   '<div style="width:240px;height:240px;position:relative;flex-shrink:0;">'
-      +     '<canvas id="'+canvasId+'"></canvas>'
-      +     '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;">'
-      +       '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Total</div>'
-      +       '<div style="font-size:26px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;margin-top:2px;">'+shortNum(totT)+'</div>'
-      +       '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">units</div>'
-      +     '</div>'
-      +   '</div>'
-      +   '<div style="flex:1;min-width:260px;">'
-      +     '<table style="width:100%;border-collapse:collapse;font-family:system-ui;font-size:12px;">'
-      +       '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
-      +         '<th style="text-align:left;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Status</th>'
-      +         '<th style="text-align:right;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Prod</th>'
-      +         '<th style="text-align:right;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Sample</th>'
-      +         '<th style="text-align:right;padding:4px 6px;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:#888780;font-weight:500;">Total</th>'
-      +       '</tr></thead>'
-      +       '<tbody>'+legendRows(typeBucket)+'</tbody>'
-      +     '</table>'
-      +   '</div>'
-      + '</div>'
-      + '</div>';
-  }
-  var chartSectionHTML =
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">'
-    + chartCardHTML('powder', 'Powders On The Books', stats.typeBuckets.powder)
-    + chartCardHTML('capsule','Capsules On The Books', stats.typeBuckets.capsule)
-    + '</div>';
-
   function weeksBox(label, weeks, units, avgPerDay, days, color) {
     var weeksStr = weeks === null ? '\u2014' : weeks.toFixed(1);
     var hint = days > 0
       ? units.toLocaleString() + ' units \u00f7 ' + Math.round(avgPerDay).toLocaleString() + '/day YTD (' + days + ' production days)'
       : 'No YTD production data for this line group yet';
-    return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
+    return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
       + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+label+'</div>'
       + '<div style="font-size:28px;font-weight:500;color:'+color+';line-height:1;">'+weeksStr+'<span style="font-size:13px;color:#888780;font-weight:400;margin-left:6px;">weeks</span></div>'
       + '<div style="font-size:11px;color:#5f5e5a;margin-top:6px;font-family:system-ui;">'+hint+'</div>'
       + '</div>';
   }
-  // Weeks cards — now stacked vertically so they live on the right side of the
-  // Status Breakdown row. See the grid wrapper further down.
-  var weeksStackHTML = '<div style="display:flex;flex-direction:column;gap:12px;">'
+  var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
     + weeksBox('Powder weeks of work (Line #1 + #4)', powderWeeks, stats.powderBooksUnits, avg.powderAvg, avg.powderDays, LINE_COLOR['line#1'])
     + weeksBox('Capsule weeks of work (Line #2)', capsuleWeeks, stats.capsuleBooksUnits, avg.capsuleAvg, avg.capsuleDays, LINE_COLOR['line#2'])
     + '</div>';
@@ -5125,9 +5049,7 @@ function renderOrdersSummary() {
   var statuses = Object.keys(stats.statusBreakdown).sort(function(a,b){
     return stats.statusBreakdown[b].count - stats.statusBreakdown[a].count;
   });
-  // Compact layout — Status column sizes to content (not 1fr) so the table
-  // sits tight on the left and the Weeks of Work cards can flow to the right.
-  var stColTpl = 'auto 70px 80px 70px 95px 105px 95px';
+  var stColTpl = '1fr 70px 80px 70px 95px 105px 95px';
   var pClr = LINE_TXT['line#1'];  // powder tint
   var cClr = LINE_TXT['line#2'];  // capsule tint
   var statusHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
@@ -5174,68 +5096,8 @@ function renderOrdersSummary() {
       }).join('')
     + '</div>';
 
-  // Wrap Status Breakdown (left, content-sized) and Weeks of Work (right, fills
-  // remaining space with two stacked cards) into a single row.
-  var statusAndWeeksHTML = '<div style="display:grid;grid-template-columns:auto 1fr;gap:16px;margin-bottom:16px;align-items:start;">'
-    + statusHTML
-    + weeksStackHTML
-    + '</div>';
 
-  content.innerHTML = topStripHTML + chartSectionHTML + labelsHTML + statusAndWeeksHTML;
-
-  // Instantiate the two dual-ring doughnut charts. Outer ring = Production
-  // Units, inner ring = Sample Packs. Both colored by Planning Status.
-  ['powder','capsule'].forEach(function(typeKey){
-    var tb = stats.typeBuckets[typeKey];
-    var canvas = document.getElementById('orders-donut-' + typeKey);
-    if (!canvas || typeof Chart === 'undefined') return;
-    var statuses = orderedStatuses(tb);
-    if (!statuses.length) {
-      // No data for this type — show a placeholder.
-      var ctxP = canvas.getContext('2d');
-      ctxP.fillStyle = '#2c2c2a';
-      ctxP.beginPath(); ctxP.arc(canvas.width/2, canvas.height/2, 70, 0, Math.PI*2); ctxP.stroke();
-      return;
-    }
-    var prodVals   = statuses.map(function(s){ return tb.prod[s] || 0; });
-    var sampleVals = statuses.map(function(s){ return tb.samp[s] || 0; });
-    var colors     = statuses.map(function(s){ return ORDERS_STATUS_COLOR[s] || '#888780'; });
-    // Lighter fill for sample packs to visually differentiate the inner ring.
-    var sampleColors = colors.map(function(c){ return c + '88'; });  // ~53% alpha
-    charts['orders-donut-' + typeKey] = new Chart(canvas.getContext('2d'), {
-      type: 'doughnut',
-      data: {
-        labels: statuses,
-        datasets: [
-          { label: 'Production Units', data: prodVals,   backgroundColor: colors,       borderColor: '#141618', borderWidth: 2, hoverOffset: 6 },
-          { label: 'Sample Packs',     data: sampleVals, backgroundColor: sampleColors, borderColor: '#141618', borderWidth: 2, hoverOffset: 6 }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        cutout: '52%',
-        animation: { animateRotate: true, duration: 700 },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#1e2124',
-            borderColor: '#2c2c2a',
-            borderWidth: 1,
-            titleColor: '#e8e6e0',
-            bodyColor: '#e8e6e0',
-            padding: 10,
-            callbacks: {
-              label: function(ctx){
-                var val = ctx.raw || 0;
-                return ctx.dataset.label + ' \u2014 ' + ctx.label + ': ' + val.toLocaleString() + ' units';
-              }
-            }
-          }
-        }
-      }
-    });
-  });
+  content.innerHTML = topStripHTML + weeksHTML + labelsHTML + statusHTML;
 }
 
 function renderProcurement() {
