@@ -4921,9 +4921,23 @@ function renderOrdersSummary() {
 
   var stats = computeOrderStats();
   var avg = computeYTDDailyAvgByType();
-  // 5 production days per week (Mon-Fri)
-  var powderWeeks  = avg.powderAvg  > 0 ? stats.powderBooksUnits  / (avg.powderAvg  * 5) : null;
-  var capsuleWeeks = avg.capsuleAvg > 0 ? stats.capsuleBooksUnits / (avg.capsuleAvg * 5) : null;
+  // 5 production days per week (Mon-Fri). Weeks of Work use production units
+  // only (samples run on a separate process) and combined line capacity
+  // (Line #1 + #2 + #4), matching the weekly exec report's single "weeks of
+  // work" number rather than a per-line split.
+  var combinedDailyAvg = avg.powderAvg + avg.capsuleAvg;
+  var combinedWeeklyCap = combinedDailyAvg * 5;
+  var pProd = (stats.typeBuckets.powder  && stats.typeBuckets.powder.totalProd)  || 0;
+  var cProd = (stats.typeBuckets.capsule && stats.typeBuckets.capsule.totalProd) || 0;
+  var totalProdBooks = pProd + cProd;
+  var UNPLANNED_STATUSES = ['Customer Driven','Ready to be Planned','Not Enough Labels'];
+  var pProdBucket = (stats.typeBuckets.powder  && stats.typeBuckets.powder.prod)  || {};
+  var cProdBucket = (stats.typeBuckets.capsule && stats.typeBuckets.capsule.prod) || {};
+  var unplannedProdUnits = UNPLANNED_STATUSES.reduce(function(sum, st){
+    return sum + (pProdBucket[st]||0) + (cProdBucket[st]||0);
+  }, 0);
+  var totalWeeks     = combinedWeeklyCap > 0 ? totalProdBooks    / combinedWeeklyCap : null;
+  var unplannedWeeks = combinedWeeklyCap > 0 ? unplannedProdUnits / combinedWeeklyCap : null;
 
   var pctP = stats.totalBooksUnits ? (stats.powderBooksUnits  / stats.totalBooksUnits * 100) : 0;
   var pctC = stats.totalBooksUnits ? (stats.capsuleBooksUnits / stats.totalBooksUnits * 100) : 0;
@@ -4942,20 +4956,24 @@ function renderOrdersSummary() {
         stats.powderBooksUnits.toLocaleString() + ' / ' + stats.capsuleBooksUnits.toLocaleString() + ' units')
     + '</div>';
 
-  function weeksBox(label, weeks, units, avgPerDay, days, color) {
+  function weeksBox(label, units, weeks, hint, unitsColor, weeksColor) {
     var weeksStr = weeks === null ? '\u2014' : weeks.toFixed(1);
-    var hint = days > 0
-      ? units.toLocaleString() + ' units \u00f7 ' + Math.round(avgPerDay).toLocaleString() + '/day YTD (' + days + ' production days)'
-      : 'No YTD production data for this line group yet';
     return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
-      + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+label+'</div>'
-      + '<div style="font-size:28px;font-weight:500;color:'+color+';line-height:1;">'+weeksStr+'<span style="font-size:13px;color:#888780;font-weight:400;margin-left:6px;">weeks</span></div>'
-      + '<div style="font-size:11px;color:#5f5e5a;margin-top:6px;font-family:system-ui;">'+hint+'</div>'
+      + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">'+label+'</div>'
+      + '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">'
+      +   '<div style="font-size:26px;font-weight:500;color:'+unitsColor+';font-variant-numeric:tabular-nums;line-height:1;">'+units.toLocaleString()+'<span style="font-size:12px;color:#888780;font-weight:400;margin-left:5px;">units</span></div>'
+      +   '<div style="font-size:20px;font-weight:500;color:'+weeksColor+';line-height:1;">'+weeksStr+'<span style="font-size:12px;color:#888780;font-weight:400;margin-left:4px;">weeks</span></div>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#5f5e5a;margin-top:8px;font-family:system-ui;">'+hint+'</div>'
       + '</div>';
   }
+  var capacityHint = combinedDailyAvg > 0
+    ? Math.round(combinedDailyAvg).toLocaleString() + '/day YTD across Line #1 + #2 + #4 \u00b7 samples excluded (separate process)'
+    : 'No YTD production data yet';
+  var unplannedHint = 'Customer Driven + Ready to be Planned + Not Enough Labels \u00b7 samples excluded';
   var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
-    + weeksBox('Powder weeks of work (Line #1 + #4)', powderWeeks, stats.powderBooksUnits, avg.powderAvg, avg.powderDays, LINE_COLOR['line#1'])
-    + weeksBox('Capsule weeks of work (Line #2)', capsuleWeeks, stats.capsuleBooksUnits, avg.capsuleAvg, avg.capsuleDays, LINE_COLOR['line#2'])
+    + weeksBox('Production units on the books', totalProdBooks,     totalWeeks,     capacityHint,  '#e8e6e0', '#85B7EB')
+    + weeksBox('Production units unplanned',    unplannedProdUnits, unplannedWeeks, unplannedHint, '#FAC775', '#FAC775')
     + '</div>';
 
   var labelsHTML = '';
