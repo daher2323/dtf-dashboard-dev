@@ -4985,13 +4985,15 @@ function renderOrdersSummary() {
     var hint = days > 0
       ? units.toLocaleString() + ' units \u00f7 ' + Math.round(avgPerDay).toLocaleString() + '/day YTD (' + days + ' production days)'
       : 'No YTD production data for this line group yet';
-    return '<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
+    return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
       + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+label+'</div>'
       + '<div style="font-size:28px;font-weight:500;color:'+color+';line-height:1;">'+weeksStr+'<span style="font-size:13px;color:#888780;font-weight:400;margin-left:6px;">weeks</span></div>'
       + '<div style="font-size:11px;color:#5f5e5a;margin-top:6px;font-family:system-ui;">'+hint+'</div>'
       + '</div>';
   }
-  var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
+  // Weeks cards — now stacked vertically so they live on the right side of the
+  // Status Breakdown row. See the grid wrapper further down.
+  var weeksStackHTML = '<div style="display:flex;flex-direction:column;gap:12px;">'
     + weeksBox('Powder weeks of work (Line #1 + #4)', powderWeeks, stats.powderBooksUnits, avg.powderAvg, avg.powderDays, LINE_COLOR['line#1'])
     + weeksBox('Capsule weeks of work (Line #2)', capsuleWeeks, stats.capsuleBooksUnits, avg.capsuleAvg, avg.capsuleDays, LINE_COLOR['line#2'])
     + '</div>';
@@ -5123,24 +5125,28 @@ function renderOrdersSummary() {
   var statuses = Object.keys(stats.statusBreakdown).sort(function(a,b){
     return stats.statusBreakdown[b].count - stats.statusBreakdown[a].count;
   });
-  var stColTpl = '1fr 80px 80px 120px 120px';
+  // Compact layout — Status column sizes to content (not 1fr) so the table
+  // sits tight on the left and the Weeks of Work cards can flow to the right.
+  var stColTpl = 'auto 70px 80px 70px 95px 105px 95px';
   var pClr = LINE_TXT['line#1'];  // powder tint
   var cClr = LINE_TXT['line#2'];  // capsule tint
   var statusHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
     + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;">Planning Status Breakdown</div>'
-    // Grouped header: "ORDERS" spans the first two number columns, "UNITS" spans the second two
+    // Grouped header row — "ORDERS" spans cols 2-4, "UNITS" spans cols 5-7
     + '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:0 2px 3px;">'
     +   '<div></div>'
-    +   '<div style="grid-column:2 / span 2;text-align:center;border-bottom:0.5px solid #2c2c2a;padding-bottom:3px;">Orders</div>'
-    +   '<div style="grid-column:4 / span 2;text-align:center;border-bottom:0.5px solid #2c2c2a;padding-bottom:3px;">Units</div>'
+    +   '<div style="grid-column:2 / span 3;text-align:center;border-bottom:0.5px solid #2c2c2a;padding-bottom:3px;">Orders</div>'
+    +   '<div style="grid-column:5 / span 3;text-align:center;border-bottom:0.5px solid #2c2c2a;padding-bottom:3px;">Units</div>'
     + '</div>'
-    // Column sub-headers (powder/cap per group, color-tinted to match lines)
+    // Column sub-headers (Powder / Capsule / Total per group, color-tinted)
     + '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
     +   '<div>Status</div>'
     +   '<div style="text-align:right;color:'+pClr+';">Powder</div>'
-    +   '<div style="text-align:right;color:'+cClr+';">Cap</div>'
+    +   '<div style="text-align:right;color:'+cClr+';">Capsule</div>'
+    +   '<div style="text-align:right;">Total</div>'
     +   '<div style="text-align:right;color:'+pClr+';">Powder</div>'
-    +   '<div style="text-align:right;color:'+cClr+';">Cap</div>'
+    +   '<div style="text-align:right;color:'+cClr+';">Capsule</div>'
+    +   '<div style="text-align:right;">Total</div>'
     + '</div>'
     + statuses.map(function(st){
         var row = stats.statusBreakdown[st];
@@ -5148,21 +5154,34 @@ function renderOrdersSummary() {
         var unp = /^(Customer Driven|Ready to be Planned|Not Enough Labels)$/.test(st);
         var pillColor = bad ? '#F09595' : unp ? '#FAC775' : st === 'Complete/RTS' ? '#9FE1CB' : '#85B7EB';
         var pillBg    = bad ? '#2a0f0f' : unp ? '#2a1f0a' : st === 'Complete/RTS' ? '#0a2a20' : '#0a1f2a';
-        // Muted color for zero-count cells so the eye lands on the non-zero values.
-        function cell(val, isZero) {
-          return '<div style="text-align:right;color:'+(isZero?'#444441':'#e8e6e0')+';font-variant-numeric:tabular-nums;">'+val+'</div>';
+        var ordersTotal = (row.powder||0) + (row.capsule||0);
+        var unitsTotal  = (row.powderUnits||0) + (row.capsuleUnits||0);
+        // Muted when zero; bold for Total to emphasize the row sum.
+        function cell(val, isZero, isTotal) {
+          var color = isZero ? '#444441' : '#e8e6e0';
+          var weight = isTotal ? '500' : '400';
+          return '<div style="text-align:right;color:'+color+';font-variant-numeric:tabular-nums;font-weight:'+weight+';">'+val+'</div>';
         }
         return '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:10px;padding:8px 2px;border-bottom:0.5px solid #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
-          + '<div><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:5px;background:'+pillBg+';color:'+pillColor+';">'+esc(st)+'</span></div>'
-          + cell(row.powder||0,       (row.powder||0)===0)
-          + cell(row.capsule||0,      (row.capsule||0)===0)
-          + cell((row.powderUnits||0).toLocaleString(),  (row.powderUnits||0)===0)
-          + cell((row.capsuleUnits||0).toLocaleString(), (row.capsuleUnits||0)===0)
+          + '<div><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:5px;background:'+pillBg+';color:'+pillColor+';white-space:nowrap;">'+esc(st)+'</span></div>'
+          + cell(row.powder||0,       (row.powder||0)===0,  false)
+          + cell(row.capsule||0,      (row.capsule||0)===0, false)
+          + cell(ordersTotal,         ordersTotal===0,      true)
+          + cell((row.powderUnits||0).toLocaleString(),  (row.powderUnits||0)===0,  false)
+          + cell((row.capsuleUnits||0).toLocaleString(), (row.capsuleUnits||0)===0, false)
+          + cell(unitsTotal.toLocaleString(),            unitsTotal===0,            true)
           + '</div>';
       }).join('')
     + '</div>';
 
-  content.innerHTML = topStripHTML + chartSectionHTML + weeksHTML + labelsHTML + statusHTML;
+  // Wrap Status Breakdown (left, content-sized) and Weeks of Work (right, fills
+  // remaining space with two stacked cards) into a single row.
+  var statusAndWeeksHTML = '<div style="display:grid;grid-template-columns:auto 1fr;gap:16px;margin-bottom:16px;align-items:start;">'
+    + statusHTML
+    + weeksStackHTML
+    + '</div>';
+
+  content.innerHTML = topStripHTML + chartSectionHTML + labelsHTML + statusAndWeeksHTML;
 
   // Instantiate the two dual-ring doughnut charts. Outer ring = Production
   // Units, inner ring = Sample Packs. Both colored by Planning Status.
