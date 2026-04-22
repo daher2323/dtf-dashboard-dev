@@ -308,7 +308,7 @@ var openOrdersCapsule = null;
 var openOrdersLastFetch = 0;
 var openOrdersFetchInFlight = false;
 var labelsBrandFilter = 'all';   // 'all' | <brand name>
-var labelsWeeksFilter = '4';     // '4' | '8' | 'all' — default surfaces orders aged past a month
+var labelsWeeksFilter = 'all';   // 'all' | '4' | '8'
 var ordersStatusTypeFilter = 'all'; // 'all' | 'powder' | 'capsule'
 var ordersDrilldownStatus = null;   // null | <status name> — which row is expanded
 var customerChartView = 'all';      // 'all' | 'powder' | 'capsule'
@@ -5233,9 +5233,9 @@ function renderOrdersSummary() {
       + '</select>'
       + '<label style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-left:8px;">Min age</label>'
       + '<div style="display:flex;gap:2px;padding:3px;background:#1e1212;border:0.5px solid #4a2020;border-radius:7px;">'
+      +   '<button onclick="setLabelsWeeksFilter(\'all\')" style="'+wkPillStyle(labelsWeeksFilter==='all')+'">All</button>'
       +   '<button onclick="setLabelsWeeksFilter(\'4\')"   style="'+wkPillStyle(labelsWeeksFilter==='4')+'">4+ wk</button>'
       +   '<button onclick="setLabelsWeeksFilter(\'8\')"   style="'+wkPillStyle(labelsWeeksFilter==='8')+'">8+ wk</button>'
-      +   '<button onclick="setLabelsWeeksFilter(\'all\')" style="'+wkPillStyle(labelsWeeksFilter==='all')+'">All</button>'
       + '</div>'
       + (filtersActive
           ? '<button onclick="setLabelsBrandFilter(\'all\');setLabelsWeeksFilter(\'all\');" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;" onmouseover="this.style.color=\'#e8e6e0\'" onmouseout="this.style.color=\'#888780\'">Clear filters</button>'
