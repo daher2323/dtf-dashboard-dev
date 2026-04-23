@@ -2100,12 +2100,21 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
         if(remaining<=0){rem.style.color='#9FE1CB';rem.textContent='+'+(Math.abs(remaining)).toLocaleString()+' over target';}
         else{rem.style.color='#888780';rem.textContent=remaining.toLocaleString()+' to go';}
       }
-      // Fixed left/center/right label positions — never overlap
+      // Legend positions derived from which segments are visible this frame,
+      // not a fixed per-line rule. A lone visible segment must anchor left so
+      // its label stays on-canvas — right-anchoring at ~2% of the bar yanks
+      // the label off the left edge (issue seen when only Line #4 has units).
       var segs=[
-        {id:'line#1', left:0,    width:w1,  anchor:'left',   transform:'translateX(0)'},
-        {id:'line#2', left:w1,   width:w2,  anchor:'center', transform:'translateX(-50%)'},
-        {id:'line#4', left:w1+w2,width:w4,  anchor:'right',  transform:'translateX(-100%)'}
+        {id:'line#1', left:0,    width:w1},
+        {id:'line#2', left:w1,   width:w2},
+        {id:'line#4', left:w1+w2,width:w4}
       ];
+      var visible=segs.filter(function(s){ return s.width>2; });
+      visible.forEach(function(s,i){
+        if(i===0)                    { s.anchor='left';   s.transform='translateX(0)'; }
+        else if(i===visible.length-1){ s.anchor='right';  s.transform='translateX(-100%)'; }
+        else                         { s.anchor='center'; s.transform='translateX(-50%)'; }
+      });
       segs.forEach(function(s){
         var leg=document.getElementById('banner-leg-'+s.id);
         if(!leg) return;
