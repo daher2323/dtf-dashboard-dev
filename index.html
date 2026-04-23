@@ -2132,36 +2132,22 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
         if(remaining<=0){rem.style.color='#9FE1CB';rem.textContent='+'+(Math.abs(remaining)).toLocaleString()+' over target';}
         else{rem.style.color='#888780';rem.textContent=remaining.toLocaleString()+' to go';}
       }
-      // Legend positions derived from which segments are visible this frame,
-      // not a fixed per-line rule. A lone visible segment must anchor left so
-      // its label stays on-canvas — right-anchoring at ~2% of the bar yanks
-      // the label off the left edge (issue seen when only Line #4 has units).
+      // Legend labels sit in a normal flex row below the bar, so they can
+      // never overlap each other regardless of where the segments are. We
+      // still hide a line's label when its slice of the bar is <2% — the
+      // segment isn't visually represented, so showing "Line #X — 12" with
+      // no colored swatch next to it would be confusing.
       var segs=[
-        {id:'line#1', left:0,    width:w1},
-        {id:'line#2', left:w1,   width:w2},
-        {id:'line#4', left:w1+w2,width:w4}
+        {id:'line#1', width:w1},
+        {id:'line#2', width:w2},
+        {id:'line#4', width:w4}
       ];
-      var visible=segs.filter(function(s){ return s.width>2; });
-      visible.forEach(function(s,i){
-        if(i===0)                    { s.anchor='left';   s.transform='translateX(0)'; }
-        else if(i===visible.length-1){ s.anchor='right';  s.transform='translateX(-100%)'; }
-        else                         { s.anchor='center'; s.transform='translateX(-50%)'; }
-      });
       segs.forEach(function(s){
         var leg=document.getElementById('banner-leg-'+s.id);
         if(!leg) return;
         var units=Math.round((gaugeData.find(function(g){return lk(g.line||ALL_LINES[g.idx]||'')===s.id;})||{units:0}).units*e);
         leg.textContent=s.id.replace('line#','Line #')+' — '+units.toLocaleString();
-        if(s.width>2){
-          leg.style.display='block';
-          leg.style.transform=s.transform;
-          var pos = s.anchor==='left' ? s.left
-                  : s.anchor==='right' ? s.left+s.width
-                  : s.left+s.width/2;
-          leg.style.left=pos+'%';
-        } else {
-          leg.style.display='none';
-        }
+        leg.style.display = s.width>2 ? 'block' : 'none';
       });
     }
     if(t>=1){
@@ -2501,10 +2487,10 @@ function renderToday() {
       +'<div id="banner-seg4" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#4']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-remaining" style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'+totalGoal.toLocaleString()+' to go</div>'
     +'</div>'
-    +'<div style="position:relative;height:18px;">'
-      +'<div id="banner-leg-line#1" style="position:absolute;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#1']+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);transition:left 1.2s cubic-bezier(.4,0,.2,1);left:0%;">Line #1 — 0</div>'
-      +'<div id="banner-leg-line#2" style="position:absolute;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#2']+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);transition:left 1.2s cubic-bezier(.4,0,.2,1);left:0%;">Line #2 — 0</div>'
-      +'<div id="banner-leg-line#4" style="position:absolute;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#4']+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);transition:left 1.2s cubic-bezier(.4,0,.2,1);left:0%;">Line #4 — 0</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;min-height:18px;">'
+      +'<div id="banner-leg-line#1" style="display:none;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#1']+';font-family:system-ui;white-space:nowrap;">Line #1 — 0</div>'
+      +'<div id="banner-leg-line#2" style="display:none;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#2']+';font-family:system-ui;white-space:nowrap;">Line #2 — 0</div>'
+      +'<div id="banner-leg-line#4" style="display:none;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#4']+';font-family:system-ui;white-space:nowrap;">Line #4 — 0</div>'
     +'</div>'
     +'</div>'
     +'<div style="border-top:0.5px solid #2c2c2a;padding-top:.75rem;">'
