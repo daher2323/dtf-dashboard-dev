@@ -3842,9 +3842,14 @@ function renderCustomerOverview(healthData) {
     return '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;'+(ml?'margin-left:5px;':'')+'background:'+(pos?'#085041':'#791F1F')+';color:'+(pos?'#9FE1CB':'#F09595')+'">'+(pos?'+':'')+p.toFixed(1)+'%</span>';
   }
 
-  var rows = visibleCustomers.map(function(cd) {
+  var rows = visibleCustomers.map(function(cd, idx) {
     var sid = safeid(cd.cust);
     var expanded = !!_chExpanded[sid];
+    var rank = idx + 1;
+    // Medal colors for the top three so the leaderboard is legible at a
+    // glance; everything from #4 down is neutral grey.
+    var rankColor = rank===1 ? '#FFD700' : rank===2 ? '#C0C6CC' : rank===3 ? '#CD7F32' : '#5f5e5a';
+    var rankWeight = rank<=3 ? '600' : '500';
 
     var borderColor = cd.tag==='growing'?'#1D9E75':cd.tag==='declining'?'#791F1F':cd.tag==='new'?'#378ADD':'#444441';
     var bar26Color  = cd.tag==='declining'?'#791F1F':'#378ADD';
@@ -3874,7 +3879,10 @@ function renderCustomerOverview(healthData) {
 
     var headerInner =
       '<div style="width:140px;flex-shrink:0;">'
-        +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;margin-bottom:4px;">'+esc(cd.cust)+'</div>'
+        +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;margin-bottom:4px;">'
+          +'<span style="color:'+rankColor+';font-size:11px;font-weight:'+rankWeight+';margin-right:6px;font-variant-numeric:tabular-nums;">#'+rank+'</span>'
+          +esc(cd.cust)
+        +'</div>'
         +tagEl
       +'</div>'
       +'<div style="flex:1;display:flex;flex-direction:column;gap:4px;min-width:0;">'
