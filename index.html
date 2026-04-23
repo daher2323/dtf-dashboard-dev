@@ -958,14 +958,19 @@ function parseWeeklyTargets(text) {
   } catch(e) { return {}; }
 }
 
-// Google Sheets' /pub?output=csv responses are served through an aggressive
-// CDN cache that can hold a stale CSV for 1–5 minutes after the sheet was
-// edited. That means a newly-added "currently running" lot can be invisible
-// to the dashboard until the CDN expires. Appending a per-request token
-// forces a fresh origin read on every fetch; each retry also gets a new
-// token because bustUrl is called fresh every time.
+// Google Sheets' /pub?output=csv is aggressively CDN-cached, which is why
+// sheet edits can take minutes to appear on the dashboard. We bucket a
+// cachebust token to 2-minute windows: within a bucket, repeat fetches
+// share a cached response (so rapid tab-switches / 60s polling don't thrash
+// the dashboard by swapping good in-memory data for whatever Google's
+// publish snapshot happens to contain at that instant), and every bucket
+// rollover forces a fresh origin read. Explicit user-triggered refreshes
+// (the app-bar button) set _forceBust to guarantee a fresh fetch regardless
+// of the bucket.
+var _forceBust = false;
 function bustUrl(url) {
-  return url + (url.indexOf('?') === -1 ? '?' : '&') + 'cachebust=' + Date.now();
+  var token = _forceBust ? Date.now() : Math.floor(Date.now() / 120000);
+  return url + (url.indexOf('?') === -1 ? '?' : '&') + 'cachebust=' + token;
 }
 var NO_CACHE = { cache: 'no-store' };
 
@@ -1192,6 +1197,31 @@ function applyFreshData(res) {
     console.warn('[DTF] Refresh aborted: new data has ' + newRows.length + ' rows vs current ' + allRows.length + ' (>15% shrink). Keeping existing data.');
     return false;
   }
+  // Today-row regression guard: the global shrink guard above tolerates 15%
+  // loss, which is fine for an 80k-row sheet but useless for today's handful
+  // of rows — today slips through unnoticed. If today had ≥3 rows in memory
+  // and the new fetch shows them nearly all gone, that's almost certainly a
+  // truncated/regenerating publish snapshot, not a real edit. We tolerate a
+  // 2-row correction (typical typo-fix pattern) and reject anything worse.
+  if (allRows.length > 0) {
+    var _today = getTodayStr();
+    function _countToday(rows) {
+      var n = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var dt = parseLocalDate(rows[i]['Date']);
+        if (dt && (dt.getMonth()+1)+'/'+dt.getDate()+'/'+dt.getFullYear() === _today) n++;
+      }
+      return n;
+    }
+    var curToday = _countToday(allRows);
+    if (curToday >= 3) {
+      var newToday = _countToday(newRows);
+      if (newToday < curToday - 2) {
+        console.warn('[DTF] Refresh aborted: today-row count regressed (' + curToday + ' -> ' + newToday + '). Keeping existing data.');
+        return false;
+      }
+    }
+  }
   allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets; weeklyTargets = newWeeklyTargets;
   lotMap = buildLotMap(allRows);
   buildProductionDays(true);
@@ -1311,10 +1341,12 @@ function computeRecords() {
 function hardRefresh() {
   var btn = document.querySelector('#app-bar-right button');
   if (btn) { btn.style.opacity = '.5'; btn.querySelector('span').textContent = 'Refreshing…'; }
+  _forceBust = true;
   fetchData().then(function(res){
+    _forceBust = false;
     if (applyFreshData(res)) { lastRefreshTime = Date.now(); updateFreshnessStamp(); render(); }
     else { if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = isViewingLive() ? 'Live' : 'Refresh'; } }
-  }).catch(function(){ if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); } });
+  }).catch(function(){ _forceBust = false; if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); } });
 }
 
 function refreshAndRender(forceRender, _isRetry) {
