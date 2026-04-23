@@ -958,8 +958,19 @@ function parseWeeklyTargets(text) {
   } catch(e) { return {}; }
 }
 
+// Google Sheets' /pub?output=csv responses are served through an aggressive
+// CDN cache that can hold a stale CSV for 1–5 minutes after the sheet was
+// edited. That means a newly-added "currently running" lot can be invisible
+// to the dashboard until the CDN expires. Appending a per-request token
+// forces a fresh origin read on every fetch; each retry also gets a new
+// token because bustUrl is called fresh every time.
+function bustUrl(url) {
+  return url + (url.indexOf('?') === -1 ? '?' : '&') + 'cachebust=' + Date.now();
+}
+var NO_CACHE = { cache: 'no-store' };
+
 function fetchCSVSimple(url) {
-  return fetch(url).then(function(r){
+  return fetch(bustUrl(url), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -969,7 +980,7 @@ function fetchCSVSimple(url) {
 }
 
 function fetchMaterialsCSV() {
-  return fetch(CSV_MATERIALS).then(function(r){
+  return fetch(bustUrl(CSV_MATERIALS), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -980,7 +991,7 @@ function fetchMaterialsCSV() {
 
 function fetchWithRetry(url, retries, delay) {
   retries = retries || 5; delay = delay || 2000;
-  return fetch(url).then(function(r){
+  return fetch(bustUrl(url), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text) {
@@ -1234,6 +1245,7 @@ function loadDashboard() {
     renderSubBar();
     render();
     startRefreshTimers();
+    startFreshnessTicker();
     // Fetch materials + lot index + open orders in background — don't block
     // main load. Warming Open Orders now means the tab is usually ready by
     // the time the user navigates there (Google Sheets' /pub?output=csv has
@@ -1300,23 +1312,58 @@ function hardRefresh() {
   var btn = document.querySelector('#app-bar-right button');
   if (btn) { btn.style.opacity = '.5'; btn.querySelector('span').textContent = 'Refreshing…'; }
   fetchData().then(function(res){
-    if (applyFreshData(res)) { lastRefreshTime = Date.now(); render(); }
+    if (applyFreshData(res)) { lastRefreshTime = Date.now(); updateFreshnessStamp(); render(); }
     else { if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = isViewingLive() ? 'Live' : 'Refresh'; } }
   }).catch(function(){ if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); } });
 }
 
-function refreshAndRender(forceRender) {
+function refreshAndRender(forceRender, _isRetry) {
   fetchData().then(function(res){
     if(applyFreshData(res)){
       lastRefreshTime = Date.now();
+      updateFreshnessStamp();
       var onToday = topView==='summary' && subView==='today';
       var onWeekly = topView==='summary' && subView==='weekly';
       if(onToday && !isViewingLive()) return;
       if(forceRender || onToday || onWeekly) render();
       else if(topView==='summary' && subView==='performance') render();
       else if(topView==='detail') render();
+    } else if (!_isRetry) {
+      // Stale-guard rejected this fetch (truncated/shrunk CSV from the CDN).
+      // Retry once after a short delay with a fresh cache-bust before giving
+      // up until the next timer tick — usually the next read comes back whole.
+      console.warn('[DTF] Refresh rejected — retrying in 1.5s');
+      setTimeout(function(){ refreshAndRender(forceRender, true); }, 1500);
     }
   }).catch(function(e){ console.error('Refresh failed:', e); });
+}
+
+// ── Last-updated indicator (Daily view header) ─────────────────────────────
+// Executives monitor this dashboard, so staleness needs to be visible rather
+// than implicit. The stamp turns amber after 90s and red after 3 min so the
+// viewer can tell real "no active lots" from "we haven't heard from the sheet
+// in a while". A 5s ticker keeps the display live between data refreshes.
+var _freshnessTicker = null;
+function freshnessLabel() {
+  if (!lastRefreshTime) return { text:'', color:'#888780' };
+  var ageSec = Math.max(0, Math.floor((Date.now() - lastRefreshTime) / 1000));
+  if (ageSec < 20)  return { text:'Updated just now',        color:'#888780' };
+  if (ageSec < 90)  return { text:'Updated ' + ageSec + 's ago', color:'#888780' };
+  var ageMin = Math.round(ageSec / 60);
+  if (ageSec < 180) return { text:'Updated ' + ageMin + 'm ago — refreshing…', color:'#EF9F27' };
+  return { text:'Updated ' + ageMin + 'm ago — data may be stale', color:'#F09595' };
+}
+function updateFreshnessStamp() {
+  var el = document.getElementById('daily-freshness');
+  if (!el) return;
+  var f = freshnessLabel();
+  el.textContent = f.text;
+  el.style.color = f.color;
+}
+function startFreshnessTicker() {
+  if (_freshnessTicker) clearInterval(_freshnessTicker);
+  updateFreshnessStamp();
+  _freshnessTicker = setInterval(updateFreshnessStamp, 5000);
 }
 
 function getTodayStr() {
@@ -2374,6 +2421,7 @@ function renderToday() {
     +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;flex-wrap:wrap;">'
       +'<div style="width:8px;height:8px;border-radius:50%;background:'+(isLive?'#1D9E75':'#888780')+';flex-shrink:0;"></div>'
       +'<h3 style="margin:0;font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;line-height:1;">Daily outlook</h3>'
+      +'<span id="daily-freshness" style="font-size:10px;font-family:system-ui;color:'+freshnessLabel().color+';white-space:nowrap;">'+esc(freshnessLabel().text)+'</span>'
       +'<div style="width:0.5px;height:12px;background:#2c2c2a;flex-shrink:0;margin:0 2px;"></div>'
       +'<button onclick="navDay(-1)" '+(prevDisabled?'disabled':'')+' style="width:24px;height:26px;flex-shrink:0;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:'+(prevDisabled?'default':'pointer')+';color:'+(prevDisabled?'#444441':'#888780')+';font-size:14px;display:flex;align-items:center;justify-content:center;font-family:system-ui;">&#8249;</button>'
       +'<div onclick="openPicker()" id="date-nav-anchor" style="width:220px;flex-shrink:0;cursor:pointer;padding:4px 10px;border-radius:7px;border:0.5px solid #444441;background:transparent;display:flex;align-items:center;justify-content:center;gap:5px;height:26px;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
