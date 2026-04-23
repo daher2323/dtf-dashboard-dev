@@ -5447,7 +5447,14 @@ function renderOrdersSummary() {
     var mixNote = filteredSampleUnits > 0
       ? ' <span style="color:#888780;">(' + filteredProdUnits.toLocaleString() + ' production + ' + filteredSampleUnits.toLocaleString() + ' samples)</span>'
       : '';
-    var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units' + mixNote + ' across '+brandNames.length+' brand'+(brandNames.length===1?'':'s');
+    // Share of all open orders \u2014 lets executives size the blocker against the
+    // whole book instead of reading 556k units in isolation. Uses on-the-books
+    // units (prod + samples, Complete/RTS excluded) for an apples-to-apples ratio.
+    var booksTotal = stats.totalBooksUnits || 0;
+    var shareNote = booksTotal > 0
+      ? ' <span style="color:#F09595;font-weight:500;">\u00b7 ' + (filteredUnits / booksTotal * 100).toFixed(1) + '%</span> <span style="color:#888780;">of ' + booksTotal.toLocaleString() + ' on-the-books units</span>'
+      : '';
+    var summaryLine = filtered.length + ' order'+(filtered.length===1?'':'s')+' \u2014 '+filteredUnits.toLocaleString()+' units' + mixNote + ' across '+brandNames.length+' brand'+(brandNames.length===1?'':'s') + shareNote;
     if (filtersActive) summaryLine += ' <span style="color:#F09595;opacity:.7;">(filtered from '+stats.labelBlocked.length+')</span>';
 
     // Powder / Capsule count pills — reflect the current filter.
