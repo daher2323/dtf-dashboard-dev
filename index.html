@@ -960,22 +960,21 @@ function parseWeeklyTargets(text) {
 
 // Google Sheets' /pub?output=csv is aggressively CDN-cached, which is why
 // sheet edits can take minutes to appear on the dashboard. We bucket a
-// cachebust token to 2-minute windows: within a bucket, repeat fetches
-// share a cached response (so rapid tab-switches / 60s polling don't thrash
-// the dashboard by swapping good in-memory data for whatever Google's
-// publish snapshot happens to contain at that instant), and every bucket
-// rollover forces a fresh origin read. Explicit user-triggered refreshes
-// (the app-bar button) set _forceBust to guarantee a fresh fetch regardless
-// of the bucket.
-var _forceBust = false;
-function bustUrl(url) {
-  var token = _forceBust ? Date.now() : Math.floor(Date.now() / 120000);
+// cachebust token to 30-second windows: within a bucket, repeat fetches
+// share a cached response (so rapid tab-switches don't thrash the dashboard
+// by swapping good in-memory data for whatever Google's publish snapshot
+// happens to contain at that instant). Key moments that must not be stuck
+// with a stale bucket — initial load, manual Refresh, the safety-net
+// retry, and a visibility-change return — pass fresh=true, which emits a
+// unique per-request token and forces a true origin read.
+function bustUrl(url, fresh) {
+  var token = fresh ? Date.now() : Math.floor(Date.now() / 30000);
   return url + (url.indexOf('?') === -1 ? '?' : '&') + 'cachebust=' + token;
 }
 var NO_CACHE = { cache: 'no-store' };
 
-function fetchCSVSimple(url) {
-  return fetch(bustUrl(url), NO_CACHE).then(function(r){
+function fetchCSVSimple(url, fresh) {
+  return fetch(bustUrl(url, fresh), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -984,8 +983,8 @@ function fetchCSVSimple(url) {
   }).catch(function(){ return ''; });
 }
 
-function fetchMaterialsCSV() {
-  return fetch(bustUrl(CSV_MATERIALS), NO_CACHE).then(function(r){
+function fetchMaterialsCSV(fresh) {
+  return fetch(bustUrl(CSV_MATERIALS, fresh), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -994,9 +993,9 @@ function fetchMaterialsCSV() {
   }).catch(function(){ return ''; });
 }
 
-function fetchWithRetry(url, retries, delay) {
+function fetchWithRetry(url, retries, delay, fresh) {
   retries = retries || 5; delay = delay || 2000;
-  return fetch(bustUrl(url), NO_CACHE).then(function(r){
+  return fetch(bustUrl(url, fresh), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text) {
@@ -1009,16 +1008,16 @@ function fetchWithRetry(url, retries, delay) {
   }).catch(function(e){
     if (retries <= 1) throw e;
     return new Promise(function(res){ setTimeout(res, delay); })
-      .then(function(){ return fetchWithRetry(url, retries-1, Math.round(delay*1.5)); });
+      .then(function(){ return fetchWithRetry(url, retries-1, Math.round(delay*1.5), fresh); });
   });
 }
 
-function fetchData() {
+function fetchData(fresh) {
   return Promise.all([
-    fetchWithRetry(CSV_CURRENT),
-    fetchWithRetry(CSV_PRIOR),
-    fetchWithRetry(CSV_TARGETS).catch(function(){ return ''; }),
-    fetchCSVSimple(CSV_WEEKLY_TARGETS)
+    fetchWithRetry(CSV_CURRENT, null, null, fresh),
+    fetchWithRetry(CSV_PRIOR, null, null, fresh),
+    fetchWithRetry(CSV_TARGETS, null, null, fresh).catch(function(){ return ''; }),
+    fetchCSVSimple(CSV_WEEKLY_TARGETS, fresh)
   ]);
 }
 
@@ -1252,7 +1251,11 @@ function buildProductionDays(preserveSelection) {
 function loadDashboard() {
   document.getElementById('loading').textContent = 'Loading production data...';
   document.getElementById('loading').style.display = 'block';
-  fetchData().then(function(results) {
+  // Initial load MUST be a fresh origin read — being stuck with a stale
+  // bucketed snapshot on first paint would leave today's rows invisible
+  // until the next bucket rollover (the bug behind "dashboard shows 0
+  // for everything right after load").
+  fetchData(true).then(function(results) {
     _resetSkipStats();
     var rows = parseCSV(results[0]).filter(isValid);
     var rows25 = parseCSV(results[1]).filter(isValid);
@@ -1284,11 +1287,13 @@ function loadDashboard() {
     fetchLotIndexIfNeeded();
     if (userRole === 'admin') fetchOpenOrdersIfNeeded(false);
     // Safety net: if daily view looks empty after load, re-fetch once after a short delay
-    // Guards against Google Sheets CDN serving a stale response on first hit
+    // Guards against Google Sheets CDN serving a stale response on first hit.
+    // fresh=true bypasses the bucket so this retry can't reuse the same stale
+    // response that initial load would have cached.
     if (topView === 'summary' && subView === 'today') {
       setTimeout(function() {
         if (allRows.length > 0) {
-          refreshAndRender(false);
+          refreshAndRender(false, false, true);
         }
       }, 8000);
     }
@@ -1341,16 +1346,14 @@ function computeRecords() {
 function hardRefresh() {
   var btn = document.querySelector('#app-bar-right button');
   if (btn) { btn.style.opacity = '.5'; btn.querySelector('span').textContent = 'Refreshing…'; }
-  _forceBust = true;
-  fetchData().then(function(res){
-    _forceBust = false;
+  fetchData(true).then(function(res){
     if (applyFreshData(res)) { lastRefreshTime = Date.now(); updateFreshnessStamp(); render(); }
     else { if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = isViewingLive() ? 'Live' : 'Refresh'; } }
-  }).catch(function(){ _forceBust = false; if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); } });
+  }).catch(function(){ if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); } });
 }
 
-function refreshAndRender(forceRender, _isRetry) {
-  fetchData().then(function(res){
+function refreshAndRender(forceRender, _isRetry, fresh) {
+  fetchData(fresh).then(function(res){
     if(applyFreshData(res)){
       lastRefreshTime = Date.now();
       updateFreshnessStamp();
@@ -1362,10 +1365,10 @@ function refreshAndRender(forceRender, _isRetry) {
       else if(topView==='detail') render();
     } else if (!_isRetry) {
       // Stale-guard rejected this fetch (truncated/shrunk CSV from the CDN).
-      // Retry once after a short delay with a fresh cache-bust before giving
-      // up until the next timer tick — usually the next read comes back whole.
+      // The retry bypasses the bucket — the cached response is what got us
+      // rejected, so we need a different token to stand a chance.
       console.warn('[DTF] Refresh rejected — retrying in 1.5s');
-      setTimeout(function(){ refreshAndRender(forceRender, true); }, 1500);
+      setTimeout(function(){ refreshAndRender(forceRender, true, true); }, 1500);
     }
   }).catch(function(e){ console.error('Refresh failed:', e); });
 }
@@ -1407,9 +1410,10 @@ function checkDateRollover() {
   var currentDate = getTodayStr();
   if(currentDate !== lastKnownDate) {
     lastKnownDate = currentDate;
-    // Date has changed — snap to new today
+    // Date has changed — snap to new today and force a fresh origin read so
+    // we don't reuse yesterday's bucketed snapshot on day one of the new date.
     selectedDayIdx = productionDays.length - 1;
-    refreshAndRender(true);
+    refreshAndRender(true, false, true);
   }
 }
 
@@ -1434,7 +1438,9 @@ function startRefreshTimers() {
       if(topView==='summary' && subView==='today') {
         selectedDayIdx = productionDays.length - 1;
       }
-      if(Date.now()-lastRefreshTime > 45000) refreshAndRender(true);
+      // Returning to the tab after being away — force a fresh origin read
+      // so we don't show a stale bucketed response from before we left.
+      if(Date.now()-lastRefreshTime > 45000) refreshAndRender(true, false, true);
     }
   });
 }
