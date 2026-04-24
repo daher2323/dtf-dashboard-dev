@@ -304,6 +304,7 @@ var selectedDetailYear = new Date().getFullYear();
 var selectedDetailRange = null;
 var selectedPerfRange = null;
 var procView = 'materials'; // 'materials' | 'jars' | 'bottles' | 'lids' | 'desiccants'
+var procSearch = '';        // case-insensitive SKU filter on jars/bottles/lids/desiccants/neckbands
 var matYear = new Date().getFullYear(); // kept for renderMatInline compat
 var matWindow = 6; // lookback months: 6 | 12 | 0=all
 var matSearch = '';
@@ -1602,9 +1603,22 @@ function toggleAgingDrilldown(bucket) {
 function setProcView(v) {
   closeMsPanel();
   showZeroDes = false;
+  procSearch = '';  // clear filter when switching Jars ↔ Bottles ↔ Lids etc.
   procView = v;
   renderSubBar();
   render();
+}
+
+function filterProcurement() {
+  procSearch = (document.getElementById('procSearchInput')||{}).value || '';
+  var q = procSearch.toLowerCase().trim();
+  var rows = document.querySelectorAll('[data-proc-sku]');
+  for (var i=0; i<rows.length; i++) {
+    var sku = rows[i].getAttribute('data-proc-sku') || '';
+    rows[i].style.display = (!q || sku.indexOf(q) !== -1) ? '' : 'none';
+  }
+  var clear = document.getElementById('procSearchClear');
+  if (clear) clear.style.display = procSearch ? 'flex' : 'none';
 }
 
 function setTop(v) {
@@ -4372,8 +4386,11 @@ function exportProcurement() {
   var ytd25start  = new Date(nowYr-1,0,1);
   var ytd25cutoff = new Date(nowYr-1,now.getMonth(),now.getDate(),23,59,59);
 
-  // Build summary rows
+  // Build summary rows — respect the active search filter so the export
+  // mirrors what's visible on screen.
+  var _procQ = (procSearch||'').toLowerCase().trim();
   var skus = Object.keys(skuQtr).filter(function(s){
+    if (_procQ && s.toLowerCase().indexOf(_procQ) === -1) return false;
     var ytd = 0;
     allRowsCombined.forEach(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return; if(getSku(r)!==s) return; var u=getUnits(r); if(dt>=ytdStart&&dt<=now) ytd+=u; });
     return showZeroDes || ytd > 0;
@@ -4449,6 +4466,7 @@ function exportProcurement() {
   var detailRows = allRowsCombined.filter(function(r) {
     var dt = new Date(r['Date']); if (isNaN(dt)||dt<cutoff) return false;
     var sku = getSku(r); if (!sku) return false;
+    if (_procQ && sku.toLowerCase().indexOf(_procQ) === -1) return false;
     if (!showZeroDes) {
       var ytd=0; allRowsCombined.forEach(function(r2){var dt2=new Date(r2['Date']);if(isNaN(dt2))return;if(getSku(r2)!==sku)return;var u=getUnits(r2);if(dt2>=ytdStart&&dt2<=now)ytd+=u;});
       if(ytd===0) return false;
@@ -5013,20 +5031,32 @@ function renderMaterials() {
   var allTimeHint = matWindow===0 && allTimeLabel
     ? '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+allTimeLabel+'</span>'
     : '';
-  var pickerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
-    +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    +'<button onclick="matWindow=6;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===6)+'">Past 6 months</button>'
-    +(matMinDate&&(now-matMinDate)>=1000*60*60*24*365?'<button onclick="matWindow=12;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===12)+'">Past 12 months</button>':'')
-    +'<button onclick="matWindow=0;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===0)+'">All time</button>'
+  var pickerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px;">'
+    // Left group \u2014 time-window toggle + all-time hint
+    +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+      +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      +'<button onclick="matWindow=6;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===6)+'">Past 6 months</button>'
+      +(matMinDate&&(now-matMinDate)>=1000*60*60*24*365?'<button onclick="matWindow=12;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===12)+'">Past 12 months</button>':'')
+      +'<button onclick="matWindow=0;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===0)+'">All time</button>'
+      +'</div>'
+      +allTimeHint
     +'</div>'
-    +allTimeHint
-    +'<div style="position:relative;display:inline-flex;align-items:center;">'
-    +'<input id="matSearchInput" type="text" placeholder="Search ingredient or part \u2026" oninput="matSearch=this.value;filterMaterials();document.getElementById(\'matSearchClear\').style.display=this.value?\'flex\':\'none\';" value="'+esc(matSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
-    +'<button id="matSearchClear" onclick="matSearch=\'\';document.getElementById(\'matSearchInput\').value=\'\';filterMaterials();this.style.display=\'none\';" style="display:'+(matSearch?'flex':'none')+';position:absolute;right:6px;width:16px;height:16px;border-radius:50%;border:none;background:#444441;cursor:pointer;align-items:center;justify-content:center;padding:0;flex-shrink:0;">'
-    +'<svg width="8" height="8" viewBox="0 0 8 8" fill="none"><line x1="1" y1="1" x2="7" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/><line x1="7" y1="1" x2="1" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/></svg>'
-    +'</button>'
+    // Right group \u2014 search + export (same placement as Jars/Bottles/Lids/etc.)
+    +'<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">'
+      +'<div style="position:relative;display:inline-flex;align-items:center;">'
+      +'<input id="matSearchInput" type="text" placeholder="Search ingredient or part \u2026" oninput="matSearch=this.value;filterMaterials();document.getElementById(\'matSearchClear\').style.display=this.value?\'flex\':\'none\';" value="'+esc(matSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
+      +'<button id="matSearchClear" onclick="matSearch=\'\';document.getElementById(\'matSearchInput\').value=\'\';filterMaterials();this.style.display=\'none\';" style="display:'+(matSearch?'flex':'none')+';position:absolute;right:6px;width:16px;height:16px;border-radius:50%;border:none;background:#444441;cursor:pointer;align-items:center;justify-content:center;padding:0;flex-shrink:0;">'
+      +'<svg width="8" height="8" viewBox="0 0 8 8" fill="none"><line x1="1" y1="1" x2="7" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/><line x1="7" y1="1" x2="1" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/></svg>'
+      +'</button>'
+      +'</div>'
+      +'<div id="mat-export-wrap" style="position:relative;">'
+        +'<button onclick="toggleMatExportPopover(event)" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
+          +'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
+          +'Export'
+        +'</button>'
+      +'</div>'
     +'</div>'
-    +'</div>';
+  +'</div>';
 
   content.innerHTML = pickerHTML
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
@@ -6285,12 +6315,18 @@ function renderProcurement() {
       +'<div id="pqtr-'+sid+'" style="display:'+(activeTab==='qtr'?'block':'none')+';">'+ qtrSection +'</div>'
     +'</div>';
 
-    return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-left:3px solid '+borderColor+';border-radius:0 10px 10px 0;overflow:hidden;margin-bottom:5px;">'
+    return '<div data-proc-sku="'+esc(cd.sku.toLowerCase())+'" style="background:#1e2124;border:0.5px solid #2c2c2a;border-left:3px solid '+borderColor+';border-radius:0 10px 10px 0;overflow:hidden;margin-bottom:5px;">'
       +header+detailTable
     +'</div>';
   }).join('');
 
   var ytdLabelFull = now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  var procSearchHTML = '<div style="position:relative;display:inline-flex;align-items:center;">'
+    +'<input id="procSearchInput" type="text" placeholder="Search '+label+'s…" oninput="filterProcurement()" value="'+esc(procSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
+    +'<button id="procSearchClear" onclick="procSearch=\'\';document.getElementById(\'procSearchInput\').value=\'\';filterProcurement();" style="display:'+(procSearch?'flex':'none')+';position:absolute;right:6px;width:16px;height:16px;border-radius:50%;border:none;background:#444441;cursor:pointer;align-items:center;justify-content:center;padding:0;flex-shrink:0;">'
+    +'<svg width="8" height="8" viewBox="0 0 8 8" fill="none"><line x1="1" y1="1" x2="7" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/><line x1="7" y1="1" x2="1" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/></svg>'
+    +'</button>'
+  +'</div>';
   document.getElementById('content').innerHTML =
     '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;gap:12px;">'
       +'<div>'
@@ -6302,11 +6338,14 @@ function renderProcurement() {
             +'</label></div>'
           : '')
       +'</div>'
-      +'<div style="flex-shrink:0;position:relative;" id="proc-export-wrap">'
-        +'<button onclick="toggleProcExportPopover(event)" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
-          +'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
-          +'Export'
-        +'</button>'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">'
+        +procSearchHTML
+        +'<div style="position:relative;" id="proc-export-wrap">'
+          +'<button onclick="toggleProcExportPopover(event)" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
+            +'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
+            +'Export'
+          +'</button>'
+        +'</div>'
       +'</div>'
     +'</div>'
     + rows;
@@ -6315,6 +6354,8 @@ function renderProcurement() {
   Object.keys(window._procExpanded || {}).forEach(function(sid) {
     if (window._procExpanded[sid]) generateProcSynopsis(sid);
   });
+  // Re-apply search filter if one was active (e.g. after auto-refresh rebuilds the DOM)
+  if (procSearch) filterProcurement();
 }
 
 function renderCustomers() {
@@ -6354,15 +6395,28 @@ function toggleProcExportPopover(e) {
     var u=getUnits2(r);
     if(dt>=ytdStart&&dt<=now) skuYtd[sku]=(skuYtd[sku]||0)+u;
   });
-  var skuCount = Object.keys(skuYtd).filter(function(s){ return showZeroDes||skuYtd[s]>0; }).length;
-  var lotCount = allRowsCombined.filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=cutoff&&!!getSku2(r); }).length;
+  // Respect the active search filter so the popover count and export match.
+  var _popQ = (procSearch||'').toLowerCase().trim();
+  var skuCount = Object.keys(skuYtd).filter(function(s){
+    if (_popQ && s.toLowerCase().indexOf(_popQ) === -1) return false;
+    return showZeroDes||skuYtd[s]>0;
+  }).length;
+  var lotCount = allRowsCombined.filter(function(r){
+    var dt=new Date(r['Date']); if(isNaN(dt)||dt<cutoff) return false;
+    var s = getSku2(r); if(!s) return false;
+    if (_popQ && s.toLowerCase().indexOf(_popQ) === -1) return false;
+    return true;
+  }).length;
+  var _popFilterLabel = (procSearch && _popQ)
+    ? ' &middot; <span style="color:#85B7EB;">filtered "'+esc(procSearch)+'"</span>'
+    : '';
   var pop = document.createElement('div');
   pop.id = 'proc-export-pop';
   pop.style.cssText = 'position:absolute;top:calc(100% + 6px);right:0;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:12px 14px;z-index:200;min-width:240px;box-shadow:0 4px 16px rgba(0,0,0,.4);';
   pop.innerHTML =
     '<div style="font-size:11px;color:#888780;margin-bottom:8px;font-weight:500;text-transform:uppercase;letter-spacing:.04em;">Export '+labelPl+'</div>'
     +'<div style="font-size:12px;color:#e8e6e0;margin-bottom:12px;line-height:1.5;">'
-      +'<span style="font-weight:500;">'+skuCount+'</span> SKUs &middot; <span style="font-weight:500;">'+lotCount.toLocaleString()+'</span> lots<br>'
+      +'<span style="font-weight:500;">'+skuCount+'</span> SKUs &middot; <span style="font-weight:500;">'+lotCount.toLocaleString()+'</span> lots'+_popFilterLabel+'<br>'
       +'<span style="color:#5f5e5a;font-size:11px;">2 sheets: Quarterly Summary + Lot Detail</span>'
     +'</div>'
     +'<div style="display:flex;gap:8px;justify-content:flex-end;">'
@@ -6383,6 +6437,114 @@ function closeProcExportPopover() {
   document.removeEventListener('click', closeProcExportPopoverOutside, true);
   var pop = document.getElementById('proc-export-pop');
   if (pop) pop.remove();
+}
+
+// ── Materials export (parallel to proc export above) ─────────────────
+// Applies the active search filter so the export matches what's on screen.
+function _filteredMatList() {
+  var list = window._matList || [];
+  var q = (matSearch||'').toLowerCase().trim();
+  if (!q) return list;
+  return list.filter(function(m){
+    return (m.name||'').toLowerCase().indexOf(q) !== -1
+        || (m.partNums||[]).some(function(p){ return (p||'').toLowerCase().indexOf(q) !== -1; });
+  });
+}
+
+function toggleMatExportPopover(e) {
+  e.stopPropagation();
+  closeMatExportPopover();
+  var wrap = document.getElementById('mat-export-wrap');
+  if (!wrap) return;
+  var allList   = window._matList || [];
+  var filtered  = _filteredMatList();
+  var matCount  = filtered.length;
+  var lotCount  = filtered.reduce(function(s,m){ return s + (m.lotCount||0); }, 0);
+  var windowLabel  = matWindow === 0 ? 'All time' : 'Past ' + matWindow + ' months';
+  var filterLabel  = (matSearch && filtered.length < allList.length)
+    ? ' &middot; <span style="color:#85B7EB;">filtered "'+esc(matSearch)+'"</span>'
+    : '';
+  var pop = document.createElement('div');
+  pop.id = 'mat-export-pop';
+  pop.style.cssText = 'position:absolute;top:calc(100% + 6px);right:0;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:12px 14px;z-index:200;min-width:240px;box-shadow:0 4px 16px rgba(0,0,0,.4);';
+  pop.innerHTML =
+    '<div style="font-size:11px;color:#888780;margin-bottom:8px;font-weight:500;text-transform:uppercase;letter-spacing:.04em;">Export materials</div>'
+    +'<div style="font-size:12px;color:#e8e6e0;margin-bottom:12px;line-height:1.5;">'
+      +'<span style="font-weight:500;">'+matCount+'</span> materials &middot; <span style="font-weight:500;">'+lotCount.toLocaleString()+'</span> lots'+filterLabel+'<br>'
+      +'<span style="color:#5f5e5a;font-size:11px;">'+windowLabel+' &middot; 2 sheets: Summary + Monthly Detail</span>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end;">'
+      +'<button onclick="closeMatExportPopover()" style="padding:4px 10px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:12px;font-family:system-ui;">Cancel</button>'
+      +'<button onclick="closeMatExportPopover();exportMaterials()" style="padding:4px 10px;border-radius:6px;border:1.5px solid #1D9E75;background:#085041;cursor:pointer;color:#9FE1CB;font-size:12px;font-weight:500;font-family:system-ui;display:inline-flex;align-items:center;gap:5px;"><svg width="11" height="11" viewBox="0 0 11 11" fill="none"><polyline points="1.5,5.5 4.5,8.5 9.5,2.5" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Confirm</button>'
+    +'</div>';
+  wrap.appendChild(pop);
+  setTimeout(function() { document.addEventListener('click', closeMatExportPopoverOutside, true); }, 0);
+}
+
+function closeMatExportPopoverOutside(e) {
+  var pop = document.getElementById('mat-export-pop');
+  var wrap = document.getElementById('mat-export-wrap');
+  if (pop && !pop.contains(e.target) && wrap && !wrap.contains(e.target)) closeMatExportPopover();
+}
+
+function closeMatExportPopover() {
+  document.removeEventListener('click', closeMatExportPopoverOutside, true);
+  var pop = document.getElementById('mat-export-pop');
+  if (pop) pop.remove();
+}
+
+function exportMaterials() {
+  if (typeof XLSX === 'undefined') { alert('Export library not loaded yet, please try again.'); return; }
+  var matList = _filteredMatList();
+  if (!matList.length) { alert('No material data to export.'); return; }
+  var monthKeys = window._matMonthKeys || [];
+  var monthLabels = window._matMonthLabels || [];
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  var windowLabel = matWindow === 0 ? 'All time' : 'Past ' + matWindow + ' months';
+
+  var wb = XLSX.utils.book_new();
+
+  // Sheet 1: Summary — mirrors the visible table columns.
+  var s1Headers = ['Material','Part Numbers','Unit','Last Month','3-mo Avg','6-mo Avg','3mo vs 6mo (%)','Window Total','Lots'];
+  var s1Rows = [
+    ['DTF Operations Center — Materials Export'],
+    ['Window: '+windowLabel+' · Exported: '+dateStr],
+    [],
+    s1Headers
+  ];
+  matList.forEach(function(m) {
+    s1Rows.push([
+      m.name,
+      (m.partNums||[]).join(', '),
+      matUnit(m.name),
+      Math.round(m.lastMonth || 0),
+      Math.round(m.avg3 || 0),
+      Math.round(m.avg6 || 0),
+      m.avg6 > 0 ? parseFloat(m.vsPct.toFixed(1)) : '',
+      Math.round(m.totalKg || 0),
+      m.lotCount || 0
+    ]);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s1Rows), 'Summary');
+
+  // Sheet 2: Monthly Detail — Material × Month grid.
+  var s2Headers = ['Material','Unit'].concat(monthLabels);
+  var s2Rows = [
+    ['Materials usage by month'],
+    ['Window: '+windowLabel+' · Exported: '+dateStr],
+    [],
+    s2Headers
+  ];
+  matList.forEach(function(m) {
+    var row = [m.name, matUnit(m.name)];
+    monthKeys.forEach(function(mk) { row.push(Math.round(m.byMonth[mk] || 0)); });
+    s2Rows.push(row);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s2Rows), 'Monthly Detail');
+
+  var fileName = 'DTF_Materials_'+now.toISOString().split('T')[0]+'.xlsx';
+  XLSX.writeFile(wb, fileName);
 }
 
 
