@@ -3273,21 +3273,33 @@ function renderPerformance() {
   // extrapolating the YTD average across the full year, this uses only the
   // last 30 calendar days' daily average applied to the days remaining.
   // Responds faster when recent months diverge from the year so far.
+  //
+  // Two rate bases are tracked:
+  //   *DailyCal — per CALENDAR day; drives the year-end projection (× 365)
+  //   *DailyAvg — per PRODUCTION day; shown in the Pace Comparison widget so
+  //               the rates match "Avg units / day" in the metrics card above.
   var pace30Proj = null, pace30Pct = null, pace30OnTrack = false, pace30DailyAvg = 0, ytdDailyAvg = 0;
   if (showYearEnd && dayOfYear) {
     var pace30Start = new Date(now); pace30Start.setDate(pace30Start.getDate() - 29);
     var pace30Units = 0;
+    var pace30Dates = {};
     allRowsCombined.forEach(function(r){
       var _dt = new Date(r['Date']);
       if (isNaN(_dt)) return;
-      if (_dt >= pace30Start && _dt <= now) pace30Units += num(r['Final Units']);
+      if (_dt >= pace30Start && _dt <= now && num(r['Final Units']) > 0) {
+        pace30Units += num(r['Final Units']);
+        pace30Dates[_dt.getFullYear()+'-'+_dt.getMonth()+'-'+_dt.getDate()] = true;
+      }
     });
-    pace30DailyAvg = pace30Units / 30;
+    var pace30ProdDays = Object.keys(pace30Dates).length;
+    var pace30DailyCal = pace30Units / 30;                         // calendar-day rate (projection math)
     var daysRemaining  = Math.max(0, 365 - dayOfYear);
-    pace30Proj    = Math.round(totalUnits + pace30DailyAvg * daysRemaining);
+    pace30Proj    = Math.round(totalUnits + pace30DailyCal * daysRemaining);
     pace30Pct     = Math.round((pace30Proj / YEAR_TARGET) * 100);
     pace30OnTrack = pace30Proj >= YEAR_TARGET;
-    ytdDailyAvg   = totalUnits / dayOfYear;
+    // Production-day rates — displayed in the Pace Comparison widget.
+    ytdDailyAvg    = uniqDays > 0 ? totalUnits / uniqDays : 0;
+    pace30DailyAvg = pace30ProdDays > 0 ? pace30Units / pace30ProdDays : 0;
   }
 
   var byMonth26={},byMonth25r={};
