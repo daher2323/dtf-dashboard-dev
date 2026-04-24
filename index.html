@@ -3614,11 +3614,18 @@ function renderPerformance() {
     // 5-column pace row: Day of year | Units to date | Year-end target | Year-end projection | Pace comparison
     var _pct30vsYtd = ytdDailyAvg > 0 ? ((pace30DailyAvg - ytdDailyAvg) / ytdDailyAvg) * 100 : 0;
     var _barWidth30 = ytdDailyAvg > 0 ? Math.min(100, (pace30DailyAvg / ytdDailyAvg) * 100) : 0;
+    // Pace momentum thresholds:
+    //   \u00b15%        \u2192 Steady (gray \u2014 within normal noise)
+    //   -10% to -5% \u2192 Slowing, gray (informational, not yet concerning)
+    //   < -10%     \u2192 Slowing, amber (material slowdown, worth attention)
+    //   > +5%      \u2192 Accelerating, green
     var _momentumBadge;
     if (Math.abs(_pct30vsYtd) <= 5) {
       _momentumBadge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:500;background:#2c2c2a;color:#888780;">Steady pace</span>';
-    } else if (_pct30vsYtd < 0) {
+    } else if (_pct30vsYtd < -10) {
       _momentumBadge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:500;background:#633806;color:#FAC775;">&#x25BC; Slowing \u2014 '+Math.abs(_pct30vsYtd).toFixed(0)+'% below YTD pace</span>';
+    } else if (_pct30vsYtd < 0) {
+      _momentumBadge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:500;background:#2c2c2a;color:#888780;">&#x25BC; Slowing \u2014 '+Math.abs(_pct30vsYtd).toFixed(0)+'% below YTD pace</span>';
     } else {
       _momentumBadge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:500;background:#085041;color:#9FE1CB;">&#x25B2; Accelerating \u2014 '+_pct30vsYtd.toFixed(0)+'% above YTD pace</span>';
     }
@@ -3680,9 +3687,9 @@ function renderPerformance() {
     // Progress bar (existing visual \u2014 markers preserved; only labels below change).
     var _barHTML = '<div style="margin-bottom:10px;"><div style="background:#2c2c2a;border-radius:8px;height:14px;overflow:visible;position:relative;">'
       +'<div style="position:absolute;top:0;left:0;height:100%;width:100%;background:'+(onTrack?'#1D9E75':'#EF9F27')+';border-radius:8px;opacity:0.2"></div>'
-      +'<div style="position:absolute;top:0;left:0;height:100%;width:'+actualPct.toFixed(1)+'%;background:#94A3B8;border-radius:8px 0 0 8px"></div>'
+      +'<div style="position:absolute;top:0;left:0;height:100%;width:'+actualPct.toFixed(1)+'%;background:#888780;border-radius:8px 0 0 8px"></div>'
       +'<div style="position:absolute;top:-4px;left:'+tOnBar.toFixed(1)+'%;height:22px;width:2px;background:#e8e6e0;border-radius:1px;opacity:0.4"></div>'
-      +'<div style="position:absolute;top:-4px;left:'+actualPct.toFixed(1)+'%;height:22px;width:2px;background:#94A3B8;border-radius:1px"></div>'
+      +'<div style="position:absolute;top:-4px;left:'+actualPct.toFixed(1)+'%;height:22px;width:2px;background:#888780;border-radius:1px"></div>'
       +'</div></div>'
       +'<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-top:10px;">'
         +'<span style="color:#5f5e5a;">To date: '+totalUnits.toLocaleString()+'</span>'
