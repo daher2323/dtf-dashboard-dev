@@ -30,6 +30,7 @@
   .main-tab:not(.on) .main-tab-name { color: #5f5e5a; }
   .app-bar-right { display: flex; align-items: center; gap: 8px; padding-left: 16px; border-left: 0.5px solid #2c2c2a; margin-left: auto; flex-shrink: 0; }
   .sub-bar-outer { background: #0d1118; border-bottom: 0.5px solid #1a2030; position: sticky; top: 68px; z-index: 99; }
+  .cust-concentration-outer { background: #1e2124; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 68px; z-index: 99; display: none; }
   .cust-col-header-outer { background: #0d0f10; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 108px; z-index: 98; display: none; }
   .sub-divider { width: 0.5px; height: 20px; background: #2c2c2a; flex-shrink: 0; }
 
@@ -172,8 +173,12 @@
   </div>
 </div>
 
+<!-- Customer concentration bar (sticky, shown only on customer overview) -->
+<div class="cust-concentration-outer" id="cust-concentration-outer">
+  <div id="cust-concentration-inner" style="max-width:1400px;margin:0 auto;width:100%;padding:0 1.5rem;"></div>
+</div>
 <!-- Sub-bar -->
-<div class="sub-bar-outer">
+<div class="sub-bar-outer" id="sub-bar-outer">
   <div id="sub-bar" style="max-width:1400px;margin:0 auto;width:100%;display:flex;align-items:center;gap:8px;padding:.5rem 1.5rem;"></div>
 </div>
 <!-- Customer column header (sticky, shown only on customer overview) -->
@@ -314,6 +319,7 @@ var ordersDrilldownStatus = null;   // null | <status name> — which row is exp
 var customerChartView = 'all';      // 'all' | 'powder' | 'capsule'
 var customerChartLimit = '10';      // '10' | '25' | 'all'
 var customerDrilldown  = null;      // null | <brand name> — which customer row is expanded
+var agingDrilldown     = null;      // null | '4-8' | '8-12' | '12+' — which aging bucket is expanded
 
 // Part number -> display group name. Parts listed here roll up under one row.
 var SKU_GROUPS = {
@@ -1587,6 +1593,12 @@ function toggleCustomerDrilldown(brand) {
   render();
 }
 
+function toggleAgingDrilldown(bucket) {
+  closeMsPanel();
+  agingDrilldown = (agingDrilldown === bucket) ? null : bucket;
+  render();
+}
+
 function setProcView(v) {
   closeMsPanel();
   showZeroDes = false;
@@ -2024,6 +2036,18 @@ function renderImpl() {
       if (topView === 'detail') { topView = 'summary'; }
       if (subView === 'performance') { subView = 'today'; }
     }
+    // Customer tab inserts the concentration bar between main nav and sub-nav.
+    // When it's visible, the sub-nav needs to stick below it instead of at the
+    // default top:68. Every other section hides the bar and restores top:68.
+    var _concOuter = document.getElementById('cust-concentration-outer');
+    var _subOuter  = document.getElementById('sub-bar-outer');
+    if (mainSection === 'customers') {
+      if (_concOuter) _concOuter.style.display = 'block';
+      if (_subOuter)  _subOuter.style.top = '120px';  // 68 (app-bar) + 52 (conc bar)
+    } else {
+      if (_concOuter) _concOuter.style.display = 'none';
+      if (_subOuter)  _subOuter.style.top = '';       // revert to CSS default 68
+    }
     if (mainSection === 'customers') {
       renderCustomers();
       return;
@@ -2320,32 +2344,7 @@ function renderToday() {
     recLineRank[line] = (recs.top5byLine[line]||[]).findIndex(function(d){ return d.date===viewStr; });
   });
 
-  var ytdRows=allRows.filter(function(r){ var dt=parseLocalDate(r['Date']); return !!dt&&dt<=viewDateObj; });
-  var ytdUnits=Object.values(buildLotMap(ytdRows)).filter(Boolean).reduce(function(s,l){return s+l.finalUnits;},0);
-  var viewMo=viewDateObj.getMonth(), viewDy=viewDateObj.getDate();
-  var total25banner=allRows25.filter(function(r){ var dt=parseLocalDate(r['Date']); if(!dt) return false; return (dt.getMonth()<viewMo)||(dt.getMonth()===viewMo&&dt.getDate()<=viewDy); }).reduce(function(s,r){return s+num(r['Final Units']);},0);
-  var viewDayOfYear=Math.round((new Date(viewDateObj.getFullYear(),viewDateObj.getMonth(),viewDateObj.getDate())-new Date(viewDateObj.getFullYear(),0,0))/86400000);
-  var yearProjBanner=viewDayOfYear?Math.round((ytdUnits/viewDayOfYear)*365):0;
-  var targetPctBanner=Math.round((yearProjBanner/YEAR_TARGET)*100);
-  var onTrackBanner=yearProjBanner>=YEAR_TARGET;
-  var actualPctBanner=yearProjBanner?((ytdUnits/yearProjBanner)*100):0;
-  var tOnBarBanner=yearProjBanner?((YEAR_TARGET/yearProjBanner)*100):100;
-  var yoyPctBanner=total25banner?((ytdUnits-total25banner)/total25banner*100):0;
   var prevDisabled=selectedDayIdx<=0, nextDisabled=isLive;
-
-  var contextBanner='<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:.875rem 1.25rem;margin-bottom:10px">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem"><div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em">Year-to-date (YTD) Performance</div><div style="font-size:10px;color:#5f5e5a">YTD as of '+viewFmt+' '+dayLabel+'</div></div>'
-    +'<div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">'
-    +'<div style="flex:1;min-width:120px"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Units produced YTD</div><div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:22px;font-weight:500;color:#e8e6e0">'+ytdUnits.toLocaleString()+'</span><span style="font-size:11px;font-weight:500;padding:1px 6px;border-radius:6px;background:'+(yoyPctBanner>=0?'#085041':'#791F1F')+';color:'+(yoyPctBanner>=0?'#9FE1CB':'#F09595')+'">'+(yoyPctBanner>=0?'+':'')+yoyPctBanner.toFixed(1)+'% vs '+(viewDateObj.getFullYear()-1)+'</span></div></div>'
-    +'<div style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0"></div>'
-    +'<div style="flex:1;min-width:120px"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Year-end projection</div><div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:22px;font-weight:500;color:'+(onTrackBanner?'#1D9E75':'#EF9F27')+'">'+yearProjBanner.toLocaleString()+'</span><span style="font-size:11px;color:#5f5e5a">target: 3,927,000</span></div></div>'
-    +'<div style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0"></div>'
-    +'<div style="flex:1;min-width:80px"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Vs target</div><div style="font-size:22px;font-weight:500;color:'+(onTrackBanner?'#1D9E75':'#EF9F27')+'">'+(onTrackBanner?'+':'')+targetPctBanner+'%</div></div>'
-    +'<div style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0"></div>'
-    +'<div style="flex:2;min-width:160px"><div style="display:flex;justify-content:space-between;font-size:10px;color:#888780;margin-bottom:5px"><span>Day '+viewDayOfYear+' of 365</span><span style="color:'+(onTrackBanner?'#1D9E75':'#EF9F27')+';font-weight:500">'+(onTrackBanner?'On pace':'Behind pace')+'</span></div>'
-    +'<div style="background:#2c2c2a;border-radius:6px;height:8px;position:relative;overflow:hidden"><div style="position:absolute;top:0;left:0;height:100%;width:100%;background:'+(onTrackBanner?'#1D9E75':'#EF9F27')+';opacity:0.15;border-radius:6px"></div><div style="position:absolute;top:0;left:0;height:100%;width:'+actualPctBanner.toFixed(1)+'%;background:#94A3B8;border-radius:6px"></div><div style="position:absolute;top:0;left:'+tOnBarBanner.toFixed(1)+'%;width:1.5px;height:100%;background:#e8e6e0;opacity:0.4"></div></div>'
-    +'<div style="display:flex;justify-content:space-between;font-size:10px;color:#5f5e5a;margin-top:4px"><span style="color:#94A3B8">'+ytdUnits.toLocaleString()+' to date</span><span>target: 3,927,000</span></div>'
-    +'</div></div></div>';
 
   var dateNavHTML='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;position:relative;" id="date-nav-anchor">'
     +'<button onclick="navDay(-1)" '+(prevDisabled?'disabled':'')+' style="width:28px;height:28px;flex-shrink:0;border-radius:8px;border:0.5px solid #444441;background:transparent;cursor:'+(prevDisabled?'default':'pointer')+';color:'+(prevDisabled?'#444441':'#e8e6e0')+';font-size:16px;display:flex;align-items:center;justify-content:center;font-family:system-ui">&#8249;</button>'
@@ -3256,6 +3255,27 @@ function renderPerformance() {
   var actualPct=yearProj?((totalUnits/yearProj)*100):0;
   var tOnBar=yearProj?((YEAR_TARGET/yearProj)*100):100;
 
+  // 30-day rolling pace projection — sister metric to `yearProj`. Instead of
+  // extrapolating the YTD average across the full year, this uses only the
+  // last 30 calendar days' daily average applied to the days remaining.
+  // Responds faster when recent months diverge from the year so far.
+  var pace30Proj = null, pace30Pct = null, pace30OnTrack = false, pace30DailyAvg = 0, ytdDailyAvg = 0;
+  if (showYearEnd && dayOfYear) {
+    var pace30Start = new Date(now); pace30Start.setDate(pace30Start.getDate() - 29);
+    var pace30Units = 0;
+    allRowsCombined.forEach(function(r){
+      var _dt = new Date(r['Date']);
+      if (isNaN(_dt)) return;
+      if (_dt >= pace30Start && _dt <= now) pace30Units += num(r['Final Units']);
+    });
+    pace30DailyAvg = pace30Units / 30;
+    var daysRemaining  = Math.max(0, 365 - dayOfYear);
+    pace30Proj    = Math.round(totalUnits + pace30DailyAvg * daysRemaining);
+    pace30Pct     = Math.round((pace30Proj / YEAR_TARGET) * 100);
+    pace30OnTrack = pace30Proj >= YEAR_TARGET;
+    ytdDailyAvg   = totalUnits / dayOfYear;
+  }
+
   var byMonth26={},byMonth25r={};
   rangeRows.forEach(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return; var k=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0'); if(!byMonth26[k]) byMonth26[k]={month:dt.getMonth()+1,year:dt.getFullYear(),units:0}; byMonth26[k].units+=num(r['Final Units']); });
   rangeRows25.forEach(function(r){
@@ -3328,29 +3348,93 @@ function renderPerformance() {
     +'<div class="metric"><div class="label">Unique products</div><div class="value">'+uniqueProds+'</div><div class="sub">across all lots</div></div>'
     +'<div class="metric"><div class="label">Unique customers</div><div class="value">'+uniqueCusts+'</div><div class="sub">across all lots</div><div class="yoy">'+deltaTag(uniqueCusts,custs25,true,'pct',custs25.toLocaleString(),compYearLabel)+'</div></div>';
 
-  var yearEndHTML = yearProj !== null ? (
-    '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;margin-bottom:1.25rem">'
-    +'<div><div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Day of year</div><div style="font-size:20px;font-weight:500">'+dayOfYear+' <span style="font-size:13px;color:#888780">of 365</span></div></div>'
-    +'<div><div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Units to date</div><div style="font-size:20px;font-weight:500;color:#94A3B8">'+totalUnits.toLocaleString()+'</div></div>'
-    +'<div><div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Year-end projection</div><div style="font-size:20px;font-weight:500;color:'+(onTrack?'#1D9E75':'#EF9F27')+'">'+yearProj.toLocaleString()+'</div></div>'
-    +'<div><div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Year-end target</div><div style="font-size:20px;font-weight:500">3,927,000</div></div>'
-    +'<div><div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Vs target</div><div style="font-size:20px;font-weight:500;color:'+(onTrack?'#1D9E75':'#EF9F27')+'">'+(onTrack?'+':'')+toTarget.toLocaleString()+' <span style="font-size:13px">('+targetPct+'%)</span></div></div>'
-    +'</div>'
-    +'<div style="position:relative;margin-bottom:36px"><div style="background:#2c2c2a;border-radius:8px;height:14px;overflow:visible;position:relative">'
-    +'<div style="position:absolute;top:0;left:0;height:100%;width:100%;background:'+(onTrack?'#1D9E75':'#EF9F27')+';border-radius:8px;opacity:0.2"></div>'
-    +'<div style="position:absolute;top:0;left:0;height:100%;width:'+actualPct.toFixed(1)+'%;background:#94A3B8;border-radius:8px 0 0 8px"></div>'
-    +'<div style="position:absolute;top:-4px;left:'+tOnBar.toFixed(1)+'%;height:22px;width:2px;background:#e8e6e0;border-radius:1px;opacity:0.4"></div>'
-    +'<div style="position:absolute;top:-4px;left:'+actualPct.toFixed(1)+'%;height:22px;width:2px;background:#94A3B8;border-radius:1px"></div>'
-    +'</div>'
-    +'<div style="position:absolute;top:22px;left:'+tOnBar.toFixed(1)+'%;transform:translateX(-50%);font-size:10px;color:#888780;white-space:nowrap;margin-top:4px">Target: 3,927,000</div>'
-    +'<div style="position:absolute;top:22px;left:'+actualPct.toFixed(1)+'%;transform:translateX(-50%);font-size:10px;color:#94A3B8;white-space:nowrap;margin-top:4px">To date: '+totalUnits.toLocaleString()+'</div>'
-    +'</div>'
-    +'<div style="display:flex;justify-content:space-between;font-size:10px;color:#5f5e5a;margin-top:4px"><span>0</span><span style="color:'+(onTrack?'#1D9E75':'#EF9F27')+';font-weight:500">'+targetPct+'% of target</span><span>'+yearProj.toLocaleString()+' (projected)</span></div>'
-    +'<div style="display:flex;gap:20px;margin-top:10px"><div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888780"><div style="width:10px;height:10px;border-radius:2px;background:#94A3B8"></div>Units to date</div><div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888780"><div style="width:10px;height:10px;border-radius:2px;background:'+(onTrack?'#1D9E75':'#EF9F27')+';opacity:0.5"></div>Year-end projection</div><div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#888780"><div style="width:10px;height:10px;border-radius:2px;background:#e8e6e0"></div>Year-end target</div></div>'
-  ) : (
-    '<div style="font-size:12px;color:#5f5e5a;font-style:italic;padding:.5rem 0;">Year-end projection is only available for the current year\u2019s year-to-date range.</div>'
-    +'<div style="margin-top:8px;font-size:13px;color:#e8e6e0;">Units in range: <strong style="font-weight:500">'+totalUnits.toLocaleString()+'</strong></div>'
-  );
+  var yearEndHTML;
+  if (yearProj !== null) {
+    // 5-column pace row: Day of year | Units to date | Year-end target | Year-end projection | Pace comparison
+    var _pct30vsYtd = ytdDailyAvg > 0 ? ((pace30DailyAvg - ytdDailyAvg) / ytdDailyAvg) * 100 : 0;
+    var _barWidth30 = ytdDailyAvg > 0 ? Math.min(100, (pace30DailyAvg / ytdDailyAvg) * 100) : 0;
+    var _momentumBadge;
+    if (Math.abs(_pct30vsYtd) <= 5) {
+      _momentumBadge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:500;background:#2c2c2a;color:#888780;">Steady pace</span>';
+    } else if (_pct30vsYtd < 0) {
+      _momentumBadge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:500;background:#633806;color:#FAC775;">&#x25BC; Slowing \u2014 '+Math.abs(_pct30vsYtd).toFixed(0)+'% below YTD pace</span>';
+    } else {
+      _momentumBadge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:500;background:#085041;color:#9FE1CB;">&#x25B2; Accelerating \u2014 '+_pct30vsYtd.toFixed(0)+'% above YTD pace</span>';
+    }
+    var _col4Sub  = (toTarget >= 0 ? '+' : '') + toTarget.toLocaleString() + ' &middot; ' + targetPct + '% of target';
+    var _colLbl   = 'font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;';
+    var _valStyle = 'font-size:22px;font-weight:500;line-height:1.1;';
+    var _divider  = '<div style="background:#2c2c2a;width:1px;height:40px;align-self:center;"></div>';
+
+    // CSS grid gives ironclad equal column widths — flex had drift when
+    // column contents varied in intrinsic width.
+    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:1.25rem;">'
+      // Col 1: Day of year
+      +'<div style="min-width:0;text-align:center;">'
+        +'<div style="'+_colLbl+'">Day of year</div>'
+        +'<div style="display:flex;align-items:baseline;gap:6px;justify-content:center;"><span style="'+_valStyle+'color:#e8e6e0;">'+dayOfYear+'</span><span style="font-size:11px;color:#5f5e5a;">of 365</span></div>'
+      +'</div>'
+      +_divider
+      // Col 2: Units to date
+      +'<div style="min-width:0;text-align:center;">'
+        +'<div style="'+_colLbl+'">Units to date</div>'
+        +'<div style="'+_valStyle+'color:#378ADD;">'+totalUnits.toLocaleString()+'</div>'
+      +'</div>'
+      +_divider
+      // Col 3: Year-end target
+      +'<div style="min-width:0;text-align:center;">'
+        +'<div style="'+_colLbl+'">Year-end target</div>'
+        +'<div style="'+_valStyle+'color:#e8e6e0;">3,927,000</div>'
+      +'</div>'
+      +_divider
+      // Col 4: Year-end projection
+      +'<div style="min-width:0;text-align:center;">'
+        +'<div style="'+_colLbl+'">Year-end projection</div>'
+        +'<div style="'+_valStyle+'color:#1D9E75;">'+yearProj.toLocaleString()+'</div>'
+        +'<div style="font-size:11px;color:#1D9E75;margin-top:3px;">'+_col4Sub+'</div>'
+      +'</div>'
+      +_divider
+      // Col 5: Pace comparison (24px left padding keeps bars clear of the divider;
+      // badge sits inline with the label so the column matches the height of the others)
+      +'<div style="min-width:0;padding-left:24px;">'
+        +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap;">'
+          +'<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Pace comparison</div>'
+          +_momentumBadge
+        +'</div>'
+        +'<div style="display:flex;flex-direction:column;gap:5px;">'
+          +'<div style="display:flex;align-items:center;gap:8px;">'
+            +'<div style="width:52px;font-size:10px;color:#888780;flex-shrink:0;">YTD avg</div>'
+            +'<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;"><div style="height:100%;width:100%;background:#378ADD;border-radius:2px;"></div></div>'
+            +'<div style="font-size:10px;color:#378ADD;font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums;">'+Math.round(ytdDailyAvg).toLocaleString()+' / day</div>'
+          +'</div>'
+          +'<div style="display:flex;align-items:center;gap:8px;">'
+            +'<div style="width:52px;font-size:10px;color:#888780;flex-shrink:0;">Last 30d</div>'
+            +'<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;"><div style="height:100%;width:'+_barWidth30.toFixed(1)+'%;background:#EF9F27;border-radius:2px;"></div></div>'
+            +'<div style="font-size:10px;color:#EF9F27;font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums;">'+Math.round(pace30DailyAvg).toLocaleString()+' / day</div>'
+          +'</div>'
+        +'</div>'
+      +'</div>'
+    +'</div>';
+
+    // Progress bar (existing visual \u2014 markers preserved; only labels below change).
+    var _barHTML = '<div style="margin-bottom:10px;"><div style="background:#2c2c2a;border-radius:8px;height:14px;overflow:visible;position:relative;">'
+      +'<div style="position:absolute;top:0;left:0;height:100%;width:100%;background:'+(onTrack?'#1D9E75':'#EF9F27')+';border-radius:8px;opacity:0.2"></div>'
+      +'<div style="position:absolute;top:0;left:0;height:100%;width:'+actualPct.toFixed(1)+'%;background:#94A3B8;border-radius:8px 0 0 8px"></div>'
+      +'<div style="position:absolute;top:-4px;left:'+tOnBar.toFixed(1)+'%;height:22px;width:2px;background:#e8e6e0;border-radius:1px;opacity:0.4"></div>'
+      +'<div style="position:absolute;top:-4px;left:'+actualPct.toFixed(1)+'%;height:22px;width:2px;background:#94A3B8;border-radius:1px"></div>'
+      +'</div></div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-top:10px;">'
+        +'<span style="color:#5f5e5a;">To date: '+totalUnits.toLocaleString()+'</span>'
+        +'<span style="color:#e8e6e0;font-weight:500;">Target: 3,927,000</span>'
+        +'<span style="color:#1D9E75;font-weight:500;">Projected: '+yearProj.toLocaleString()+' ('+targetPct+'%)</span>'
+      +'</div>';
+
+    yearEndHTML = _colsRow + _barHTML;
+  } else {
+    yearEndHTML =
+      '<div style="font-size:12px;color:#5f5e5a;font-style:italic;padding:.5rem 0;">Year-end projection is only available for the current year\u2019s year-to-date range.</div>'
+      +'<div style="margin-top:8px;font-size:13px;color:#e8e6e0;">Units in range: <strong style="font-weight:500">'+totalUnits.toLocaleString()+'</strong></div>';
+  }
 
   var typeSplitHTML='<div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem">Product type split</div>'
     +'<div style="display:flex;gap:10px;margin-bottom:1rem">'
@@ -3842,111 +3926,215 @@ function renderCustomerOverview(healthData) {
     return '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;'+(ml?'margin-left:5px;':'')+'background:'+(pos?'#085041':'#791F1F')+';color:'+(pos?'#9FE1CB':'#F09595')+'">'+(pos?'+':'')+p.toFixed(1)+'%</span>';
   }
 
+  // ── Concentration card ─────────────────────────────────────────────
+  // Top-5 / top-10 share of YTD production (current year vs same window last
+  // year). Customers list is already sorted by cd.ytd desc, so slice(0,N) is
+  // the current-year top-N; the prior-year top-N is computed by re-sorting
+  // against ytd25 (composition changes year-to-year).
+  var totalYtdAll   = customers.reduce(function(s,c){ return s + (c.ytd  ||0); }, 0);
+  var totalYtd25All = customers.reduce(function(s,c){ return s + (c.ytd25||0); }, 0);
+  // ── Concentration computations ────────────────────────────────────
+  // Customers list is sorted by cd.ytd desc, so slice(0,N) is the current-year
+  // top-N. Prior-year top-N is computed by re-sorting against ytd25 (composition
+  // changes year-to-year).
+  var top5CurPct = 0, top10CurPct = 0, top5PriorPct = null, top10PriorPct = null;
+  if (totalYtdAll > 0) {
+    function _topSum(arr, n, key) {
+      return arr.slice(0, n).reduce(function(s,c){ return s + (c[key]||0); }, 0);
+    }
+    var _top5Cur    = _topSum(customers, 5,  'ytd');
+    var _top10Cur   = _topSum(customers, 10, 'ytd');
+    var _byPrior    = customers.slice().sort(function(a,b){ return (b.ytd25||0) - (a.ytd25||0); });
+    var _top5Prior  = _topSum(_byPrior,   5,  'ytd25');
+    var _top10Prior = _topSum(_byPrior,   10, 'ytd25');
+    top5CurPct    = _top5Cur  / totalYtdAll   * 100;
+    top10CurPct   = _top10Cur / totalYtdAll   * 100;
+    top5PriorPct  = totalYtd25All > 0 ? _top5Prior  / totalYtd25All * 100 : null;
+    top10PriorPct = totalYtd25All > 0 ? _top10Prior / totalYtd25All * 100 : null;
+  }
+
+  // Concentration delta badge: green ▲ for +, red ▼ for −, gray for < 0.1 pp.
+  function _concBadge(curPct, prevPct) {
+    if (prevPct == null) return '<span style="font-size:10px;color:#5f5e5a;">no '+prevYr+' baseline</span>';
+    var pp = curPct - prevPct;
+    if (Math.abs(pp) < 0.1) {
+      return '<span style="display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:500;background:#2c2c2a;color:#888780;">flat vs '+prevYr+'</span>';
+    }
+    var pos = pp > 0;
+    var bg    = pos ? '#085041' : '#791F1F';
+    var color = pos ? '#9FE1CB' : '#F09595';
+    var arrow = pos ? '&#x25B2;' : '&#x25BC;';
+    var sign  = pos ? '+' : '';
+    return '<span style="display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:500;background:'+bg+';color:'+color+';">'+arrow+' '+sign+pp.toFixed(1)+'pp vs '+prevYr+'</span>';
+  }
+  function _concStat(label, curPct, prevPct) {
+    return '<div style="display:inline-flex;align-items:baseline;gap:8px;">'
+      +'<span style="font-size:20px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+curPct.toFixed(1)+'%</span>'
+      +'<span style="font-size:11px;color:#5f5e5a;">'+label+'</span>'
+      +_concBadge(curPct, prevPct)
+    +'</div>';
+  }
+
+  // ── Concentration summary bar ────────────────────────────────────
+  // Rendered into the outer #cust-concentration-inner container (outside
+  // #content), which is sticky at top:68 — sits between the main nav and the
+  // sub-nav on the customer tab. See renderImpl for the visibility toggle.
+  var concentrationInner = document.getElementById('cust-concentration-inner');
+  if (concentrationInner) {
+    if (totalYtdAll > 0) {
+      concentrationInner.innerHTML = '<div style="height:52px;display:flex;align-items:center;gap:20px;">'
+        +'<span style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Customer concentration &middot; '+nowYr+' YTD</span>'
+        +_concStat('top 5',  top5CurPct,  top5PriorPct)
+        +'<span style="width:1px;height:24px;background:#2c2c2a;"></span>'
+        +_concStat('top 10', top10CurPct, top10PriorPct)
+        +'<span style="margin-left:auto;font-size:10px;color:#5f5e5a;">Higher % = more concentrated in fewer customers</span>'
+      +'</div>';
+    } else {
+      concentrationInner.innerHTML = '';
+    }
+  }
+
+  // ── Column header row (sticky, top:108 + 52 = 160) ────────────────
+  // Shared 8-column grid template: rank | customer | bars | units | lots | avg | %prod | sparkline.
+  var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px';
+  var _thStyle  = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;';
+  var columnHeaderHTML = '<div style="position:sticky;top:160px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;margin-top:-16px;">'
+    +'<div></div>'
+    +'<div style="'+_thStyle+'">Customer</div>'
+    +'<div style="'+_thStyle+'">'+prevYr+' &middot; '+nowYr+'</div>'
+    +'<div style="'+_thStyle+'text-align:right;">Units YTD</div>'
+    +'<div style="'+_thStyle+'text-align:right;">Lots</div>'
+    +'<div style="'+_thStyle+'text-align:right;">Avg run</div>'
+    +'<div style="'+_thStyle+'text-align:right;">% prod</div>'
+    +'<div></div>'
+  +'</div>';
+
+  // YoY badge for row metrics: green/red/gray with ±2% steady threshold.
+  function _yoyBadge(cur, prev) {
+    if (!prev) return '';
+    var p = (cur - prev) / prev * 100;
+    var bg, color;
+    if (Math.abs(p) <= 2)   { bg = '#2c2c2a'; color = '#888780'; }
+    else if (p > 0)         { bg = '#085041'; color = '#9FE1CB'; }
+    else                    { bg = '#791F1F'; color = '#F09595'; }
+    return '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:'+bg+';color:'+color+';">'+(p>0?'+':'')+p.toFixed(1)+'%</span>';
+  }
+  // Neutral-only YoY badge — used where direction isn't inherently good/bad
+  // (e.g. Avg run size). Always gray regardless of sign.
+  function _neutralBadge(cur, prev) {
+    if (!prev) return '';
+    var p = (cur - prev) / prev * 100;
+    return '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#2c2c2a;color:#888780;">'+(p>0?'+':'')+p.toFixed(1)+'%</span>';
+  }
+
+  // Max scaling for the 2025/2026 bar comparison — visible customers only.
+  var maxBarUnits = Math.max.apply(null, visibleCustomers.map(function(c){return Math.max(c.ytd||0, c.ytd25||0);})) || 1;
+
+  // ── Customer rows ─────────────────────────────────────────────────
   var rows = visibleCustomers.map(function(cd, idx) {
-    var sid = safeid(cd.cust);
+    var sid  = safeid(cd.cust);
     var expanded = !!_chExpanded[sid];
     var rank = idx + 1;
-    // Medal colors for the top three so the leaderboard is legible at a
-    // glance; everything from #4 down is neutral grey.
-    var rankColor = rank===1 ? '#FFD700' : rank===2 ? '#C0C6CC' : rank===3 ? '#CD7F32' : '#5f5e5a';
-    var rankWeight = rank<=3 ? '600' : '500';
 
-    var borderColor = cd.tag==='growing'?'#1D9E75':cd.tag==='declining'?'#791F1F':cd.tag==='new'?'#378ADD':'#444441';
-    var bar26Color  = cd.tag==='declining'?'#791F1F':'#378ADD';
-
-    var tagEl = cd.tag==='growing'
-      ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#x2191; Growing</span>'
+    var tagBadge = cd.tag==='growing'
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;">&#x2191; Growing</span>'
       : cd.tag==='declining'
-      ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;flex-shrink:0;">&#x2193; Declining</span>'
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;">&#x2193; Declining</span>'
       : cd.tag==='flat'
-      ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2c2c2a;color:#888780;flex-shrink:0;">&#x2192; Flat</span>'
-      : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#0C447C;color:#85B7EB;flex-shrink:0;">New</span>';
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2c2c2a;color:#888780;">&#x2192; Flat</span>'
+      : '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#0C447C;color:#85B7EB;">New</span>';
 
     var ytdAvgRun   = cd.ytdLots   > 0 ? Math.round(cd.ytd   / cd.ytdLots)   : 0;
     var ytdAvgRun25 = cd.ytdLots25 > 0 ? Math.round(cd.ytd25 / cd.ytdLots25) : 0;
 
-    var w25 = cd.ytd25 ? Math.round((cd.ytd25/maxYtd)*100) : 0;
-    var w26 = cd.ytd   ? Math.round((cd.ytd/maxYtd)*100)   : 0;
+    var bar25Pct = cd.ytd25 ? (cd.ytd25 / maxBarUnits) * 100 : 0;
+    var bar26Pct = cd.ytd   ? (cd.ytd   / maxBarUnits) * 100 : 0;
 
+    // Quarterly sparkline — flex bars so they auto-size into the 40px cell
+    // regardless of how many quarters have accumulated since TRACKING_START.
     var sparkMax = Math.max.apply(null, cd.qtrs.map(function(q){return q.units;})) || 1;
     var sparkBars = cd.qtrs.map(function(q) {
-      var h = q.units ? Math.max(3, Math.round((q.units/sparkMax)*28)) : 3;
+      var h = q.units ? Math.max(3, Math.round((q.units/sparkMax)*22)) : 3;
       var isCur = q.key === curQk;
-      var col = isCur ? '#378ADD' : (q.units > 0 ? bar26Color : '#2c2c2a');
+      var col = isCur ? '#378ADD' : (q.units > 0 ? '#378ADD' : '#2c2c2a');
       var op  = isCur ? '.6' : (q.units > 0 ? '.75' : '.3');
-      return '<div style="width:7px;height:'+h+'px;background:'+col+';opacity:'+op+';border-radius:1px 1px 0 0;align-self:flex-end;"></div>';
+      return '<div style="flex:1;min-width:0;height:'+h+'px;background:'+col+';opacity:'+op+';border-radius:1px 1px 0 0;"></div>';
     }).join('');
+    var sparklineHTML = '<div style="display:flex;align-items:flex-end;gap:1px;height:22px;">'+sparkBars+'</div>';
 
-    var headerInner =
-      '<div style="width:140px;flex-shrink:0;">'
-        +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;margin-bottom:4px;">'
-          +'<span style="color:'+rankColor+';font-size:11px;font-weight:'+rankWeight+';margin-right:6px;font-variant-numeric:tabular-nums;">#'+rank+'</span>'
-          +esc(cd.cust)
-        +'</div>'
-        +tagEl
+    var barsCell = '<div style="display:flex;flex-direction:column;gap:4px;min-width:0;">'
+      +'<div style="display:flex;align-items:center;gap:8px;">'
+        +'<div style="width:28px;font-size:10px;color:#5f5e5a;flex-shrink:0;">'+prevYr+'</div>'
+        +'<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;"><div style="height:100%;width:'+bar25Pct.toFixed(1)+'%;background:#2a4a7c;border-radius:2px;"></div></div>'
+        +'<div style="width:80px;font-size:10px;color:#5f5e5a;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;">'+(cd.ytd25?cd.ytd25.toLocaleString():'&#x2014;')+'</div>'
       +'</div>'
-      +'<div style="flex:1;display:flex;flex-direction:column;gap:4px;min-width:0;">'
-        +'<div style="display:flex;align-items:center;gap:7px;">'
-          +'<div style="width:32px;font-size:10px;color:#5f5e5a;flex-shrink:0;">'+prevYr+'</div>'
-          +'<div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w25+'%;background:#4A6580;border-radius:2px;"></div></div>'
-          +'<div style="font-size:11px;color:#888780;width:80px;text-align:right;flex-shrink:0;">'+(cd.ytd25?cd.ytd25.toLocaleString():'&#x2014;')+'</div>'
-          +'<div style="width:60px;flex-shrink:0;"></div>'
-        +'</div>'
-        +'<div style="display:flex;align-items:center;gap:7px;">'
-          +'<div style="width:32px;font-size:10px;color:#378ADD;flex-shrink:0;">'+nowYr+'</div>'
-          +'<div style="flex:1;height:7px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w26+'%;background:'+bar26Color+';border-radius:2px;"></div></div>'
-          +'<div style="font-size:11px;color:#e8e6e0;font-weight:500;width:80px;text-align:right;flex-shrink:0;">'+cd.ytd.toLocaleString()+'</div>'
-          +'<div style="width:60px;flex-shrink:0;">'+pctBadge(cd.ytd, cd.ytd25, false)+'</div>'
-        +'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px;">'
+        +'<div style="width:28px;font-size:10px;color:#85B7EB;flex-shrink:0;">'+nowYr+'</div>'
+        +'<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;"><div style="height:100%;width:'+bar26Pct.toFixed(1)+'%;background:#378ADD;border-radius:2px;"></div></div>'
+        +'<div style="width:80px;font-size:10px;color:#85B7EB;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;">'+(cd.ytd?cd.ytd.toLocaleString():'&#x2014;')+'</div>'
       +'</div>'
-      +'<div style="width:80px;flex-shrink:0;text-align:right;padding-left:16px;">'
-        +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Lots YTD</div>'
-        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+cd.ytdLots+'</div>'
-        +(cd.ytdLots25?'<div style="font-size:10px;color:#5f5e5a;">was '+cd.ytdLots25+'</div>':'')
-      +'</div>'
-      +'<div style="width:130px;flex-shrink:0;text-align:right;">'
-        +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Avg run size</div>'
-        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+(ytdAvgRun?ytdAvgRun.toLocaleString():'&#x2014;')+'</div>'
-        +(ytdAvgRun&&ytdAvgRun25?'<div>'+pctBadge(ytdAvgRun, ytdAvgRun25, false)+'</div>':'<div style="height:18px;"></div>')
-      +'</div>'
-      +'<div style="width:130px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;">'
-        +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">% of production</div>'
-        +'<div style="font-size:14px;font-weight:500;color:#e8e6e0;">'+(cd.ytdPct!==null?cd.ytdPct+'%':'&#x2014;')+'</div>'
-        +(cd.ytdPct!==null&&cd.ytdPct25!==null?'<div>'+pctBadge(cd.ytdPct, cd.ytdPct25, false)+'</div>':'<div style="height:18px;"></div>')
-      +'</div>'
-      +'<div style="display:flex;align-items:flex-end;gap:2px;height:28px;flex-shrink:0;margin-left:16px;">'+sparkBars+'</div>'
-      +'<svg id="ch-chev-'+sid+'" width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;margin-left:8px;transition:transform .15s;transform:'+(expanded?'rotate(180deg)':'')+'"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-    var header = '<div onclick="toggleCH(\''+sid+'\')" style="display:flex;align-items:center;gap:0;padding:11px 14px 11px 12px;cursor:pointer;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
-      +headerInner
     +'</div>';
 
+    // % production change — neutral-gray pill badge to match Avg Run (direction
+    // isn't inherently good/bad). Uses relative % change for style consistency
+    // with Units YTD / Avg Run, not pp change.
+    var pctProdSub = (cd.ytdPct!==null && cd.ytdPct25)
+      ? '<div style="margin-top:2px;">'+_neutralBadge(cd.ytdPct, cd.ytdPct25)+'</div>'
+      : '';
+
+    var summaryRow = '<div onclick="toggleCH(\''+sid+'\')" style="display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:8px 16px;background:#1a1d20;border-bottom:0.5px solid #1e2124;cursor:pointer;transition:background .12s;" onmouseover="this.style.background=\'#1e2124\'" onmouseout="this.style.background=\'#1a1d20\'">'
+      // Rank
+      +'<div style="font-size:11px;color:#5f5e5a;font-variant-numeric:tabular-nums;">#'+rank+'</div>'
+      // Customer
+      +'<div style="min-width:0;">'
+        +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(cd.cust)+'">'+esc(cd.cust)+'</div>'
+        +'<div style="margin-top:4px;">'+tagBadge+'</div>'
+      +'</div>'
+      // Bar comparison (2025 / 2026)
+      +barsCell
+      // Units YTD
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+cd.ytd.toLocaleString()+'</div>'
+        +(cd.ytd25?'<div style="margin-top:2px;">'+_yoyBadge(cd.ytd, cd.ytd25)+'</div>':'')
+      +'</div>'
+      // Lots
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+cd.ytdLots+'</div>'
+        +(cd.ytdLots25?'<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">was '+cd.ytdLots25+'</div>':'')
+      +'</div>'
+      // Avg run
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+(ytdAvgRun?ytdAvgRun.toLocaleString():'&#x2014;')+'</div>'
+        +(ytdAvgRun&&ytdAvgRun25?'<div style="margin-top:2px;">'+_yoyBadge(ytdAvgRun, ytdAvgRun25)+'</div>':'')
+      +'</div>'
+      // % of production
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+(cd.ytdPct!==null?cd.ytdPct+'%':'&#x2014;')+'</div>'
+        +pctProdSub
+      +'</div>'
+      // Sparkline
+      +sparklineHTML
+    +'</div>';
+
+    // Expandable quarterly detail (unchanged)
     var maxUnits = Math.max.apply(null, cd.qtrs.map(function(q){return q.units;})) || 1;
-    var tableRows = cd.qtrs.map(function(q, idx) {
+    var tableRows = cd.qtrs.map(function(q, qidx) {
       var isCur = q.key === curQk;
       var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
       var rBg = isCur ? 'background:#1a2030;' : '';
-
       var prevWithData = null;
-      for (var pi=idx-1; pi>=0; pi--) { if (cd.qtrs[pi].units>0){prevWithData=cd.qtrs[pi];break;} }
+      for (var pi=qidx-1; pi>=0; pi--) { if (cd.qtrs[pi].units>0){prevWithData=cd.qtrs[pi];break;} }
       var unitsDelta = '';
-      if (prevWithData && q.units>0 && !isCur) {
-        unitsDelta = pctBadge(q.units, prevWithData.units, true);
-      } else if (!prevWithData && q.units>0) {
-        unitsDelta = ' <span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
-      }
-
+      if (prevWithData && q.units>0 && !isCur) unitsDelta = pctBadge(q.units, prevWithData.units, true);
+      else if (!prevWithData && q.units>0)     unitsDelta = ' <span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
       var prevRun = null;
-      for (var ri=idx-1; ri>=0; ri--) { if (cd.qtrs[ri].avgRun>0){prevRun=cd.qtrs[ri].avgRun;break;} }
+      for (var ri=qidx-1; ri>=0; ri--) { if (cd.qtrs[ri].avgRun>0){prevRun=cd.qtrs[ri].avgRun;break;} }
       var runDelta = prevRun && q.avgRun && !isCur ? pctBadge(q.avgRun, prevRun, true) : '';
-
       var prevPct = null;
-      for (var ci=idx-1; ci>=0; ci--) { if (cd.qtrs[ci].pctOfProd!==null){prevPct=cd.qtrs[ci].pctOfProd;break;} }
+      for (var ci=qidx-1; ci>=0; ci--) { if (cd.qtrs[ci].pctOfProd!==null){prevPct=cd.qtrs[ci].pctOfProd;break;} }
       var pctDelta = prevPct!==null && q.pctOfProd!==null && !isCur ? pctBadge(q.pctOfProd, prevPct, true) : '';
-
       var bW = q.units ? Math.round((q.units/maxUnits)*88) : 0;
       var bCol = isCur ? '#378ADD' : '#4A6580';
-
       return '<tr>'
         +'<td style="'+tdB+rBg+'color:'+(isCur?'#378ADD':'#888780')+';font-weight:'+(isCur?'500':'400')+';">'
           +(isCur?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')
@@ -3968,8 +4156,7 @@ function renderCustomerOverview(healthData) {
     }).join('');
 
     var custDataObj = {
-      name: cd.cust,
-      tag: cd.tag,
+      name: cd.cust, tag: cd.tag,
       ytd: cd.ytd, ytd25: cd.ytd25,
       ytdLots: cd.ytdLots, ytdLots25: cd.ytdLots25,
       ytdPct: cd.ytdPct, ytdPct25: cd.ytdPct25,
@@ -3978,12 +4165,12 @@ function renderCustomerOverview(healthData) {
       })
     };
 
-    var detailTable = '<div id="ch-body-'+sid+'" style="display:'+(expanded?'block':'none')+';border-top:0.5px solid #2c2c2a;">'
+    var detailTable = '<div id="ch-body-'+sid+'" style="display:'+(expanded?'block':'none')+';background:#141618;border-bottom:0.5px solid #1e2124;">'
       +'<script type="application/json" id="ch-data-'+sid+'">'+JSON.stringify(custDataObj)+'<\/script>'
-      +'<div id="ch-synopsis-'+sid+'" style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;background:#141618;min-height:44px;"></div>'
+      +'<div id="ch-synopsis-'+sid+'" style="padding:12px 16px;border-bottom:0.5px solid #2c2c2a;background:#141618;min-height:44px;"></div>'
       +'<table style="width:100%;border-collapse:collapse;">'
       +'<thead><tr>'
-        +'<th style="'+thSL+'padding-left:14px;width:90px;">Quarter</th>'
+        +'<th style="'+thSL+'padding-left:16px;width:90px;">Quarter</th>'
         +'<th style="'+thS+'">Units</th>'
         +'<th style="'+thS+'width:70px;">vs prev</th>'
         +'<th style="'+thS+'">Lots</th>'
@@ -3991,26 +4178,20 @@ function renderCustomerOverview(healthData) {
         +'<th style="'+thS+'width:70px;">vs prev</th>'
         +'<th style="'+thS+'">% of production</th>'
         +'<th style="'+thS+'width:70px;">vs prev</th>'
-        +'<th style="'+thS+'padding-right:14px;width:110px;">Volume</th>'
+        +'<th style="'+thS+'padding-right:16px;width:110px;">Volume</th>'
       +'</tr></thead>'
       +'<tbody>'+tableRows+'</tbody>'
       +'</table>'
     +'</div>';
 
-    return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-left:3px solid '+borderColor+';border-radius:0 10px 10px 0;overflow:hidden;margin-bottom:5px;">'
-      +header+detailTable
-    +'</div>';
+    return summaryRow + detailTable;
   }).join('');
 
-  var legendHTML = '';
-
-
-  // Hide external sticky header — not used
+  // Hide the legacy external sticky header — replaced by the inline sticky rows.
   var hdrOuter = document.getElementById('cust-col-header-outer');
   if(hdrOuter) hdrOuter.style.display = 'none';
 
-  return '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Customer overview &middot; thru '+ytdLabel+'</div>'
-    +rows;
+  return columnHeaderHTML + rows;
 }
 
 function _triggerExpandedSynopses() {
@@ -5653,12 +5834,124 @@ function renderOrdersSummary() {
     + emptyStatus
     + '</div>';
 
+  // ── Order aging (all on-the-books orders) ───────────────────────────
+  // Buckets every open order by `# of Weeks on the Books`, independent of
+  // Planning Status. The Labels Blocker only covers one status; a lot of
+  // stuck work hides in Customer Driven / Ready to Plan / Scheduled, etc.
+  // Shows only 4+ weeks (anything younger is routine).
+  var agingRowsAll = [];
+  Object.keys(stats.rowsByStatus || {}).forEach(function(st){
+    var rb = stats.rowsByStatus[st] || {};
+    (rb.powder ||[]).forEach(function(r){ agingRowsAll.push({row:r, type:'Powder',  status:st}); });
+    (rb.capsule||[]).forEach(function(r){ agingRowsAll.push({row:r, type:'Capsule', status:st}); });
+  });
+  var agingBuckets = {
+    '4-8':  { rows:[], units:0, label:'4–8 weeks',  color:'#FAC775', bg:'#2a2310', accent:'#FAC775' },
+    '8-12': { rows:[], units:0, label:'8–12 weeks', color:'#EF9F27', bg:'#2a1e0a', accent:'#EF9F27' },
+    '12+':  { rows:[], units:0, label:'12+ weeks',      color:'#F09595', bg:'#2a1414', accent:'#E24B4A' }
+  };
+  agingRowsAll.forEach(function(x){
+    var w = num(x.row['# of Weeks on the Books']);
+    var key = w >= 12 ? '12+' : w >= 8 ? '8-12' : w >= 4 ? '4-8' : null;
+    if (!key) return;
+    agingBuckets[key].rows.push(x);
+    agingBuckets[key].units += num(x.row['Order Amount']);
+  });
+  var agingOrder = ['12+','8-12','4-8'];  // most urgent on the left
+  // Collapse an orphan drilldown if the bucket is now empty (e.g. after refresh).
+  if (agingDrilldown && (!agingBuckets[agingDrilldown] || agingBuckets[agingDrilldown].rows.length === 0)) {
+    agingDrilldown = null;
+  }
+  var agingTotalCount = agingOrder.reduce(function(a,k){ return a + agingBuckets[k].rows.length; }, 0);
+  var agingTotalUnits = agingOrder.reduce(function(a,k){ return a + agingBuckets[k].units;       }, 0);
+
+  function agingCardHTML(key){
+    var b = agingBuckets[key];
+    var isOpen = agingDrilldown === key;
+    var count = b.rows.length;
+    var disabled = count === 0;
+    var cardBg = isOpen ? b.bg : '#1a1d20';
+    var cursor = disabled ? 'default' : 'pointer';
+    var hover = disabled ? ''
+      : ' onmouseover="if(!this.dataset.open)this.style.background=\''+b.bg+'\'" '
+      + 'onmouseout="if(!this.dataset.open)this.style.background=\'#1a1d20\'"';
+    var onClick = disabled ? '' : ' onclick="toggleAgingDrilldown(\''+key+'\')"';
+    var hint = disabled ? '' : '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+(isOpen?'▲ hide':'▼ view')+'</div>';
+    return '<div'+onClick+' '+(isOpen?'data-open="1" ':'')
+      + 'style="flex:1;background:'+cardBg+';border:0.5px solid #2c2c2a;border-left:3px solid '+b.accent+';border-radius:6px;padding:12px 14px;cursor:'+cursor+';transition:background .12s;opacity:'+(disabled?'.5':'1')+';"'
+      + hover + '>'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+      +   '<div style="font-size:11px;font-weight:500;color:'+b.color+';font-family:system-ui;">'+b.label+'</div>'
+      +   hint
+      + '</div>'
+      + '<div style="display:flex;align-items:baseline;gap:8px;">'
+      +   '<span style="font-size:22px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+count.toLocaleString()+'</span>'
+      +   '<span style="font-size:11px;color:#888780;font-family:system-ui;">order'+(count===1?'':'s')+'</span>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#888780;margin-top:3px;font-family:system-ui;font-variant-numeric:tabular-nums;">'
+      +   b.units.toLocaleString()+' units'
+      + '</div>'
+      + '</div>';
+  }
+  var agingCardsHTML = '<div style="display:flex;gap:10px;">' + agingOrder.map(agingCardHTML).join('') + '</div>';
+
+  var agingDrillHTML = '';
+  if (agingDrilldown && agingBuckets[agingDrilldown] && agingBuckets[agingDrilldown].rows.length) {
+    var _ab = agingBuckets[agingDrilldown];
+    var _drillRows = _ab.rows.slice().sort(function(a,c){
+      var dw = num(c.row['# of Weeks on the Books']) - num(a.row['# of Weeks on the Books']);
+      if (dw) return dw;
+      return num(c.row['Order Amount']) - num(a.row['Order Amount']);
+    });
+    var _drillColTpl = '72px 1.1fr 1.8fr 90px 70px 160px';
+    var _drillHeaders = '<div style="display:grid;grid-template-columns:'+_drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
+      + '<div>Type</div><div>Brand</div><div>Product</div>'
+      + '<div style="text-align:right;">Units</div>'
+      + '<div style="text-align:right;">Weeks</div>'
+      + '<div>Planning Status</div>'
+      + '</div>';
+    var _drillBody = _drillRows.map(function(x){
+      var rr = x.row;
+      var typeColor = x.type === 'Powder' ? LINE_COLOR['line#1'] : LINE_COLOR['line#2'];
+      var typeBg    = x.type === 'Powder' ? LINE_BG['line#1']    : LINE_BG['line#2'];
+      var weeksRaw  = (rr['# of Weeks on the Books']||'').toString().trim();
+      var weeksNum  = num(weeksRaw);
+      var weeksLabel = weeksRaw ? weeksRaw + ' wk' : '—';
+      var weeksColor = weeksNum >= 12 ? '#F09595' : weeksNum >= 8 ? '#EF9F27' : '#FAC775';
+      var pill = ORDERS_STATUS_PILL[x.status] || { bg:'#1a1d20', color:'#5f5e5a' };
+      return '<div style="display:grid;grid-template-columns:'+_drillColTpl+';gap:10px;padding:7px 2px;border-bottom:0.5px dashed #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
+        + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+x.type+'</span></div>'
+        + '<div style="color:#e8e6e0;font-weight:500;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(rr['Brand Name']||'')+'</div>'
+        + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(rr['Product Name']||'')+'</div>'
+        + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(rr['Order Amount']).toLocaleString()+'</div>'
+        + '<div style="text-align:right;color:'+weeksColor+';font-variant-numeric:tabular-nums;font-weight:500;">'+esc(weeksLabel)+'</div>'
+        + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+pill.bg+';color:'+pill.color+';white-space:nowrap;display:inline-block;">'+esc(x.status||'(blank)')+'</span></div>'
+        + '</div>';
+    }).join('');
+    agingDrillHTML = '<div style="background:#0f1012;border-left:2px solid '+_ab.accent+';padding:10px 14px 12px 14px;margin-top:10px;border-radius:6px;">'
+      + _drillHeaders + _drillBody
+      + '</div>';
+  }
+
+  var agingSummary = agingTotalCount === 0
+    ? 'No orders have been on the books 4+ weeks.'
+    : agingTotalCount + ' order' + (agingTotalCount===1?'':'s') + ' · ' + agingTotalUnits.toLocaleString() + ' units on the books 4+ weeks';
+
+  var agingHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px;">'
+    +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Order Aging — All Statuses</div>'
+    +   '<div style="font-size:11px;color:#888780;font-family:system-ui;">'+agingSummary+'</div>'
+    + '</div>'
+    + agingCardsHTML
+    + agingDrillHTML
+    + '</div>';
+
   // Each sub-tab scopes to a single focused section. All compute still happens
   // above (cheap); this just picks what to render.
   var viewHTML;
   if (ordersView === 'labels')        viewHTML = labelsHTML || '<div style="padding:24px;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">No orders are blocked by labels.</div>';
   else if (ordersView === 'planning') viewHTML = statusHTML;
-  else                                viewHTML = weeksHTML + customerChartHTML;
+  else                                viewHTML = weeksHTML + agingHTML + customerChartHTML;
   content.innerHTML = viewHTML;
 }
 
