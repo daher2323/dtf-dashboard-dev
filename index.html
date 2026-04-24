@@ -3479,32 +3479,28 @@ function renderPerformance() {
 
   var splitBarHTML = '<div style="display:flex;width:100%;height:12px;border-radius:6px;overflow:hidden;margin-bottom:6px;">'
     + '<div style="width:'+_pctL1.toFixed(2)+'%;background:#378ADD;"></div>'
-    + '<div style="width:'+_pctL4.toFixed(2)+'%;background:#E24B4A;"></div>'
+    + '<div style="width:'+_pctL4.toFixed(2)+'%;background:#D4537E;"></div>'
     + '<div style="width:'+_gapPct+'%;background:#141618;"></div>'
     + '<div style="width:'+_pctL2v.toFixed(2)+'%;background:#7F77DD;border-radius:0 6px 6px 0;"></div>'
   +'</div>';
 
   var bracketRowHTML = '<div style="display:flex;width:100%;margin-bottom:6px;">'
-    + '<div style="width:'+_pctPow.toFixed(2)+'%;"><div style="height:8px;border-left:2px solid #e8e6e0;border-right:2px solid #e8e6e0;border-bottom:2px solid #e8e6e0;border-radius:0 0 3px 3px;"></div></div>'
+    + '<div style="width:'+_pctPow.toFixed(2)+'%;"><div style="height:8px;border-left:1px solid #444441;border-right:1px solid #444441;border-bottom:1px solid #444441;border-radius:0 0 3px 3px;"></div></div>'
     + '<div style="width:'+_gapPct+'%;"></div>'
-    + '<div style="width:'+_pctL2v.toFixed(2)+'%;"><div style="height:8px;border-left:2px solid #7F77DD;border-right:2px solid #7F77DD;border-bottom:2px solid #7F77DD;border-radius:0 0 3px 3px;"></div></div>'
+    + '<div style="width:'+_pctL2v.toFixed(2)+'%;"><div style="height:8px;border-left:1px solid #7F77DD;border-right:1px solid #7F77DD;border-bottom:1px solid #7F77DD;border-radius:0 0 3px 3px;"></div></div>'
   +'</div>';
 
-  var bracketLabelsHTML = '<div style="display:flex;width:100%;margin-bottom:28px;">'
+  var bracketLabelsHTML = '<div style="display:flex;width:100%;margin-bottom:16px;">'
     + '<div style="width:'+_pctPow.toFixed(2)+'%;display:flex;align-items:baseline;justify-content:center;gap:8px;">'
-      + '<span style="font-size:14px;font-weight:500;color:#e8e6e0;">Powder</span>'
+      + '<span style="font-size:11px;font-weight:500;color:#e8e6e0;">Powder</span>'
       + '<span style="color:#5f5e5a;">&middot;</span>'
-      + '<span style="font-size:20px;font-weight:500;color:#e8e6e0;">'+_pctPow.toFixed(1)+'%</span>'
-      + '<span style="color:#5f5e5a;">&middot;</span>'
-      + '<span style="font-size:11px;color:#5f5e5a;">'+powU.toLocaleString()+' units</span>'
+      + '<span style="font-size:14px;font-weight:500;color:#e8e6e0;">'+_pctPow.toFixed(1)+'%</span>'
     + '</div>'
     + '<div style="width:'+_gapPct+'%;"></div>'
     + '<div style="width:'+_pctL2v.toFixed(2)+'%;display:flex;align-items:baseline;justify-content:center;gap:8px;">'
-      + '<span style="font-size:14px;font-weight:500;color:#7F77DD;">Capsule</span>'
+      + '<span style="font-size:11px;font-weight:500;color:#7F77DD;">Capsule</span>'
       + '<span style="color:#5f5e5a;">&middot;</span>'
-      + '<span style="font-size:20px;font-weight:500;color:#7F77DD;">'+_pctL2.toFixed(1)+'%</span>'
-      + '<span style="color:#5f5e5a;">&middot;</span>'
-      + '<span style="font-size:11px;color:#5f5e5a;">'+capU.toLocaleString()+' units</span>'
+      + '<span style="font-size:14px;font-weight:500;color:#7F77DD;">'+_pctL2.toFixed(1)+'%</span>'
     + '</div>'
   +'</div>';
 
