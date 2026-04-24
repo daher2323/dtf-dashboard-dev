@@ -3462,7 +3462,56 @@ function renderPerformance() {
       +'<div style="margin-top:8px;font-size:13px;color:#e8e6e0;">Units in range: <strong style="font-weight:500">'+totalUnits.toLocaleString()+'</strong></div>';
   }
 
+  // ── Split bar + bracket row ──────────────────────────────────────
+  // Full-width stacked visual that shows the L1 / L4 / L2 breakdown with a
+  // 1% visual gap between powder and capsule, plus brackets below grouping
+  // L1+L4 as Powder and L2 as Capsule. Sits above the per-type cards; cards
+  // themselves are unchanged.
+  var _pctL1 = totalUnits ? (l1u / totalUnits * 100) : 0;
+  var _pctL4 = totalUnits ? (l4u / totalUnits * 100) : 0;
+  var _pctL2 = totalUnits ? (l2u / totalUnits * 100) : 0;
+  var _pctPow = _pctL1 + _pctL4;
+  // Visual gap is carved from the capsule side so powder segments keep their
+  // true proportional widths; only inject it when both sides actually have
+  // material (avoids an orphan 1% sliver if one type is absent).
+  var _gapPct = (_pctPow > 0 && _pctL2 > 1) ? 1 : 0;
+  var _pctL2v = Math.max(0, _pctL2 - _gapPct);
+
+  var splitBarHTML = '<div style="display:flex;width:100%;height:12px;border-radius:6px;overflow:hidden;margin-bottom:6px;">'
+    + '<div style="width:'+_pctL1.toFixed(2)+'%;background:#378ADD;"></div>'
+    + '<div style="width:'+_pctL4.toFixed(2)+'%;background:#E24B4A;"></div>'
+    + '<div style="width:'+_gapPct+'%;background:#141618;"></div>'
+    + '<div style="width:'+_pctL2v.toFixed(2)+'%;background:#7F77DD;border-radius:0 6px 6px 0;"></div>'
+  +'</div>';
+
+  var bracketRowHTML = '<div style="display:flex;width:100%;margin-bottom:6px;">'
+    + '<div style="width:'+_pctPow.toFixed(2)+'%;"><div style="height:8px;border-left:2px solid #e8e6e0;border-right:2px solid #e8e6e0;border-bottom:2px solid #e8e6e0;border-radius:0 0 3px 3px;"></div></div>'
+    + '<div style="width:'+_gapPct+'%;"></div>'
+    + '<div style="width:'+_pctL2v.toFixed(2)+'%;"><div style="height:8px;border-left:2px solid #7F77DD;border-right:2px solid #7F77DD;border-bottom:2px solid #7F77DD;border-radius:0 0 3px 3px;"></div></div>'
+  +'</div>';
+
+  var bracketLabelsHTML = '<div style="display:flex;width:100%;margin-bottom:28px;">'
+    + '<div style="width:'+_pctPow.toFixed(2)+'%;display:flex;align-items:baseline;justify-content:center;gap:8px;">'
+      + '<span style="font-size:14px;font-weight:500;color:#e8e6e0;">Powder</span>'
+      + '<span style="color:#5f5e5a;">&middot;</span>'
+      + '<span style="font-size:20px;font-weight:500;color:#e8e6e0;">'+_pctPow.toFixed(1)+'%</span>'
+      + '<span style="color:#5f5e5a;">&middot;</span>'
+      + '<span style="font-size:11px;color:#5f5e5a;">'+powU.toLocaleString()+' units</span>'
+    + '</div>'
+    + '<div style="width:'+_gapPct+'%;"></div>'
+    + '<div style="width:'+_pctL2v.toFixed(2)+'%;display:flex;align-items:baseline;justify-content:center;gap:8px;">'
+      + '<span style="font-size:14px;font-weight:500;color:#7F77DD;">Capsule</span>'
+      + '<span style="color:#5f5e5a;">&middot;</span>'
+      + '<span style="font-size:20px;font-weight:500;color:#7F77DD;">'+_pctL2.toFixed(1)+'%</span>'
+      + '<span style="color:#5f5e5a;">&middot;</span>'
+      + '<span style="font-size:11px;color:#5f5e5a;">'+capU.toLocaleString()+' units</span>'
+    + '</div>'
+  +'</div>';
+
   var typeSplitHTML='<div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem">Product type split</div>'
+    +splitBarHTML
+    +bracketRowHTML
+    +bracketLabelsHTML
     +'<div style="display:flex;gap:10px;margin-bottom:1rem">'
     +'<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Powder (Lines 1 &amp; 4)</div><div style="font-size:18px;font-weight:500;color:#e8e6e0;margin-bottom:3px;">'+powU.toLocaleString()+'</div><div style="font-size:10px;color:#5f5e5a;margin-bottom:8px;">'+powPct+'% of total production</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;margin-bottom:6px;display:flex;"><div style="height:100%;width:'+(totalUnits?((l1u/totalUnits)*100).toFixed(1):0)+'%;background:#378ADD;border-radius:3px 0 0 3px;"></div><div style="height:100%;width:'+(totalUnits?((l4u/totalUnits)*100).toFixed(1):0)+'%;background:#D4537E;"></div></div><div style="display:flex;justify-content:space-between;font-size:10px;"><span style="color:#85B7EB;">&#9646; L1: '+l1u.toLocaleString()+'</span><span style="color:#ED93B1;">&#9646; L4: '+l4u.toLocaleString()+'</span></div></div>'
     +'<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Capsules (Line 2)</div><div style="font-size:18px;font-weight:500;color:#7F77DD;margin-bottom:3px;">'+capU.toLocaleString()+'</div><div style="font-size:10px;color:#5f5e5a;margin-bottom:8px;">'+capPct+'% of total production</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;margin-bottom:6px;"><div style="height:100%;width:'+capPct+'%;background:#7F77DD;border-radius:3px;"></div></div><div style="font-size:10px;color:#AFA9EC;">&#9646; L2: '+l2u.toLocaleString()+'</div></div></div>'
