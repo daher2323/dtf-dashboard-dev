@@ -2705,11 +2705,13 @@ function renderWeekly() {
   var neededPerDay=daysRemaining>0?Math.round(unitsNeeded/daysRemaining):0;
 
   // On pace = cumulative actual >= cumulative daily targets through completed days
-  // (mirrors per-line logic — skips today since it's still in progress)
+  // (mirrors per-line logic — skips today only while it's still in progress,
+  // i.e. before 4PM ET on the live week; after that, today counts as a full
+  // completed day — matches the Daily tab's "Day complete" threshold).
   var cumTarget=0, cumActual=0;
   wkDates.slice(0, daysElapsed).forEach(function(d){
     var dk=dateKey(d);
-    if(isLiveWeek && dk===dateKey(now)) return; // skip today — still in progress
+    if(isLiveWeek && !todayComplete && dk===dateKey(now)) return;
     var dayTotal=ALL_LINES.reduce(function(s,line){return s+((dailyTargets[dk]||{})[line]||0);},0);
     cumTarget+=dayTotal;
   });
@@ -2719,7 +2721,7 @@ function renderWeekly() {
     var dt=new Date(r['Date']); if(isNaN(dt)) return s;
     return dateKey(dt)===todayKey?s+num(r['Final Units']):s;
   },0):0;
-  cumActual=weekUnits-(isLiveWeek?todayUnitsWeek:0);
+  cumActual=weekUnits-((isLiveWeek && !todayComplete)?todayUnitsWeek:0);
   var onPace = daysRemaining===0
     ? weekUnits>=weeklyTarget*TARGET_HIT_THRESHOLD
     : cumTarget===0
@@ -2895,7 +2897,7 @@ function renderWeekly() {
       var lineCumTarget=0, lineCumActual=u;
       wkDates.slice(0,daysElapsed).forEach(function(d){
         var dk=dateKey(d);
-        if(isLiveWeek&&dk===dateKey(now)) return; // skip today — still in progress
+        if(isLiveWeek && !todayComplete && dk===dateKey(now)) return; // skip only if today still in progress
         var row=dailyTargets[dk]||{};
         lineCumTarget+=(row[line]||0);
       });
@@ -2917,11 +2919,13 @@ function renderWeekly() {
         var dayTgt=(dailyTargets[dk]||{})[line]||0;
         var hasDayData=dayU>0;
         var isFuture=isLiveWeek&&d>now;
-        var isToday=isLiveWeek&&dateKey(d)===dateKey(now);
-        var hitDay=dayTgt>0&&hasDayData&&!isToday&&(dayU/dayTgt)>=TARGET_HIT_THRESHOLD;
-        var devPct=dayTgt&&hasDayData&&!isToday?Math.round((dayU-dayTgt)/dayTgt*100):null;
+        // "Today still in progress" = live week AND today AND before 4PM ET.
+        // Once today is complete, it's treated like any other finished day.
+        var isTodayLive=isLiveWeek&&dateKey(d)===dateKey(now)&&!todayComplete;
+        var hitDay=dayTgt>0&&hasDayData&&!isTodayLive&&(dayU/dayTgt)>=TARGET_HIT_THRESHOLD;
+        var devPct=dayTgt&&hasDayData&&!isTodayLive?Math.round((dayU-dayTgt)/dayTgt*100):null;
         var devColor=devPct===null?'#888780':devPct>=-1?'#1D9E75':'#EF9F27';
-        var devStr=isToday&&hasDayData?'In progress':devPct===null?'':(devPct>=0?'+':'')+devPct+'% of tgt';
+        var devStr=isTodayLive&&hasDayData?'In progress':devPct===null?'':(devPct>=0?'+':'')+devPct+'% of tgt';
         if(hitDay) daysHit++;
         var cellBg=hitDay?'background:#041f18;border:0.5px solid #1D9E75;box-shadow:0 0 6px 1px rgba(29,158,117,0.18);':'background:#141618;border:0.5px solid #2c2c2a;';
         return '<div style="text-align:center;border-radius:6px;padding:5px 2px;'+cellBg+'">'
@@ -2941,7 +2945,7 @@ function renderWeekly() {
         +'</div>';
       }).join('');
       var daysWithData=wkDates.filter(function(d){
-        if(isLiveWeek&&dateKey(d)===dateKey(now)) return false; // today is in progress, not counted
+        if(isLiveWeek && !todayComplete && dateKey(d)===dateKey(now)) return false; // exclude today only while in progress
         var dk=dateKey(d); return ((dayLineUnits[line]||{})[dk]||0)>0;
       }).length;
       // Only show days hit counter when daily targets exist to compare against
