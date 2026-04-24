@@ -3967,8 +3967,10 @@ function renderCustomerOverview(healthData) {
     top10PriorPct = totalYtd25All > 0 ? _top10Prior / totalYtd25All * 100 : null;
   }
 
-  // Concentration delta badge: relative-% change (cur−prev)/prev × 100 to match
-  // the rest of the dashboard's YoY treatment. ±2% is considered steady.
+  // Concentration delta badge: relative-% change (cur−prev)/prev × 100.
+  // Color semantics are reversed vs a normal YoY badge — rising concentration
+  // is MORE risk (fewer customers carrying the book), so up = amber / caution;
+  // falling concentration = diversifying = green. ±2% is considered steady.
   function _concBadge(curPct, prevPct) {
     if (!prevPct) return '<span style="font-size:10px;color:#5f5e5a;">no '+prevYr+' baseline</span>';
     var p = (curPct - prevPct) / prevPct * 100;
@@ -3976,8 +3978,8 @@ function renderCustomerOverview(healthData) {
       return '<span style="display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:500;background:#2c2c2a;color:#888780;">flat vs '+prevYr+'</span>';
     }
     var pos = p > 0;
-    var bg    = pos ? '#085041' : '#791F1F';
-    var color = pos ? '#9FE1CB' : '#F09595';
+    var bg    = pos ? '#633806' : '#085041';
+    var color = pos ? '#FAC775' : '#9FE1CB';
     var arrow = pos ? '&#x25B2;' : '&#x25BC;';
     var sign  = pos ? '+' : '';
     return '<span style="display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:500;background:'+bg+';color:'+color+';">'+arrow+' '+sign+p.toFixed(1)+'% vs '+prevYr+'</span>';
