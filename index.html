@@ -3967,19 +3967,20 @@ function renderCustomerOverview(healthData) {
     top10PriorPct = totalYtd25All > 0 ? _top10Prior / totalYtd25All * 100 : null;
   }
 
-  // Concentration delta badge: green ▲ for +, red ▼ for −, gray for < 0.1 pp.
+  // Concentration delta badge: relative-% change (cur−prev)/prev × 100 to match
+  // the rest of the dashboard's YoY treatment. ±2% is considered steady.
   function _concBadge(curPct, prevPct) {
-    if (prevPct == null) return '<span style="font-size:10px;color:#5f5e5a;">no '+prevYr+' baseline</span>';
-    var pp = curPct - prevPct;
-    if (Math.abs(pp) < 0.1) {
+    if (!prevPct) return '<span style="font-size:10px;color:#5f5e5a;">no '+prevYr+' baseline</span>';
+    var p = (curPct - prevPct) / prevPct * 100;
+    if (Math.abs(p) <= 2) {
       return '<span style="display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:500;background:#2c2c2a;color:#888780;">flat vs '+prevYr+'</span>';
     }
-    var pos = pp > 0;
+    var pos = p > 0;
     var bg    = pos ? '#085041' : '#791F1F';
     var color = pos ? '#9FE1CB' : '#F09595';
     var arrow = pos ? '&#x25B2;' : '&#x25BC;';
     var sign  = pos ? '+' : '';
-    return '<span style="display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:500;background:'+bg+';color:'+color+';">'+arrow+' '+sign+pp.toFixed(1)+'pp vs '+prevYr+'</span>';
+    return '<span style="display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:500;background:'+bg+';color:'+color+';">'+arrow+' '+sign+p.toFixed(1)+'% vs '+prevYr+'</span>';
   }
   function _concStat(label, curPct, prevPct) {
     return '<div style="display:inline-flex;align-items:baseline;gap:8px;">'
