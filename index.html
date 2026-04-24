@@ -256,6 +256,7 @@ var lotIndexLoaded = false;
 var TARGET_HIT_THRESHOLD = 0.99; // 99% = within 1% tolerance
 var ALL_LINES = ['Line #1', 'Line #2', 'Line #4'];
 var LINE_COLOR = {'line#1':'#378ADD','line#2':'#7F77DD','line#4':'#D4537E'};
+var JAR_COLORS = ['#378ADD','#1D9E75','#EF9F27','#D4537E','#7F77DD','#D85A30','#639922','#E24B4A','#85B7EB','#5DCAA5'];
 var LINE_TRACK = {'line#1':'#061d35','line#2':'#1a1840','line#4':'#4B1528'};
 var LINE_BG    = {'line#1':'#0C447C','line#2':'#3C3489','line#4':'#72243E'};
 var LINE_TXT   = {'line#1':'#85B7EB','line#2':'#AFA9EC','line#4':'#ED93B1'};
@@ -303,6 +304,7 @@ var selectedDetailQuarter = 'ytd';
 var selectedDetailYear = new Date().getFullYear();
 var selectedDetailRange = null;
 var selectedPerfRange = null;
+var perfMixView       = 'all'; // 'all' | 'powder' | 'capsule' — Trend product-mix toggle
 var procView = 'materials'; // 'materials' | 'jars' | 'bottles' | 'lids' | 'desiccants'
 var procSearch = '';        // case-insensitive SKU filter on jars/bottles/lids/desiccants/neckbands
 var matYear = new Date().getFullYear(); // kept for renderMatInline compat
@@ -3195,6 +3197,246 @@ function updateOpsTable() {
   var ec=document.getElementById('export-count'); if(ec) ec.textContent='Export '+total.toLocaleString()+' lots';
 }
 
+// ── Trend product-mix helpers ─────────────────────────────────────────
+// Lot-size bucket thresholds used by the "Lot size distribution" panel.
+// Split the fat 1–5k middle and merge the sparse 5–10k / 10k+ tail so each
+// bucket carries meaningful weight given the current distribution.
+var _PM_BUCKETS = [
+  {key:'u1k',   label:'Under 1k',  test:function(u){ return u < 1000; }},
+  {key:'1_2_5', label:'1k – 2.5k', test:function(u){ return u >= 1000 && u < 2500; }},
+  {key:'2_5_5', label:'2.5k – 5k', test:function(u){ return u >= 2500 && u < 5000; }},
+  {key:'o5k',   label:'Over 5k',   test:function(u){ return u >= 5000; }}
+];
+// Per-bucket color treatment — left-border accents with a tinted value number.
+var _PM_BUCKET_STYLE = {
+  'u1k':   {border:'#8B4000', value:'#FAC775'},
+  '1_2_5': {border:'#2a4a7c', value:'#e8e6e0'},
+  '2_5_5': {border:'#378ADD', value:'#e8e6e0'},
+  'o5k':   {border:'#0F6E56', value:'#9FE1CB'}
+};
+// Which bucket's drill-down is currently expanded (null = none).
+var _pmBucketOpen = null;
+function _pmLineType(line) {
+  var k = (line||'').toLowerCase().replace(/\s/g,'').replace('#','');
+  if (k === 'line1' || k === 'line4') return 'powder';
+  if (k === 'line2')                  return 'capsule';
+  return null;
+}
+function _pmSizeForLot(lot, view) {
+  if (view === 'powder')  return lot.jarSize    ? jarSizeKey(lot.jarSize) : null;
+  if (view === 'capsule') return (lot.bottleSize||'').trim() || null;
+  // 'all' — pick jar for powder lots, bottle for capsule lots
+  var t = _pmLineType(lot.line);
+  if (t === 'powder')  return lot.jarSize    ? jarSizeKey(lot.jarSize) : null;
+  if (t === 'capsule') return (lot.bottleSize||'').trim() || null;
+  return null;
+}
+function _pmComputeView(lots, view) {
+  var filtered = lots.filter(function(l){
+    if (view === 'all') return true;
+    return _pmLineType(l.line) === view;
+  });
+  var container = {};
+  var bucketCounts = {u1k:0, '1_2_5':0, '2_5_5':0, o5k:0};
+  var bucketLots   = {u1k:[], '1_2_5':[], '2_5_5':[], o5k:[]};
+  var totalUnits = 0;
+  filtered.forEach(function(l){
+    var sz = _pmSizeForLot(l, view);
+    if (sz) container[sz] = (container[sz]||0) + l.finalUnits;
+    for (var i=0; i<_PM_BUCKETS.length; i++) {
+      if (_PM_BUCKETS[i].test(l.finalUnits)) {
+        bucketCounts[_PM_BUCKETS[i].key]++;
+        bucketLots[_PM_BUCKETS[i].key].push(l);
+        break;
+      }
+    }
+    totalUnits += l.finalUnits;
+  });
+  var entries = Object.entries(container).sort(function(a,b){return b[1]-a[1];}).slice(0,10);
+  var avgLotSize = filtered.length ? Math.round(totalUnits / filtered.length) : 0;
+  return {
+    entries: entries,
+    containerTotal: entries.reduce(function(s,e){return s+e[1];},0),
+    bucketCounts: bucketCounts,
+    bucketLots: bucketLots,
+    avgLotSize: avgLotSize,
+    lotCount: filtered.length
+  };
+}
+
+function setProductMix(view) {
+  perfMixView = view;
+  _pmBucketOpen = null;  // data changes — drop any open drill-down
+  renderProductMix();
+}
+
+function togglePmBucket(key) {
+  _pmBucketOpen = (_pmBucketOpen === key) ? null : key;
+  renderProductMix();
+}
+
+function renderProductMix() {
+  var store = window._pm; if (!store) return;
+  var data = store[perfMixView] || store.all;
+  var view = perfMixView;
+  var labels = {
+    all:     { section:'Product mix — all lines',        donut:'Container size mix', accent:'#378ADD' },
+    powder:  { section:'Powder product mix · jar size',  donut:'Jar size mix',       accent:'#378ADD' },
+    capsule: { section:'Capsule product mix · bottle size', donut:'Bottle size mix', accent:'#7F77DD' }
+  }[view];
+
+  var secLbl = document.getElementById('pm-section-label');
+  var donutLbl = document.getElementById('pm-donut-label');
+  if (secLbl)   secLbl.textContent   = labels.section;
+  if (donutLbl) donutLbl.textContent = labels.donut;
+
+  // Toggle button styles — relies on navBtnStyle so pills match the rest of the app.
+  ['all','powder','capsule'].forEach(function(v){
+    var btn = document.getElementById('pm-btn-'+v);
+    if (btn) btn.setAttribute('style', navBtnStyle(v === view));
+  });
+
+  // Legend — name / units / %
+  var legend = document.getElementById('jar-legend');
+  if (legend) {
+    var rows = data.entries.map(function(e,i){
+      var p = data.containerTotal ? ((e[1]/data.containerTotal)*100).toFixed(1) : 0;
+      return '<tr style="border-bottom:0.5px solid #2c2c2a"><td style="padding:3px 6px;width:16px"><div style="width:10px;height:10px;border-radius:2px;background:'+JAR_COLORS[i%JAR_COLORS.length]+'"></div></td>'
+        + '<td style="padding:3px 6px;font-weight:500">'+esc(e[0])+'</td>'
+        + '<td style="padding:3px 6px;text-align:right;white-space:nowrap">'+e[1].toLocaleString()+'</td>'
+        + '<td style="padding:3px 6px;text-align:right;color:#888780;width:40px">'+p+'%</td></tr>';
+    }).join('');
+    legend.innerHTML = rows ? '<table style="width:100%;border-collapse:collapse;font-size:11px"><tbody>'+rows+'</tbody></table>' : '<div style="font-size:11px;color:#5f5e5a;font-style:italic;padding:8px;">No data for this view.</div>';
+  }
+
+  // Donut — destroy + recreate so Chart.js picks up the new dataset.
+  try { if (charts.jar) charts.jar.destroy(); } catch(e){}
+  var canvas = document.getElementById('cJar');
+  if (canvas && data.entries.length) {
+    charts.jar = new Chart(canvas, {
+      type:'doughnut',
+      data:{
+        labels: data.entries.map(function(e){return e[0];}),
+        datasets:[{ data: data.entries.map(function(e){return e[1];}), backgroundColor: JAR_COLORS, borderWidth:0 }]
+      },
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){
+        var v=ctx.raw, p=data.containerTotal?((v/data.containerTotal)*100).toFixed(1):0;
+        return v.toLocaleString()+' units ('+p+'%)';
+      }}}}}
+    });
+  }
+
+  // Avg lot size subtitle — sits between the "Lot size distribution" label
+  // and the bucket cards.
+  var avgEl = document.getElementById('pm-avg-lot');
+  if (avgEl) {
+    avgEl.textContent = 'Avg lot size: ' + data.avgLotSize.toLocaleString() + ' units';
+  }
+
+  // Auto-close drill-down if its bucket became empty (e.g. after a range change).
+  if (_pmBucketOpen && !(data.bucketCounts[_pmBucketOpen] > 0)) _pmBucketOpen = null;
+
+  // Lot size distribution — four bucket cards with colored borders + tinted value.
+  // Clicking a card toggles a drill-down below that groups lots by customer.
+  var distEl = document.getElementById('pm-dist-bars');
+  if (distEl) {
+    distEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">'
+      + _PM_BUCKETS.map(function(b){
+          var count = data.bucketCounts[b.key] || 0;
+          var s = _PM_BUCKET_STYLE[b.key];
+          var isOpen = _pmBucketOpen === b.key;
+          var disabled = count === 0;
+          var bg = isOpen ? s.border+'1f' : 'transparent'; // soft tint on open
+          // Fallback for browsers without 8-digit hex: compute rgba from hex.
+          if (isOpen) {
+            var h = s.border.replace('#','');
+            var r = parseInt(h.substr(0,2),16), g = parseInt(h.substr(2,2),16), bl = parseInt(h.substr(4,2),16);
+            bg = 'rgba('+r+','+g+','+bl+',0.12)';
+          }
+          var cursor = disabled ? 'default' : 'pointer';
+          var onClick = disabled ? '' : ' onclick="togglePmBucket(\''+b.key+'\')"';
+          var opacity = disabled ? '.5' : '1';
+          var borderWidth = isOpen ? '2px' : '1px';
+          return '<div'+onClick+' style="border:'+borderWidth+' solid '+s.border+';border-radius:6px;padding:'+(isOpen?'11px 9px':'12px 10px')+';text-align:center;cursor:'+cursor+';transition:background .12s;background:'+bg+';opacity:'+opacity+';">'
+            + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+b.label+'</div>'
+            + '<div style="font-size:20px;font-weight:500;color:'+s.value+';font-variant-numeric:tabular-nums;line-height:1.1;">'+count.toLocaleString()+'</div>'
+            + '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">lot'+(count===1?'':'s')+'</div>'
+          + '</div>';
+        }).join('')
+      + '</div>'
+      + _pmBucketDrilldownHTML(data, view);
+  }
+}
+
+// Drill-down rendered below the bucket cards — groups the selected bucket's
+// lots by customer (Brand), showing lot count / total units / % of bucket
+// plus the top three products within each customer on a subtle subline.
+function _pmBucketDrilldownHTML(data, view) {
+  if (!_pmBucketOpen) return '';
+  var bucketLots = (data.bucketLots && data.bucketLots[_pmBucketOpen]) || [];
+  if (!bucketLots.length) return '';
+  var bucket = null;
+  for (var i=0; i<_PM_BUCKETS.length; i++) if (_PM_BUCKETS[i].key === _pmBucketOpen) { bucket = _PM_BUCKETS[i]; break; }
+  var style = _PM_BUCKET_STYLE[_pmBucketOpen];
+
+  // Group by customer.
+  var byCust = {};
+  var total = 0;
+  bucketLots.forEach(function(l){
+    var parts = (l.product||'').split('-');
+    var cust = (parts[0]||'').trim() || '(unknown)';
+    var prod = parts.slice(1).join('-').trim() || cust;
+    if (!byCust[cust]) byCust[cust] = {lots:0, units:0, products:{}};
+    byCust[cust].lots++;
+    byCust[cust].units += l.finalUnits;
+    byCust[cust].products[prod] = (byCust[cust].products[prod]||0) + l.finalUnits;
+    total += l.finalUnits;
+  });
+  var custRows = Object.keys(byCust).map(function(c){
+    var o = byCust[c];
+    var topProds = Object.keys(o.products).map(function(p){ return {name:p, units:o.products[p]}; })
+      .sort(function(a,b){ return b.units - a.units; }).slice(0,3);
+    return {cust:c, lots:o.lots, units:o.units, pct: total ? o.units/total*100 : 0, topProds:topProds};
+  }).sort(function(a,b){ return b.units - a.units; });
+
+  var viewName = view === 'powder' ? 'powder' : view === 'capsule' ? 'capsule' : '';
+  var headerLine = bucketLots.length + ' ' + (viewName?viewName+' ':'') + 'lot'+(bucketLots.length===1?'':'s')+' · '
+    + total.toLocaleString() + ' units · ' + bucket.label.toLowerCase();
+
+  var maxCustUnits = custRows.length ? custRows[0].units : 1;
+  var visibleRows = custRows.slice(0, 20);
+  var hiddenCount = custRows.length - visibleRows.length;
+
+  var rowsHTML = visibleRows.map(function(r){
+    var barW = Math.max(2, Math.round((r.units/maxCustUnits)*100));
+    var prodLine = r.topProds.map(function(p){
+      return '<span style="white-space:nowrap;">'+esc(p.name)+' <span style="color:#444441;">'+p.units.toLocaleString()+'</span></span>';
+    }).join('<span style="color:#2c2c2a;margin:0 6px;">·</span>');
+    return '<div style="padding:8px 12px;border-bottom:0.5px solid #2c2c2a;">'
+      + '<div style="display:flex;align-items:center;gap:10px;">'
+        + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(r.cust)+'">'+esc(r.cust)+'</div>'
+        + '<div style="width:120px;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;flex-shrink:0;"><div style="height:100%;width:'+barW+'%;background:'+style.border+';border-radius:2px;opacity:.85;"></div></div>'
+        + '<div style="width:70px;text-align:right;font-size:11px;color:#888780;flex-shrink:0;font-variant-numeric:tabular-nums;">'+r.lots+' lot'+(r.lots===1?'':'s')+'</div>'
+        + '<div style="width:80px;text-align:right;font-size:12px;color:#e8e6e0;font-weight:500;flex-shrink:0;font-variant-numeric:tabular-nums;">'+r.units.toLocaleString()+'</div>'
+        + '<div style="width:44px;text-align:right;font-size:11px;color:#888780;flex-shrink:0;font-variant-numeric:tabular-nums;">'+r.pct.toFixed(1)+'%</div>'
+      + '</div>'
+      + (prodLine ? '<div style="font-size:10px;color:#5f5e5a;margin-top:4px;display:flex;flex-wrap:wrap;">'+prodLine+'</div>' : '')
+    + '</div>';
+  }).join('');
+
+  var footer = hiddenCount > 0
+    ? '<div style="padding:8px 12px;font-size:11px;color:#5f5e5a;font-style:italic;text-align:center;">+' + hiddenCount + ' more customer' + (hiddenCount===1?'':'s') + '</div>'
+    : '';
+
+  return '<div style="margin-top:10px;border:0.5px solid #2c2c2a;border-left:3px solid '+style.border+';border-radius:6px;background:#141618;overflow:hidden;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:0.5px solid #2c2c2a;background:#1a1d20;">'
+      + '<div style="font-size:11px;color:#888780;font-family:system-ui;">'+headerLine+'</div>'
+      + '<button onclick="togglePmBucket(\''+_pmBucketOpen+'\')" style="background:transparent;border:none;color:#5f5e5a;cursor:pointer;font-size:14px;line-height:1;padding:0;" onmouseover="this.style.color=\'#e8e6e0\'" onmouseout="this.style.color=\'#5f5e5a\'" title="Close">&#x2715;</button>'
+    + '</div>'
+    + rowsHTML + footer
+  + '</div>';
+}
+
 function renderPerformance() {
   var d=prepData();
   var now=d.now;
@@ -3325,17 +3567,10 @@ function renderPerformance() {
     return {label:mo.month+'/'+mo.year,units:mo.units,target:tgt,fullMonthTarget:fmtgt,pctOfTarget:pctT,isCurrentMonth:isCur,daysInMonth:dim,daysSoFar:now.getDate(),units25:u25,yoyDiff:yoyDiff};
   });
 
-  var maxLU=lineEntries[0]?lineEntries[0][1].units:1;
   var lineTotal=lineEntries.reduce(function(s,e){return s+e[1].units;},0);
-  var lineColors=['#1D9E75','#378ADD','#7F77DD','#EF9F27'];
   var powU=0,capU=0,l1u=0,l2u=0,l4u=0;
   lineEntries.forEach(function(e){ var k2=lk(e[0]),u=e[1].units; if(k2==='line#1'){powU+=u;l1u=u;} else if(k2==='line#4'){powU+=u;l4u=u;} else if(k2==='line#2'){capU+=u;l2u=u;} });
   var powPct=totalUnits?((powU/totalUnits)*100).toFixed(1):0,capPct=totalUnits?((capU/totalUnits)*100).toFixed(1):0;
-  var byJar={};
-  lots.forEach(function(l){ var k2=jarSizeKey(l.jarSize); if(!k2) return; byJar[k2]=(byJar[k2]||0)+l.finalUnits; });
-  var jarEntries=Object.entries(byJar).sort(function(a,b){return b[1]-a[1];}).slice(0,10);
-  var jarTotal=jarEntries.reduce(function(s,e){return s+e[1];},0);
-  var JAR_COLORS=['#378ADD','#1D9E75','#EF9F27','#D4537E','#7F77DD','#D85A30','#639922','#E24B4A','#85B7EB','#5DCAA5'];
 
   // ── Customer table: build directly from raw rows ──────────────────────────
   var byCust={};
@@ -3462,63 +3697,52 @@ function renderPerformance() {
       +'<div style="margin-top:8px;font-size:13px;color:#e8e6e0;">Units in range: <strong style="font-weight:500">'+totalUnits.toLocaleString()+'</strong></div>';
   }
 
-  // ── Split bar + bracket row ──────────────────────────────────────
-  // Full-width stacked visual that shows the L1 / L4 / L2 breakdown with a
-  // 1% visual gap between powder and capsule, plus brackets below grouping
-  // L1+L4 as Powder and L2 as Capsule. Sits above the per-type cards; cards
-  // themselves are unchanged.
-  var _pctL1 = totalUnits ? (l1u / totalUnits * 100) : 0;
-  var _pctL4 = totalUnits ? (l4u / totalUnits * 100) : 0;
-  var _pctL2 = totalUnits ? (l2u / totalUnits * 100) : 0;
-  var _pctPow = _pctL1 + _pctL4;
-  // Visual gap is carved from the capsule side so powder segments keep their
-  // true proportional widths; only inject it when both sides actually have
-  // material (avoids an orphan 1% sliver if one type is absent).
-  var _gapPct = (_pctPow > 0 && _pctL2 > 1) ? 1 : 0;
-  var _pctL2v = Math.max(0, _pctL2 - _gapPct);
+  // Subtle powder/capsule split indicator — two-column grid matching the
+  // subcards, each % centered under its respective subcard. No border, no
+  // separator; the column layout carries the grouping.
+  var _pctL2  = totalUnits ? (l2u / totalUnits * 100) : 0;
+  var _pctPow = totalUnits ? ((l1u + l4u) / totalUnits * 100) : 0;
 
-  var splitBarHTML = '<div style="display:flex;width:100%;height:12px;border-radius:6px;overflow:hidden;margin-bottom:6px;">'
-    + '<div style="width:'+_pctL1.toFixed(2)+'%;background:#378ADD;"></div>'
-    + '<div style="width:'+_pctL4.toFixed(2)+'%;background:#D4537E;"></div>'
-    + '<div style="width:'+_gapPct+'%;background:#141618;"></div>'
-    + '<div style="width:'+_pctL2v.toFixed(2)+'%;background:#7F77DD;border-radius:0 6px 6px 0;"></div>'
+  var splitIndicatorHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:24px;">'
+    + '<div style="text-align:center;font-size:12px;font-weight:500;color:#378ADD;font-variant-numeric:tabular-nums;">'+_pctPow.toFixed(1)+'% Powder</div>'
+    + '<div style="text-align:center;font-size:12px;font-weight:500;color:#7F77DD;font-variant-numeric:tabular-nums;">'+_pctL2.toFixed(1)+'% Capsule</div>'
   +'</div>';
 
-  var bracketRowHTML = '<div style="display:flex;width:100%;margin-bottom:6px;">'
-    + '<div style="width:'+_pctPow.toFixed(2)+'%;"><div style="height:8px;border-left:1px solid #444441;border-right:1px solid #444441;border-bottom:1px solid #444441;border-radius:0 0 3px 3px;"></div></div>'
-    + '<div style="width:'+_gapPct+'%;"></div>'
-    + '<div style="width:'+_pctL2v.toFixed(2)+'%;"><div style="height:8px;border-left:1px solid #7F77DD;border-right:1px solid #7F77DD;border-bottom:1px solid #7F77DD;border-radius:0 0 3px 3px;"></div></div>'
-  +'</div>';
+  // Wrapper flex row matches the right card's header (same min-height +
+  // margin-bottom) so "Product type split" aligns with "Product mix — all
+  // lines" on the right, and the subcards start at the same y as
+  // "Container size mix".
+  var typeSplitHTML='<div style="display:flex;align-items:center;min-height:28px;margin-bottom:14px;"><div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Product type split</div></div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">'
+    +'<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:1rem 1.1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Powder (Lines 1 &amp; 4)</div><div style="font-size:18px;font-weight:500;color:#e8e6e0;margin-bottom:10px;">'+powU.toLocaleString()+'</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;margin-bottom:8px;display:flex;"><div style="height:100%;width:'+(totalUnits?((l1u/totalUnits)*100).toFixed(1):0)+'%;background:#378ADD;border-radius:3px 0 0 3px;"></div><div style="height:100%;width:'+(totalUnits?((l4u/totalUnits)*100).toFixed(1):0)+'%;background:#F472B6;"></div></div><div style="display:flex;justify-content:space-between;font-size:10px;"><span style="color:#85B7EB;">&#9646; L1: '+l1u.toLocaleString()+'</span><span style="color:#F472B6;">&#9646; L4: '+l4u.toLocaleString()+'</span></div></div>'
+    +'<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:1rem 1.1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Capsules (Line 2)</div><div style="font-size:18px;font-weight:500;color:#7F77DD;margin-bottom:10px;">'+capU.toLocaleString()+'</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;margin-bottom:8px;"><div style="height:100%;width:'+capPct+'%;background:#7F77DD;border-radius:3px;"></div></div><div style="font-size:10px;color:#AFA9EC;">&#9646; L2: '+l2u.toLocaleString()+'</div></div></div>'
+    +splitIndicatorHTML
+    +'<div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.75rem">Units by line breakdown</div>';
 
-  var bracketLabelsHTML = '<div style="display:flex;width:100%;margin-bottom:16px;">'
-    + '<div style="width:'+_pctPow.toFixed(2)+'%;display:flex;align-items:baseline;justify-content:center;gap:8px;">'
-      + '<span style="font-size:11px;font-weight:500;color:#e8e6e0;">Powder</span>'
-      + '<span style="color:#5f5e5a;">&middot;</span>'
-      + '<span style="font-size:14px;font-weight:500;color:#e8e6e0;">'+_pctPow.toFixed(1)+'%</span>'
-    + '</div>'
-    + '<div style="width:'+_gapPct+'%;"></div>'
-    + '<div style="width:'+_pctL2v.toFixed(2)+'%;display:flex;align-items:baseline;justify-content:center;gap:8px;">'
-      + '<span style="font-size:11px;font-weight:500;color:#7F77DD;">Capsule</span>'
-      + '<span style="color:#5f5e5a;">&middot;</span>'
-      + '<span style="font-size:14px;font-weight:500;color:#7F77DD;">'+_pctL2.toFixed(1)+'%</span>'
-    + '</div>'
-  +'</div>';
-
-  var typeSplitHTML='<div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem">Product type split</div>'
-    +splitBarHTML
-    +bracketRowHTML
-    +bracketLabelsHTML
-    +'<div style="display:flex;gap:10px;margin-bottom:1rem">'
-    +'<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Powder (Lines 1 &amp; 4)</div><div style="font-size:18px;font-weight:500;color:#e8e6e0;margin-bottom:3px;">'+powU.toLocaleString()+'</div><div style="font-size:10px;color:#5f5e5a;margin-bottom:8px;">'+powPct+'% of total production</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;margin-bottom:6px;display:flex;"><div style="height:100%;width:'+(totalUnits?((l1u/totalUnits)*100).toFixed(1):0)+'%;background:#378ADD;border-radius:3px 0 0 3px;"></div><div style="height:100%;width:'+(totalUnits?((l4u/totalUnits)*100).toFixed(1):0)+'%;background:#D4537E;"></div></div><div style="display:flex;justify-content:space-between;font-size:10px;"><span style="color:#85B7EB;">&#9646; L1: '+l1u.toLocaleString()+'</span><span style="color:#ED93B1;">&#9646; L4: '+l4u.toLocaleString()+'</span></div></div>'
-    +'<div style="flex:1;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;padding:.75rem 1rem;"><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Capsules (Line 2)</div><div style="font-size:18px;font-weight:500;color:#7F77DD;margin-bottom:3px;">'+capU.toLocaleString()+'</div><div style="font-size:10px;color:#5f5e5a;margin-bottom:8px;">'+capPct+'% of total production</div><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;margin-bottom:6px;"><div style="height:100%;width:'+capPct+'%;background:#7F77DD;border-radius:3px;"></div></div><div style="font-size:10px;color:#AFA9EC;">&#9646; L2: '+l2u.toLocaleString()+'</div></div></div>'
-    +'<div style="border-top:0.5px solid #2c2c2a;margin-bottom:.75rem"></div>'
-    +'<div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem">Units by line breakdown</div>';
-
-  var linesHTML=lineEntries.map(function(e,i){ var line=e[0],ld=e[1],sp=lineTotal?((ld.units/lineTotal)*100):0,bw=Math.round((ld.units/maxLU)*100),col=LINE_COLOR[lk(line)]||lineColors[i%lineColors.length]; return '<tr style="border-bottom:0.5px solid #2c2c2a"><td style="padding:5px 8px;font-weight:500">'+line+'</td><td style="padding:5px 8px;text-align:right;white-space:nowrap">'+ld.units.toLocaleString()+'</td><td style="padding:5px 8px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+col+';border-radius:3px"></div></div></td><td style="padding:5px 8px;text-align:right;color:#888780">'+sp.toFixed(1)+'%</td><td style="padding:5px 8px;text-align:right;color:#888780">'+ld.lots.size.toLocaleString()+'</td></tr>'; }).join('');
+  // Page-local dot color — Line #4 is pink (#F472B6) on the Trend page, not
+  // the dimmer #D4537E used elsewhere. Line #1 / #2 fall through to LINE_COLOR.
+  var _trendDotColor = function(line){
+    if (line === 'Line #4') return '#F472B6';
+    return LINE_COLOR[lk(line)] || '#888780';
+  };
+  var linesHTML = lineEntries.map(function(e){
+    var line = e[0], ld = e[1];
+    var sp = lineTotal ? ((ld.units/lineTotal)*100) : 0;
+    var avg = ld.lots.size ? Math.round(ld.units / ld.lots.size) : 0;
+    var dot = _trendDotColor(line);
+    return '<tr style="border-bottom:0.5px solid #2c2c2a;font-size:12px;">'
+      + '<td style="padding:11px 10px;font-weight:500;color:#e8e6e0;">'
+        + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+dot+';margin-right:8px;vertical-align:middle;"></span>'+line
+      + '</td>'
+      + '<td style="padding:11px 10px;text-align:right;white-space:nowrap;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+ld.units.toLocaleString()+'</td>'
+      + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+sp.toFixed(1)+'%</td>'
+      + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+ld.lots.size.toLocaleString()+'</td>'
+      + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+avg.toLocaleString()+'</td>'
+    + '</tr>';
+  }).join('');
   var monthHTML=monthRows.map(function(m){ var isG=m.pctOfTarget>=100,isY=m.pctOfTarget>=80&&m.pctOfTarget<100; var pBg=isG?'#0F6E56':isY?'#633806':'#791F1F',pTxt=isG?'#9FE1CB':isY?'#FAC775':'#F09595',bCol=isG?'#1D9E75':isY?'#EF9F27':'#E24B4A'; var bw=Math.min(Math.round(m.pctOfTarget),100); var monthLabel=m.isCurrentMonth?m.label+'<sup style="color:#9FE1CB;font-size:9px"> *</sup>':m.label; var units25Str=m.units25?'<span style="color:#5f5e5a;font-weight:400"> ('+m.units25.toLocaleString()+')</span>':''; var yoyDelta='<td style="text-align:right">'; if(m.yoyDiff!==null){var yPos=m.yoyDiff>=0,yBg=yPos?'#085041':'#791F1F',yTxt=yPos?'#9FE1CB':'#F09595';yoyDelta+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+m.yoyDiff.toFixed(1)+'%</span>';}else yoyDelta+='\u2014'; yoyDelta+='</td>'; return '<tr><td style="font-weight:500">'+monthLabel+'</td><td style="text-align:right">'+m.units.toLocaleString()+units25Str+'</td><td style="text-align:right;color:#888780">'+m.target.toLocaleString()+'</td><td style="text-align:right"><span class="badge" style="background:'+pBg+';color:'+pTxt+'">'+m.pctOfTarget.toFixed(2)+'%</span></td><td style="min-width:100px;padding:6px 10px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div></div></td>'+yoyDelta+'</tr>'; }).join('');
   var curMo=monthRows.find(function(m){return m.isCurrentMonth;});
   var asterisk=curMo?'<div style="font-size:10px;color:#5f5e5a;margin-top:10px;padding-top:8px;border-top:0.5px solid #2c2c2a"><sup style="color:#9FE1CB">*</sup> '+curMo.label+' target adjusted for month-to-date ('+curMo.daysSoFar+'/'+curMo.daysInMonth+' days). Full month target: '+curMo.fullMonthTarget.toLocaleString()+'. '+compYearLabel+' figure shown is also MTD for comparison.</div>':'';
-  var jarLegHTML=jarEntries.map(function(e,i){ var j=e[0],v=e[1],p=jarTotal?((v/jarTotal)*100).toFixed(1):0; return '<tr style="border-bottom:0.5px solid #2c2c2a"><td style="padding:3px 6px;width:16px"><div style="width:10px;height:10px;border-radius:2px;background:'+JAR_COLORS[i]+'"></div></td><td style="padding:3px 6px;font-weight:500">'+j+'</td><td style="padding:3px 6px;text-align:right;white-space:nowrap">'+v.toLocaleString()+'</td><td style="padding:3px 6px;text-align:right;color:#888780;width:40px">'+p+'%</td></tr>'; }).join('');
 
   var total25units = lots25.reduce(function(s,l){return s+l.finalUnits;},0);
 
@@ -3663,20 +3887,51 @@ function renderPerformance() {
     +'</div>'
     +'<div class="metrics">'+metricsHTML+'</div>'
     +'<div class="full-card"><h3>Year-end projection vs target</h3>'+yearEndHTML+'</div>'
-    +'<div class="charts-row"><div class="chart-card">'+typeSplitHTML
-    +'<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
-    +'<th style="text-align:left;padding:4px 8px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Line</th>'
-    +'<th style="text-align:right;padding:4px 8px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Units</th>'
-    +'<th style="border-bottom:0.5px solid #2c2c2a"></th>'
-    +'<th style="text-align:right;padding:4px 8px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">% of total</th>'
-    +'<th style="text-align:right;padding:4px 8px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Lots run</th>'
-    +'</tr></thead><tbody>'+linesHTML+'</tbody></table></div>'
-    +'<div class="chart-card"><h3>Powder product mix \u2014 units by jar size</h3><div style="display:flex;align-items:center;gap:12px"><div style="position:relative;height:200px;min-width:200px;flex-shrink:0"><canvas id="cJar"></canvas></div><div id="jar-legend" style="flex:1;overflow-y:auto"></div></div></div></div>'
+    // Two-column side-by-side layout: left card = Product Type Split + line
+    // breakdown table; right card = Product Mix (toggle + donut + distribution).
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'
+      +'<div class="full-card" style="padding-bottom:16px;">'+typeSplitHTML
+      +'<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
+      +'<th style="text-align:left;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Line</th>'
+      +'<th style="text-align:right;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Units</th>'
+      +'<th style="text-align:right;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">% of total</th>'
+      +'<th style="text-align:right;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Lots run</th>'
+      +'<th style="text-align:right;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Avg lot size</th>'
+      +'</tr></thead><tbody>'+linesHTML+'</tbody></table></div>'
+      +'<div class="full-card" style="margin-bottom:0;">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;flex-wrap:wrap;">'
+          +'<h3 id="pm-section-label" style="margin:0;">Product mix \u2014 all lines</h3>'
+          +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:7px;">'
+            +'<button id="pm-btn-all"     onclick="setProductMix(\'all\')">All</button>'
+            +'<button id="pm-btn-powder"  onclick="setProductMix(\'powder\')">Powder</button>'
+            +'<button id="pm-btn-capsule" onclick="setProductMix(\'capsule\')">Capsule</button>'
+          +'</div>'
+        +'</div>'
+        +'<div style="margin-bottom:18px;">'
+          +'<div id="pm-donut-label" style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Container size mix</div>'
+          +'<div style="display:flex;align-items:center;gap:16px;">'
+            +'<div style="position:relative;height:200px;min-width:200px;flex-shrink:0;"><canvas id="cJar"></canvas></div>'
+            +'<div id="jar-legend" style="flex:1;overflow-y:auto;"></div>'
+          +'</div>'
+        +'</div>'
+        +'<div>'
+          +'<div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Lot size distribution</div>'
+          +'<div id="pm-avg-lot" style="font-size:11px;color:#5f5e5a;margin-bottom:10px;">&nbsp;</div>'
+          +'<div id="pm-dist-bars"></div>'
+        +'</div>'
+      +'</div>'
+    +'</div>'
     +'<div class="full-card"><h3>Units produced by month vs. target</h3><div class="tbl-wrap"><table><thead><tr><th>Month</th><th style="text-align:right">Actual <span style="color:#5f5e5a;font-weight:400">('+compYearLabel+' actual)</span></th><th style="text-align:right">Target</th><th style="text-align:right">% of target</th><th></th><th style="text-align:right">vs '+compYearLabel+'</th></tr></thead><tbody>'+monthHTML+'</tbody></table>'+asterisk+'</div></div>'
     +recordsCardHTML;
 
-  document.getElementById('jar-legend').innerHTML='<table style="width:100%;border-collapse:collapse;font-size:11px"><tbody>'+jarLegHTML+'</tbody></table>';
-  charts.jar=new Chart(document.getElementById('cJar'),{type:'doughnut',data:{labels:jarEntries.map(function(e){return e[0];}),datasets:[{data:jarEntries.map(function(e){return e[1];}),backgroundColor:JAR_COLORS,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){var v=ctx.raw,p=jarTotal?((v/jarTotal)*100).toFixed(1):0;return v.toLocaleString()+' units ('+p+'%)';}}}}}});
+  // Pre-compute product-mix data for all three views so the toggle can swap
+  // instantly without re-running renderPerformance.
+  window._pm = {
+    all:     _pmComputeView(lots, 'all'),
+    powder:  _pmComputeView(lots, 'powder'),
+    capsule: _pmComputeView(lots, 'capsule')
+  };
+  renderProductMix();
 }
 
 function toggleRecords() {
