@@ -3733,7 +3733,7 @@ function renderPerformance() {
   var _pctL2  = totalUnits ? (l2u / totalUnits * 100) : 0;
   var _pctPow = totalUnits ? ((l1u + l4u) / totalUnits * 100) : 0;
 
-  var splitIndicatorHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:24px;">'
+  var splitIndicatorHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:44px;">'
     + '<div style="text-align:center;font-size:12px;font-weight:500;color:#378ADD;font-variant-numeric:tabular-nums;">'+_pctPow.toFixed(1)+'% Powder</div>'
     + '<div style="text-align:center;font-size:12px;font-weight:500;color:#7F77DD;font-variant-numeric:tabular-nums;">'+_pctL2.toFixed(1)+'% Capsule</div>'
   +'</div>';
@@ -3770,6 +3770,17 @@ function renderPerformance() {
       + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+avg.toLocaleString()+'</td>'
     + '</tr>';
   }).join('');
+  // Totals row — uses the true unique-lot total (matches "Total Lots" KPI).
+  // The per-line counts can sum to slightly more because lots that touched
+  // more than one line count once for each line they ran on.
+  var _allLineAvg = totalLots ? Math.round(lineTotal / totalLots) : 0;
+  linesHTML += '<tr style="border-top:0.5px solid #444441;font-size:12px;">'
+    + '<td style="padding:11px 10px;font-weight:500;color:#e8e6e0;">Total</td>'
+    + '<td style="padding:11px 10px;text-align:right;white-space:nowrap;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;">'+lineTotal.toLocaleString()+'</td>'
+    + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">100%</td>'
+    + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;" title="Unique lots across all lines. Per-line counts can sum higher because some lots ran on more than one line.">'+totalLots.toLocaleString()+'</td>'
+    + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+_allLineAvg.toLocaleString()+'</td>'
+  + '</tr>';
   var monthHTML=monthRows.map(function(m){ var isG=m.pctOfTarget>=100,isY=m.pctOfTarget>=80&&m.pctOfTarget<100; var pBg=isG?'#0F6E56':isY?'#633806':'#791F1F',pTxt=isG?'#9FE1CB':isY?'#FAC775':'#F09595',bCol=isG?'#1D9E75':isY?'#EF9F27':'#E24B4A'; var bw=Math.min(Math.round(m.pctOfTarget),100); var monthLabel=m.isCurrentMonth?m.label+'<sup style="color:#9FE1CB;font-size:9px"> *</sup>':m.label; var units25Str=m.units25?'<span style="color:#5f5e5a;font-weight:400"> ('+m.units25.toLocaleString()+')</span>':''; var yoyDelta='<td style="text-align:right">'; if(m.yoyDiff!==null){var yPos=m.yoyDiff>=0,yBg=yPos?'#085041':'#791F1F',yTxt=yPos?'#9FE1CB':'#F09595';yoyDelta+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+m.yoyDiff.toFixed(1)+'%</span>';}else yoyDelta+='\u2014'; yoyDelta+='</td>'; return '<tr><td style="font-weight:500">'+monthLabel+'</td><td style="text-align:right">'+m.units.toLocaleString()+units25Str+'</td><td style="text-align:right;color:#888780">'+m.target.toLocaleString()+'</td><td style="text-align:right"><span class="badge" style="background:'+pBg+';color:'+pTxt+'">'+m.pctOfTarget.toFixed(2)+'%</span></td><td style="min-width:100px;padding:6px 10px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div></div></td>'+yoyDelta+'</tr>'; }).join('');
   var curMo=monthRows.find(function(m){return m.isCurrentMonth;});
   var asterisk=curMo?'<div style="font-size:10px;color:#5f5e5a;margin-top:10px;padding-top:8px;border-top:0.5px solid #2c2c2a"><sup style="color:#9FE1CB">*</sup> '+curMo.label+' target adjusted for month-to-date ('+curMo.daysSoFar+'/'+curMo.daysInMonth+' days). Full month target: '+curMo.fullMonthTarget.toLocaleString()+'. '+compYearLabel+' figure shown is also MTD for comparison.</div>':'';
@@ -3907,7 +3918,7 @@ function renderPerformance() {
     +'</div>';
 
   document.getElementById('content').innerHTML=
-    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;padding:.625rem 1rem;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;">'
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;padding:.625rem 1rem;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;">'
     +'<div style="position:relative;" id="perf-range-anchor">'
     +'<div onclick="openPerfRangePicker()" style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;padding:4px 12px;border-radius:8px;border:0.5px solid #444441;background:transparent;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
     +'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="2" width="11" height="10" rx="2" stroke="#888780" stroke-width="1.2"/><line x1="4" y1="1" x2="4" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="9" y1="1" x2="9" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="1" y1="6" x2="12" y2="6" stroke="#888780" stroke-width="1.2"/></svg>'
@@ -3915,12 +3926,12 @@ function renderPerformance() {
     +'</div></div>'
     +'<div style="font-size:11px;color:#5f5e5a;">Comparing to same period in '+compYearLabel+'</div>'
     +'</div>'
-    +'<div class="metrics">'+metricsHTML+'</div>'
-    +'<div class="full-card" style="margin-top:36px;"><h3 style="margin-bottom:20px;">Year-end projection vs target</h3>'+yearEndHTML+'</div>'
+    +'<div class="metrics" style="margin-bottom:16px;">'+metricsHTML+'</div>'
+    +'<div class="full-card"><h3 style="margin-bottom:20px;">Year-end projection vs target</h3>'+yearEndHTML+'</div>'
     // Two-column side-by-side layout: left card = Product Type Split + line
     // breakdown table; right card = Product Mix (toggle + donut + distribution).
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'
-      +'<div class="full-card" style="padding-bottom:16px;">'+typeSplitHTML
+      +'<div class="full-card" style="padding-bottom:16px;margin-bottom:0;">'+typeSplitHTML
       +'<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
       +'<th style="text-align:left;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Line</th>'
       +'<th style="text-align:right;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Units</th>'
