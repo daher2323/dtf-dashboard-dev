@@ -3640,7 +3640,7 @@ function renderPerformance() {
 
     // CSS grid gives ironclad equal column widths — flex had drift when
     // column contents varied in intrinsic width.
-    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:16px;">'
+    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:32px;">'
       // Col 1: Day of year
       +'<div style="min-width:0;text-align:center;">'
         +'<div style="'+_colLbl+'">Day of year</div>'
@@ -3916,7 +3916,7 @@ function renderPerformance() {
     +'<div style="font-size:11px;color:#5f5e5a;">Comparing to same period in '+compYearLabel+'</div>'
     +'</div>'
     +'<div class="metrics">'+metricsHTML+'</div>'
-    +'<div class="full-card" style="margin-top:36px;"><h3>Year-end projection vs target</h3>'+yearEndHTML+'</div>'
+    +'<div class="full-card" style="margin-top:36px;"><h3 style="margin-bottom:20px;">Year-end projection vs target</h3>'+yearEndHTML+'</div>'
     // Two-column side-by-side layout: left card = Product Type Split + line
     // breakdown table; right card = Product Mix (toggle + donut + distribution).
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'
@@ -3937,14 +3937,19 @@ function renderPerformance() {
             +'<button id="pm-btn-capsule" onclick="setProductMix(\'capsule\')">Capsule</button>'
           +'</div>'
         +'</div>'
-        +'<div style="margin-bottom:18px;">'
+        // Container size mix (donut + legend) — extra padding-bottom to
+        // breathe before the gutter divider below.
+        +'<div style="padding-bottom:1rem;">'
           +'<div id="pm-donut-label" style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Container size mix</div>'
           +'<div style="display:flex;align-items:center;gap:16px;">'
             +'<div style="position:relative;height:200px;min-width:200px;flex-shrink:0;"><canvas id="cJar"></canvas></div>'
             +'<div id="jar-legend" style="flex:1;overflow-y:auto;"></div>'
           +'</div>'
         +'</div>'
-        +'<div>'
+        // Dark gutter divider — full bleed across the card, breaks out of the
+        // card's horizontal padding via negative margins.
+        +'<div style="height:8px;background:#141618;border-top:0.5px solid #2c2c2a;border-bottom:0.5px solid #2c2c2a;margin:0 -1rem;"></div>'
+        +'<div style="padding-top:1rem;">'
           +'<div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Lot size distribution</div>'
           +'<div id="pm-avg-lot" style="font-size:11px;color:#5f5e5a;margin-bottom:10px;">&nbsp;</div>'
           +'<div id="pm-dist-bars"></div>'
