@@ -316,7 +316,7 @@ var openOrdersCapsule = null;
 var openOrdersLastFetch = 0;
 var openOrdersFetchInFlight = false;
 var labelsBrandFilter = 'all';   // 'all' | <brand name>
-var labelsWeeksFilter = 'all';   // 'all' | '4' | '8'
+var labelsWeeksFilter = '4';     // 'all' | '4' | '8' — default to 4+ to focus on aging blockers
 var ordersStatusTypeFilter = 'all'; // 'all' | 'powder' | 'capsule'
 var ordersDrilldownStatus = null;   // null | <status name> — which row is expanded
 var customerChartView = 'all';      // 'all' | 'powder' | 'capsule'
@@ -3640,7 +3640,7 @@ function renderPerformance() {
 
     // CSS grid gives ironclad equal column widths — flex had drift when
     // column contents varied in intrinsic width.
-    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:32px;">'
+    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:28px;">'
       // Col 1: Day of year
       +'<div style="min-width:0;text-align:center;">'
         +'<div style="'+_colLbl+'">Day of year</div>'
@@ -3927,7 +3927,7 @@ function renderPerformance() {
     +'<div style="font-size:11px;color:#5f5e5a;">Comparing to same period in '+compYearLabel+'</div>'
     +'</div>'
     +'<div class="metrics" style="margin-bottom:16px;">'+metricsHTML+'</div>'
-    +'<div class="full-card"><h3 style="margin-bottom:20px;">Year-end projection vs target</h3>'+yearEndHTML+'</div>'
+    +'<div class="full-card" style="padding-bottom:12px;"><h3 style="margin-bottom:16px;">Year-end projection vs target</h3>'+yearEndHTML+'</div>'
     // Two-column side-by-side layout: left card = Product Type Split + line
     // breakdown table; right card = Product Mix (toggle + donut + distribution).
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'
@@ -5948,7 +5948,7 @@ function renderOrdersSummary() {
     });
 
     var filteredUnits = filtered.reduce(function(a,lb){ return a + num(lb.row['Order Amount']); }, 0);
-    var filtersActive = labelsBrandFilter !== 'all' || labelsWeeksFilter !== 'all';
+    var filtersActive = labelsBrandFilter !== 'all' || labelsWeeksFilter !== '4';
 
     // Filter controls: brand dropdown + weeks-threshold pill group.
     function wkPillStyle(active) {
@@ -5966,12 +5966,12 @@ function renderOrdersSummary() {
       + '</select>'
       + '<label style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-left:8px;">Min age</label>'
       + '<div style="display:flex;gap:2px;padding:3px;background:#1e1212;border:0.5px solid #4a2020;border-radius:7px;">'
-      +   '<button onclick="setLabelsWeeksFilter(\'all\')" style="'+wkPillStyle(labelsWeeksFilter==='all')+'">All</button>'
       +   '<button onclick="setLabelsWeeksFilter(\'4\')"   style="'+wkPillStyle(labelsWeeksFilter==='4')+'">4+ wk</button>'
       +   '<button onclick="setLabelsWeeksFilter(\'8\')"   style="'+wkPillStyle(labelsWeeksFilter==='8')+'">8+ wk</button>'
+      +   '<button onclick="setLabelsWeeksFilter(\'all\')" style="'+wkPillStyle(labelsWeeksFilter==='all')+'">All</button>'
       + '</div>'
       + (filtersActive
-          ? '<button onclick="setLabelsBrandFilter(\'all\');setLabelsWeeksFilter(\'all\');" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;" onmouseover="this.style.color=\'#e8e6e0\'" onmouseout="this.style.color=\'#888780\'">Clear filters</button>'
+          ? '<button onclick="setLabelsBrandFilter(\'all\');setLabelsWeeksFilter(\'4\');" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;" onmouseover="this.style.color=\'#e8e6e0\'" onmouseout="this.style.color=\'#888780\'">Clear filters</button>'
           : '')
       + '</div>';
 
