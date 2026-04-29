@@ -1094,8 +1094,10 @@ function fetchOpenOrdersIfNeeded(force) {
   if (!force && haveBoth && !stale) return;
   openOrdersFetchInFlight = true;
   Promise.all([
-    fetchWithRetry(CSV_OPEN_ORDERS_POWDER).catch(function(){ return ''; }),
-    fetchWithRetry(CSV_OPEN_ORDERS_CAPSULE).catch(function(){ return ''; })
+    // fresh=true so each background pull gets a unique cachebust and the CDN
+    // can't return a stale bucketed snapshot of the open-orders sheet.
+    fetchWithRetry(CSV_OPEN_ORDERS_POWDER, null, null, true).catch(function(){ return ''; }),
+    fetchWithRetry(CSV_OPEN_ORDERS_CAPSULE, null, null, true).catch(function(){ return ''; })
   ]).then(function(res){
     var p = parseOpenOrders(res[0]);
     var c = parseOpenOrders(res[1]);
@@ -1431,14 +1433,15 @@ function startRefreshTimers() {
   if (todayTimer) clearInterval(todayTimer);
   refreshTimer = setInterval(function(){
     checkDateRollover();
-    if(topView==='summary'&&subView==='performance'||topView==='detail') refreshAndRender(false);
-    // Keep open-orders CDN cache warm even when the user is on another tab,
-    // so switching back is instant. Admin-only (viewers can't see the tab).
+    // fresh=true forces a unique per-request cachebust so the CDN can't serve
+    // a stale 30s-bucketed response — needed for auto-refresh to actually
+    // pick up new rows the operators just published.
+    if(topView==='summary'&&subView==='performance'||topView==='detail') refreshAndRender(false, false, true);
     if(userRole==='admin') fetchOpenOrdersIfNeeded(false);
   }, 5*60*1000);
   todayTimer = setInterval(function(){
     checkDateRollover();
-    if(topView==='summary'&&subView==='today') refreshAndRender(false);
+    if(topView==='summary'&&subView==='today') refreshAndRender(false, false, true);
   }, 60*1000);
   document.addEventListener('visibilitychange', function(){
     if(document.visibilityState==='visible') {
