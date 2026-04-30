@@ -4043,6 +4043,7 @@ function quarterLabel(key) {
 }
 
 var _chExpanded = {};
+var _chQtrExpanded = {}; // safeId -> quarter key (e.g. "2026-Q1") or null/undefined
 
 var _chSynopsis = {}; // cache generated synopses
 
@@ -4053,6 +4054,348 @@ function toggleCH(safeId) {
   if (body) body.style.display = _chExpanded[safeId] ? 'block' : 'none';
   if (chev) chev.style.transform = _chExpanded[safeId] ? 'rotate(180deg)' : '';
   if (_chExpanded[safeId]) generateSynopsis(safeId);
+}
+
+// Click a quarter row in the customer detail table → drill into the breakdown
+// panel for that quarter. Clicking the same quarter collapses it. Triggers a
+// full customer overview re-render so the inserted drill-down row picks up
+// the new state.
+function toggleCustQuarter(safeId, qkey) {
+  if (_chQtrExpanded[safeId] === qkey) _chQtrExpanded[safeId] = null;
+  else                                  _chQtrExpanded[safeId] = qkey;
+  if (mainSection === 'customers') renderCustomers();
+}
+
+// Single-pass aggregator for the quarter drill-down panel. Returns this
+// quarter's per-product / per-month / per-line stats plus prior-quarter
+// stats and a new-vs-repeat split, all derived from one walk over the
+// combined dataset.
+function _custQuarterFull(cust, qkey) {
+  var parts = qkey.split('-Q');
+  var year  = parseInt(parts[0], 10);
+  var qNum  = parseInt(parts[1], 10);
+  var startM = (qNum - 1) * 3;
+  var qStart = new Date(year, startM,     1).getTime();
+  var qEnd   = new Date(year, startM + 3, 0, 23, 59, 59, 999).getTime();
+
+  var byProduct = {}, byLine = {};
+  var byMonth = [];
+  for (var m = 0; m < 3; m++) {
+    byMonth.push({
+      key:   year + '-' + String(startM + m + 1).padStart(2,'0'),
+      label: new Date(year, startM + m, 1).toLocaleDateString('en-US', {month:'short', year:'2-digit'}),
+      units: 0,
+      lots:  new Set()
+    });
+  }
+  var allLots = new Set();
+  var totalUnits = 0;
+
+  var priorProductSet = {};      // products seen in any quarter strictly before this one
+  var priorQuarters   = {};      // qkey -> {totalUnits, totalLots Set, productSet}
+
+  var combined = allRows.concat(allRows25);
+  for (var i = 0; i < combined.length; i++) {
+    var r = combined[i];
+    var prodFull = (r['Product']||'').trim(); if (!prodFull) continue;
+    var c = prodFull.split('-')[0].trim(); if (c !== cust) continue;
+    var dt = new Date(r['Date']); if (isNaN(dt)) continue;
+    var t = dt.getTime();
+    var pname = prodFull.split('-').slice(1).join('-').trim() || prodFull;
+    var line  = (r['Line']||'').trim();
+    var lot   = (r['Lot Number']||'').trim();
+    var units = num(r['Final Units']);
+
+    if (t >= qStart && t <= qEnd) {
+      // This quarter
+      if (!byProduct[pname]) byProduct[pname] = {units:0, lots:new Set(), lineLots:{}};
+      byProduct[pname].units += units;
+      if (lot) byProduct[pname].lots.add(lot);
+      if (line && lot) {
+        if (!byProduct[pname].lineLots[line]) byProduct[pname].lineLots[line] = new Set();
+        byProduct[pname].lineLots[line].add(lot);
+      }
+      var mIdx = dt.getMonth() - startM;
+      byMonth[mIdx].units += units;
+      if (lot) byMonth[mIdx].lots.add(lot);
+      if (line) {
+        if (!byLine[line]) byLine[line] = {units:0, lots:new Set()};
+        byLine[line].units += units;
+        if (lot) byLine[line].lots.add(lot);
+      }
+      if (lot) allLots.add(lot);
+      totalUnits += units;
+    } else if (t < qStart) {
+      // Strictly prior — track for new/repeat logic + prior-quarter stats.
+      priorProductSet[pname] = true;
+      var pY  = dt.getFullYear();
+      var pQ  = Math.floor(dt.getMonth() / 3) + 1;
+      var pK  = pY + '-Q' + pQ;
+      if (!priorQuarters[pK]) priorQuarters[pK] = {totalUnits:0, totalLots:new Set(), productSet:{}};
+      priorQuarters[pK].totalUnits += units;
+      if (lot) priorQuarters[pK].totalLots.add(lot);
+      priorQuarters[pK].productSet[pname] = true;
+    }
+  }
+
+  // Build product list (sorted by units desc) with dominant-line + new/repeat tag.
+  var products = Object.keys(byProduct).map(function(p){
+    var lineLotMap = byProduct[p].lineLots;
+    var domLine = null, domLots = 0;
+    var lineKeys = Object.keys(lineLotMap);
+    for (var k = 0; k < lineKeys.length; k++) {
+      var s = lineLotMap[lineKeys[k]].size;
+      if (s > domLots) { domLots = s; domLine = lineKeys[k]; }
+    }
+    return {
+      name:  p,
+      units: byProduct[p].units,
+      lots:  byProduct[p].lots.size,
+      line:  domLine,
+      isNew: !priorProductSet[p]
+    };
+  });
+  products.sort(function(a,b){ return b.units - a.units; });
+
+  // Months — flatten Sets to counts.
+  var months = byMonth.map(function(m){
+    return {key:m.key, label:m.label, units:m.units, lots:m.lots.size};
+  });
+
+  // Lines — sorted by lot count desc (for the "Line load" insight chip).
+  var lines = Object.keys(byLine).map(function(ln){
+    return {line:ln, units:byLine[ln].units, lots:byLine[ln].lots.size};
+  });
+  lines.sort(function(a,b){ return b.lots - a.lots; });
+
+  // New vs repeat tally — counted in lots so the formula bar reads as a
+  // share of this quarter's lot mix.
+  var newProductCount = 0, newLots = 0, repeatLots = 0;
+  for (var pi = 0; pi < products.length; pi++) {
+    var p = products[pi];
+    if (p.isNew) { newProductCount++; newLots += p.lots; }
+    else         { repeatLots += p.lots; }
+  }
+
+  // Prior quarter = most recent qkey strictly < this quarter that has data.
+  var priorQkeys = Object.keys(priorQuarters).sort();
+  var priorQkey  = priorQkeys.length ? priorQkeys[priorQkeys.length - 1] : null;
+  var priorStats = null;
+  if (priorQkey) {
+    var pq = priorQuarters[priorQkey];
+    // Prior quarter's "new product count" — products that first appeared in
+    // priorQkey, i.e. not present in any quarter before priorQkey.
+    var prePriorProducts = {};
+    for (var k2 = 0; k2 < priorQkeys.length - 1; k2++) {
+      var prevK = priorQkeys[k2];
+      var ps = priorQuarters[prevK].productSet;
+      var psKeys = Object.keys(ps);
+      for (var pk = 0; pk < psKeys.length; pk++) prePriorProducts[psKeys[pk]] = true;
+    }
+    var pqProductKeys = Object.keys(pq.productSet);
+    var priorNewCount = 0;
+    for (var pkj = 0; pkj < pqProductKeys.length; pkj++) {
+      if (!prePriorProducts[pqProductKeys[pkj]]) priorNewCount++;
+    }
+    priorStats = {
+      qkey:         priorQkey,
+      totalUnits:   pq.totalUnits,
+      totalLots:    pq.totalLots.size,
+      productCount: pqProductKeys.length,
+      newProductCount: priorNewCount,
+      avgRun:       pq.totalLots.size ? Math.round(pq.totalUnits / pq.totalLots.size) : 0
+    };
+  }
+
+  return {
+    products:        products,
+    months:          months,
+    lines:           lines,
+    totalUnits:      totalUnits,
+    totalLots:       allLots.size,
+    newProductCount: newProductCount,
+    newLots:         newLots,
+    repeatLots:      repeatLots,
+    priorStats:      priorStats
+  };
+}
+
+// Renders the entire drill-down panel for one quarter inside a colspan=9 cell.
+// Two columns + insight strip, all derived from the _custQuarterFull payload.
+function _custQuarterPanelHTML(qkey, q) {
+  var LINE_DOT = {'line#1':'#378ADD','line#2':'#7F77DD','line#4':'#D4537E'};
+  function _lineDot(line) {
+    if (!line) return '#888780';
+    return LINE_DOT[lk(line)] || '#888780';
+  }
+  function _truncate(s, n) {
+    if (!s) return '';
+    return s.length > n ? s.substr(0, n - 1) + '…' : s;
+  }
+  function _esc(s) { return esc(s||''); }
+  var SECTION_LBL = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;';
+
+  // ─── Left column: products run this quarter ──────────────────────
+  var maxProdUnits = q.products.length ? q.products[0].units : 1;
+  var visibleProds = q.products.slice(0, 8);
+  var hiddenProds  = q.products.length - visibleProds.length;
+  var productRows = visibleProds.length === 0
+    ? '<div style="font-size:11px;color:#5f5e5a;font-style:italic;padding:6px 0;">No products this quarter.</div>'
+    : visibleProds.map(function(p){
+        var w = Math.max(2, Math.round((p.units/maxProdUnits)*100));
+        var dot = _lineDot(p.line);
+        return '<div style="display:flex;align-items:center;gap:10px;padding:5px 0;font-size:11px;font-family:system-ui;">'
+          + '<span style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;" title="'+_esc(p.line||'')+'"></span>'
+          + '<div style="flex:1;min-width:0;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+_esc(p.name)+'">'+_esc(p.name)+'</div>'
+          + '<div style="width:110px;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;flex-shrink:0;"><div style="height:100%;width:'+w+'%;background:'+dot+';border-radius:2px;opacity:.85;"></div></div>'
+          + '<div style="width:80px;text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;flex-shrink:0;font-weight:500;">'+p.units.toLocaleString()+'</div>'
+          + '<div style="width:60px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;flex-shrink:0;">'+p.lots+' lot'+(p.lots===1?'':'s')+'</div>'
+        + '</div>';
+      }).join('');
+  var hiddenNote = hiddenProds > 0
+    ? '<div style="font-size:10px;color:#5f5e5a;font-style:italic;padding:6px 0 0;">+'+hiddenProds+' more product'+(hiddenProds===1?'':'s')+'</div>'
+    : '';
+  var lineLegend = '<div style="display:flex;gap:14px;margin-top:10px;padding-top:8px;border-top:0.5px dashed #2c2c2a;font-size:10px;color:#5f5e5a;font-family:system-ui;">'
+    + '<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:7px;height:7px;border-radius:50%;background:'+LINE_DOT['line#1']+';"></span>Line #1</span>'
+    + '<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:7px;height:7px;border-radius:50%;background:'+LINE_DOT['line#2']+';"></span>Line #2</span>'
+    + '<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:7px;height:7px;border-radius:50%;background:'+LINE_DOT['line#4']+';"></span>Line #4</span>'
+  + '</div>';
+  var productsCol = '<div style="flex:1;min-width:0;padding-left:20px;">'
+    + '<div style="'+SECTION_LBL+'">Products run this quarter</div>'
+    + productRows + hiddenNote + lineLegend
+  + '</div>';
+
+  // ─── Right column: monthly cadence as a vertical bar chart ───────
+  // Container is a hard 120px tall with overflow:hidden so bars (and their
+  // unit labels) can never escape upward into the section header. Each bar
+  // is a fixed 52px wide; the three columns space evenly across the column.
+  function _kFmt(n) { return Math.round(n / 1000) + 'K'; }
+  var maxMo = Math.max.apply(null, q.months.map(function(m){return m.units;})) || 1;
+  var monthBarCols = q.months.map(function(m){
+    var hPct = m.units ? Math.round((m.units/maxMo) * 100) : 0;
+    var op   = m.units ? Math.max(0.5, m.units/maxMo) : 0;
+    var unitsLbl = m.units ? _kFmt(m.units) : '';
+    return '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">'
+      + (unitsLbl ? '<div style="font-size:10px;color:#888780;margin-bottom:4px;font-family:system-ui;font-variant-numeric:tabular-nums;">'+unitsLbl+'</div>' : '')
+      + '<div style="width:52px;height:'+hPct+'%;background:#378ADD;opacity:'+op.toFixed(2)+';border-radius:3px 3px 0 0;"></div>'
+    + '</div>';
+  }).join('');
+  var monthLabelsRow = q.months.map(function(m){
+    return '<div style="text-align:center;">'
+      + '<div style="font-size:11px;color:#888780;font-family:system-ui;">'+m.label+'</div>'
+      + '<div style="font-size:10px;color:#5F5E5A;font-family:system-ui;font-variant-numeric:tabular-nums;">'+(m.units?(m.lots+' lot'+(m.lots===1?'':'s')):'—')+'</div>'
+    + '</div>';
+  }).join('');
+  // Totals — two centered stat blocks grouped under the middle of the chart.
+  var totalsHTML = '<div style="display:flex;justify-content:center;gap:32px;padding-top:10px;border-top:0.5px solid rgba(255,255,255,0.07);margin-top:10px;font-family:system-ui;">'
+    + '<div style="text-align:center;">'
+      + '<div style="font-size:15px;font-weight:500;color:#cccccc;font-variant-numeric:tabular-nums;">'+(q.totalUnits?_kFmt(q.totalUnits):'—')+'</div>'
+      + '<div style="font-size:10px;color:#888780;margin-top:2px;">total units</div>'
+    + '</div>'
+    + '<div style="text-align:center;">'
+      + '<div style="font-size:15px;font-weight:500;color:#cccccc;font-variant-numeric:tabular-nums;">'+q.totalLots+'</div>'
+      + '<div style="font-size:10px;color:#888780;margin-top:2px;">total lots</div>'
+    + '</div>'
+  + '</div>';
+  var cadenceCol = '<div style="flex:1;min-width:0;padding-right:20px;">'
+    + '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:16px;">Monthly cadence</div>'
+    + '<div style="display:flex;align-items:flex-end;justify-content:space-around;height:120px;overflow:hidden;border-bottom:0.5px solid rgba(255,255,255,0.12);">'+monthBarCols+'</div>'
+    + '<div style="display:flex;justify-content:space-around;margin-top:8px;">'+monthLabelsRow+'</div>'
+    + totalsHTML
+  + '</div>';
+
+  // ─── Insight strip — five chips ──────────────────────────────────
+  // Avg run size + % vs prior quarter
+  var thisAvg = q.totalLots ? Math.round(q.totalUnits / q.totalLots) : 0;
+  var avgChange = (q.priorStats && q.priorStats.avgRun)
+    ? ((thisAvg - q.priorStats.avgRun) / q.priorStats.avgRun * 100)
+    : null;
+  var avgChangeStr = avgChange === null ? '—'
+    : '<span style="color:'+(avgChange>=0?'#9FE1CB':'#F09595')+';">'+(avgChange>=0?'+':'')+avgChange.toFixed(1)+'%</span> vs '+quarterLabel(q.priorStats.qkey);
+
+  // Biggest month
+  var bigMo = q.months.reduce(function(a,b){ return (b.units > a.units) ? b : a; }, {units:0,label:'—',lots:0});
+  var bigMoSub = bigMo.units ? bigMo.units.toLocaleString()+' units &middot; '+bigMo.lots+' lot'+(bigMo.lots===1?'':'s') : 'no production';
+
+  // Dominant product — wraps to 2 lines for long names rather than truncating.
+  var domP = q.products.length ? q.products[0] : null;
+  var domPSub  = domP && q.totalUnits ? ((domP.units/q.totalUnits)*100).toFixed(1)+'% of quarter units' : '';
+  var domPValueHTML = domP
+    ? '<div style="font-size:13px;line-height:1.3;white-space:normal;font-weight:500;color:#e8e6e0;">'+_esc(domP.name)+'</div>'
+    : '<span style="color:#5f5e5a;">—</span>';
+
+  // Line breakdown — one mini row per non-zero line (label + lots in line
+  // color · proportional bar to dominant line · units in {n}K).
+  var maxLineUnits = q.lines.length ? Math.max.apply(null, q.lines.map(function(ln){return ln.units;})) : 1;
+  if (!maxLineUnits) maxLineUnits = 1;
+  var lineRows = q.lines.filter(function(ln){return ln.lots > 0;}).map(function(ln){
+    var lk2 = lk(ln.line);
+    var color = LINE_DOT[lk2] || '#888780';
+    var labelStr = (ln.line || '').replace('Line #', 'L#');
+    var w = Math.max(2, Math.round((ln.units / maxLineUnits) * 100));
+    return '<div style="display:flex;align-items:center;gap:6px;font-family:system-ui;margin-bottom:3px;">'
+      + '<div style="width:60px;font-size:10px;color:'+color+';flex-shrink:0;text-align:left;font-weight:500;">'+labelStr+' &middot; '+ln.lots+'</div>'
+      + '<div style="flex:1;min-width:0;height:5px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w+'%;background:'+color+';border-radius:2px;"></div></div>'
+      + '<div style="width:34px;font-size:10px;color:#e8e6e0;font-variant-numeric:tabular-nums;text-align:right;flex-shrink:0;">'+_kFmt(ln.units)+'</div>'
+    + '</div>';
+  }).join('');
+  var lineBreakdownValueHTML = lineRows
+    ? '<div style="font-weight:400;text-align:left;margin-top:2px;">'+lineRows+'</div>'
+    : '<span style="color:#5f5e5a;">—</span>';
+
+  // Format mix — Powder (Line #1 + Line #4) vs Capsules (Line #2). Lots-based
+  // share keeps it consistent with the other chips that report on lots.
+  var powderLots = 0, capsuleLots = 0;
+  for (var li = 0; li < q.lines.length; li++) {
+    var lk2 = lk(q.lines[li].line);
+    if (lk2 === 'line#1' || lk2 === 'line#4') powderLots  += q.lines[li].lots;
+    else if (lk2 === 'line#2')                capsuleLots += q.lines[li].lots;
+  }
+  var fmtTotal = powderLots + capsuleLots;
+  var powderPct = fmtTotal ? Math.round(powderLots  / fmtTotal * 100) : 0;
+  var capsulePct = fmtTotal ? 100 - powderPct : 0;
+  var fmtValue = fmtTotal
+    ? powderPct + '%<span style="font-size:11px;color:#888780;font-weight:400;margin-left:4px;">powder</span>'
+    : '<span style="color:#5f5e5a;">—</span>';
+  var fmtSub = fmtTotal
+    ? '<div style="display:flex;height:5px;width:80%;margin:4px auto 4px;border-radius:2px;overflow:hidden;background:#2c2c2a;">'
+        + '<div style="width:'+powderPct+'%;background:#378ADD;"></div>'
+        + '<div style="width:'+capsulePct+'%;background:#7F77DD;"></div>'
+      + '</div>'
+      + capsulePct + '% capsule'
+    : 'no production';
+
+  function chip(label, valueHTML, subHTML, valueColor){
+    return '<div style="flex:1;min-width:0;text-align:center;padding:0 8px;">'
+      + '<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
+      + '<div style="font-size:14px;font-weight:500;color:'+(valueColor||'#e8e6e0')+';line-height:1.2;font-variant-numeric:tabular-nums;">'+valueHTML+'</div>'
+      + '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">'+subHTML+'</div>'
+    + '</div>';
+  }
+  var sep = '<div style="width:0.5px;background:#2c2c2a;align-self:stretch;flex-shrink:0;"></div>';
+  // Strip moved to the TOP of the panel — sits between the header label and
+  // the two-column section, not at the bottom.
+  var insightStrip = '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:0.5px solid #2c2c2a;display:flex;align-items:stretch;gap:0;">'
+    + chip('Avg run size',    thisAvg.toLocaleString(),                   avgChangeStr)
+    + sep
+    + chip('Biggest month',   bigMo.label,                                 bigMoSub)
+    + sep
+    + chip('Dominant product', domPValueHTML, domPSub)
+    + sep
+    + chip('Line breakdown',   lineBreakdownValueHTML, '')
+    + sep
+    + chip('Format mix',      fmtValue, fmtSub)
+  + '</div>';
+
+  return '<div style="margin:0 14px 8px 14px;padding:14px 16px;background:#0f1217;border-left:2px solid #378ADD;border-radius:0 6px 6px 0;">'
+    + '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:14px;">'+quarterLabel(qkey)+' &middot; breakdown</div>'
+    + insightStrip
+    + '<div style="display:flex;align-items:stretch;">'
+      + cadenceCol
+      + '<div style="width:1px;background:rgba(255,255,255,0.08);align-self:stretch;flex-shrink:0;"></div>'
+      + productsCol
+    + '</div>'
+  + '</div>';
 }
 
 function generateSynopsis(safeId) {
@@ -4517,12 +4860,22 @@ function renderCustomerOverview(healthData) {
       +sparklineHTML
     +'</div>';
 
-    // Expandable quarterly detail (unchanged)
+    // Expandable quarterly detail. Each row is now clickable when it has
+    // units — opens an inline monthly drill-down (and optional product list)
+    // beneath that quarter via a colspan=9 row.
     var maxUnits = Math.max.apply(null, cd.qtrs.map(function(q){return q.units;})) || 1;
+    var openQ   = _chQtrExpanded[sid] || null;
     var tableRows = cd.qtrs.map(function(q, qidx) {
       var isCur = q.key === curQk;
+      var qOpen = openQ === q.key;
+      var clickable = q.units > 0;
       var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
-      var rBg = isCur ? 'background:#1a2030;' : '';
+      var rBg = qOpen ? 'background:#0d1a2a;' : (isCur ? 'background:#1a2030;' : '');
+      var rowAttrs = clickable
+        ? ' onclick="toggleCustQuarter(\''+sid+'\',\''+q.key+'\')" style="cursor:pointer;'+(qOpen?'':' transition:background .12s;')+'" onmouseover="if(!this.dataset.open)this.style.background=\'#15212f\'" onmouseout="if(!this.dataset.open)this.style.background=\'\'"'
+          + (qOpen ? ' data-open="1"' : '')
+        : '';
+      // (when open, lock the bg via inline style so the hover handler doesn't flicker it)
       var prevWithData = null;
       for (var pi=qidx-1; pi>=0; pi--) { if (cd.qtrs[pi].units>0){prevWithData=cd.qtrs[pi];break;} }
       var unitsDelta = '';
@@ -4536,9 +4889,13 @@ function renderCustomerOverview(healthData) {
       var pctDelta = prevPct!==null && q.pctOfProd!==null && !isCur ? pctBadge(q.pctOfProd, prevPct, true) : '';
       var bW = q.units ? Math.round((q.units/maxUnits)*88) : 0;
       var bCol = isCur ? '#378ADD' : '#4A6580';
-      return '<tr>'
-        +'<td style="'+tdB+rBg+'color:'+(isCur?'#378ADD':'#888780')+';font-weight:'+(isCur?'500':'400')+';">'
-          +(isCur?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')
+      var qChev = clickable
+        ? '<svg width="9" height="9" viewBox="0 0 12 12" fill="none" style="margin-right:5px;vertical-align:middle;transition:transform .15s;transform:'+(qOpen?'rotate(180deg)':'rotate(0deg)')+';"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        : '';
+      var mainTr = '<tr'+rowAttrs+'>'
+        +'<td style="'+tdB+rBg+'color:'+(qOpen?'#85B7EB':isCur?'#378ADD':'#888780')+';font-weight:'+(qOpen||isCur?'500':'400')+';">'
+          +qChev
+          +(isCur && !qOpen?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')
           +quarterLabel(q.key)+(isCur?' <span style="font-size:10px;color:#5f5e5a;font-weight:400;">partial</span>':'')
         +'</td>'
         +'<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(q.units?q.units.toLocaleString():'&#x2014;')+'</td>'
@@ -4554,6 +4911,19 @@ function renderCustomerOverview(healthData) {
           +'</div>'
         +'</td>'
       +'</tr>';
+
+      // Drill-down panel — left column (products) + right column (monthly +
+      // new/repeat) + insight strip. Single colspan=9 row inserted under the
+      // quarter row when expanded.
+      var drillTr = '';
+      if (qOpen) {
+        var qFull = _custQuarterFull(cd.cust, q.key);
+        drillTr = '<tr><td colspan="9" style="padding:0;background:#0a0e15;">'
+          + _custQuarterPanelHTML(q.key, qFull)
+        + '</td></tr>';
+      }
+
+      return mainTr + drillTr;
     }).join('');
 
     var custDataObj = {
