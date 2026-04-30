@@ -3556,22 +3556,39 @@ function renderPerformance() {
   rangeRows25.forEach(function(r){
     var dt=new Date(r['Date']); if(isNaN(dt)) return;
     var mo=dt.getMonth()+1;
-    if(!byMonth25r[mo]) byMonth25r[mo]={units:0,mtdUnits:0};
+    if(!byMonth25r[mo]) byMonth25r[mo]={units:0};
     byMonth25r[mo].units+=num(r['Final Units']);
-    var isCM=(now.getMonth()+1===mo && now.getFullYear()===dt.getFullYear()+compShift);
-    if(!isCM||dt.getDate()<=now.getDate()) byMonth25r[mo].mtdUnits+=num(r['Final Units']);
   });
+  // Days of (year,month) that fall inside the selected range — used to
+  // prorate the target so it stays apples-to-apples with the range-filtered
+  // actual. Without this, picking e.g. "Apr 1–15" prorates ACTUAL but
+  // leaves TARGET at full-month, making the % look artificially low.
+  function _daysOfMonthInRange(year, month) {
+    var firstOfMonth = new Date(year, month-1, 1, 0, 0, 0, 0);
+    var lastOfMonth  = new Date(year, month,   0, 23, 59, 59, 999);
+    var effStart = range.start > firstOfMonth ? range.start : firstOfMonth;
+    var effEnd   = range.end   < lastOfMonth  ? range.end   : lastOfMonth;
+    if (effStart > effEnd) return 0;
+    var s = new Date(effStart.getFullYear(), effStart.getMonth(), effStart.getDate());
+    var e = new Date(effEnd.getFullYear(),   effEnd.getMonth(),   effEnd.getDate());
+    return Math.floor((e - s) / 86400000) + 1;
+  }
   var monthRows=Object.keys(byMonth26).sort().map(function(k){
     var mo=byMonth26[k],dim=new Date(mo.year,mo.month,0).getDate(),diy=(mo.year%4===0&&(mo.year%100!==0||mo.year%400===0))?366:365;
     var annTarget = YEAR_TARGETS[mo.year]||YEAR_TARGET;
     var fmtgt=Math.round((dim/diy)*annTarget);
-    var isCur=(now.getFullYear()===mo.year&&now.getMonth()+1===mo.month);
-    var tgt=isCur?Math.round(fmtgt*now.getDate()/dim):fmtgt;
+    var daysInRange = _daysOfMonthInRange(mo.year, mo.month);
+    var isPartial = daysInRange > 0 && daysInRange < dim;
+    var tgt = isPartial ? Math.round(fmtgt * daysInRange / dim) : fmtgt;
     var pctT=tgt?(mo.units/tgt)*100:0;
-    var mo25=byMonth25r[mo.month]||{units:0,mtdUnits:0};
-    var u25=isCur?mo25.mtdUnits:mo25.units;
+    var mo25=byMonth25r[mo.month]||{units:0};
+    // rangeRows25 is already shifted to the same date window last year, so
+    // mo25.units is naturally partial in matching proportion — no separate
+    // MTD branch needed.
+    var u25=mo25.units;
     var yoyDiff=u25?((mo.units-u25)/u25*100):null;
-    return {label:mo.month+'/'+mo.year,units:mo.units,target:tgt,fullMonthTarget:fmtgt,pctOfTarget:pctT,isCurrentMonth:isCur,daysInMonth:dim,daysSoFar:now.getDate(),units25:u25,yoyDiff:yoyDiff};
+    var isCur=(now.getFullYear()===mo.year&&now.getMonth()+1===mo.month);
+    return {label:mo.month+'/'+mo.year,units:mo.units,target:tgt,fullMonthTarget:fmtgt,pctOfTarget:pctT,isPartial:isPartial,isCurrentMonth:isCur,daysInMonth:dim,daysInRange:daysInRange,units25:u25,yoyDiff:yoyDiff};
   });
 
   var lineTotal=lineEntries.reduce(function(s,e){return s+e[1].units;},0);
@@ -3784,9 +3801,15 @@ function renderPerformance() {
     + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;" title="Unique lots across all lines. Per-line counts can sum higher because some lots ran on more than one line.">'+totalLots.toLocaleString()+'</td>'
     + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+_allLineAvg.toLocaleString()+'</td>'
   + '</tr>';
-  var monthHTML=monthRows.map(function(m){ var isG=m.pctOfTarget>=100,isY=m.pctOfTarget>=80&&m.pctOfTarget<100; var pBg=isG?'#0F6E56':isY?'#633806':'#791F1F',pTxt=isG?'#9FE1CB':isY?'#FAC775':'#F09595',bCol=isG?'#1D9E75':isY?'#EF9F27':'#E24B4A'; var bw=Math.min(Math.round(m.pctOfTarget),100); var monthLabel=m.isCurrentMonth?m.label+'<sup style="color:#9FE1CB;font-size:9px"> *</sup>':m.label; var units25Str=m.units25?'<span style="color:#5f5e5a;font-weight:400"> ('+m.units25.toLocaleString()+')</span>':''; var yoyDelta='<td style="text-align:right">'; if(m.yoyDiff!==null){var yPos=m.yoyDiff>=0,yBg=yPos?'#085041':'#791F1F',yTxt=yPos?'#9FE1CB':'#F09595';yoyDelta+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+m.yoyDiff.toFixed(1)+'%</span>';}else yoyDelta+='\u2014'; yoyDelta+='</td>'; return '<tr><td style="font-weight:500">'+monthLabel+'</td><td style="text-align:right">'+m.units.toLocaleString()+units25Str+'</td><td style="text-align:right;color:#888780">'+m.target.toLocaleString()+'</td><td style="text-align:right"><span class="badge" style="background:'+pBg+';color:'+pTxt+'">'+m.pctOfTarget.toFixed(2)+'%</span></td><td style="min-width:100px;padding:6px 10px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div></div></td>'+yoyDelta+'</tr>'; }).join('');
-  var curMo=monthRows.find(function(m){return m.isCurrentMonth;});
-  var asterisk=curMo?'<div style="font-size:10px;color:#5f5e5a;margin-top:10px;padding-top:8px;border-top:0.5px solid #2c2c2a"><sup style="color:#9FE1CB">*</sup> '+curMo.label+' target adjusted for month-to-date ('+curMo.daysSoFar+'/'+curMo.daysInMonth+' days). Full month target: '+curMo.fullMonthTarget.toLocaleString()+'. '+compYearLabel+' figure shown is also MTD for comparison.</div>':'';
+  var monthHTML=monthRows.map(function(m){ var isG=m.pctOfTarget>=100,isY=m.pctOfTarget>=80&&m.pctOfTarget<100; var pBg=isG?'#0F6E56':isY?'#633806':'#791F1F',pTxt=isG?'#9FE1CB':isY?'#FAC775':'#F09595',bCol=isG?'#1D9E75':isY?'#EF9F27':'#E24B4A'; var bw=Math.min(Math.round(m.pctOfTarget),100); var monthLabel=m.isPartial?m.label+'<sup style="color:#9FE1CB;font-size:9px"> *</sup>':m.label; var units25Str=m.units25?'<span style="color:#5f5e5a;font-weight:400"> ('+m.units25.toLocaleString()+')</span>':''; var yoyDelta='<td style="text-align:right">'; if(m.yoyDiff!==null){var yPos=m.yoyDiff>=0,yBg=yPos?'#085041':'#791F1F',yTxt=yPos?'#9FE1CB':'#F09595';yoyDelta+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+m.yoyDiff.toFixed(1)+'%</span>';}else yoyDelta+='\u2014'; yoyDelta+='</td>'; return '<tr><td style="font-weight:500">'+monthLabel+'</td><td style="text-align:right">'+m.units.toLocaleString()+units25Str+'</td><td style="text-align:right;color:#888780">'+m.target.toLocaleString()+'</td><td style="text-align:right"><span class="badge" style="background:'+pBg+';color:'+pTxt+'">'+m.pctOfTarget.toFixed(2)+'%</span></td><td style="min-width:100px;padding:6px 10px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div></div></td>'+yoyDelta+'</tr>'; }).join('');
+  var partialMonths=monthRows.filter(function(m){return m.isPartial;});
+  var asterisk='';
+  if(partialMonths.length===1){
+    var p=partialMonths[0];
+    asterisk='<div style="font-size:10px;color:#5f5e5a;margin-top:10px;padding-top:8px;border-top:0.5px solid #2c2c2a"><sup style="color:#9FE1CB">*</sup> '+p.label+' target prorated for '+p.daysInRange+' of '+p.daysInMonth+' days in selected range. Full month target: '+p.fullMonthTarget.toLocaleString()+'. '+compYearLabel+' figure reflects the same date range.</div>';
+  } else if(partialMonths.length>1){
+    asterisk='<div style="font-size:10px;color:#5f5e5a;margin-top:10px;padding-top:8px;border-top:0.5px solid #2c2c2a"><sup style="color:#9FE1CB">*</sup> Targets prorated to days within the selected range; '+compYearLabel+' figures reflect the same range.</div>';
+  }
 
   var total25units = lots25.reduce(function(s,l){return s+l.finalUnits;},0);
 
