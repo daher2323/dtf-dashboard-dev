@@ -3448,6 +3448,12 @@ function renderPerformance() {
   var d=prepData();
   var now=d.now;
   if(!selectedPerfRange) selectedPerfRange = getDefaultPerfRange();
+  // YTD-anchored ranges drift stale because range.end is cached at init time;
+  // re-stamp it to "now" on every render so the partial-month math (and the
+  // last-day-of-month asterisk in particular) tracks the actual current date.
+  if (selectedPerfRange && /^Year to date/.test(selectedPerfRange.label||'')) {
+    selectedPerfRange.end = new Date();
+  }
   var range = selectedPerfRange;
 
   var allRowsCombined = allRows.concat(allRows25);
@@ -3571,7 +3577,8 @@ function renderPerformance() {
     if (effStart > effEnd) return 0;
     var s = new Date(effStart.getFullYear(), effStart.getMonth(), effStart.getDate());
     var e = new Date(effEnd.getFullYear(),   effEnd.getMonth(),   effEnd.getDate());
-    return Math.floor((e - s) / 86400000) + 1;
+    // Math.round (not floor) so DST spring-forward / fall-back days don't shave a day off.
+    return Math.round((e - s) / 86400000) + 1;
   }
   var monthRows=Object.keys(byMonth26).sort().map(function(k){
     var mo=byMonth26[k],dim=new Date(mo.year,mo.month,0).getDate(),diy=(mo.year%4===0&&(mo.year%100!==0||mo.year%400===0))?366:365;
