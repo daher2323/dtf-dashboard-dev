@@ -3667,7 +3667,7 @@ function renderPerformance() {
 
     // CSS grid gives ironclad equal column widths — flex had drift when
     // column contents varied in intrinsic width.
-    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:28px;">'
+    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:44px;">'
       // Col 1: Day of year
       +'<div style="min-width:0;text-align:center;">'
         +'<div style="'+_colLbl+'">Day of year</div>'
@@ -3716,12 +3716,14 @@ function renderPerformance() {
     +'</div>';
 
     // Progress bar (existing visual \u2014 markers preserved; only labels below change).
+    var _pctToTarget = Math.round((totalUnits / YEAR_TARGET) * 100);
     var _barHTML = '<div style="margin-bottom:10px;"><div style="background:#2c2c2a;border-radius:8px;height:14px;overflow:visible;position:relative;">'
       +'<div style="position:absolute;top:0;left:0;height:100%;width:100%;background:'+(onTrack?'#1D9E75':'#EF9F27')+';border-radius:8px;opacity:0.2"></div>'
       +'<div style="position:absolute;top:0;left:0;height:100%;width:'+actualPct.toFixed(1)+'%;background:#378ADD;border-radius:8px 0 0 8px"></div>'
       +'<div style="position:absolute;top:-4px;left:'+tOnBar.toFixed(1)+'%;height:22px;width:2px;background:#e8e6e0;border-radius:1px;opacity:0.4"></div>'
       +'<div style="position:absolute;top:-4px;left:'+actualPct.toFixed(1)+'%;height:22px;width:2px;background:#378ADD;border-radius:1px"></div>'
       +'<div style="position:absolute;top:-4px;right:0;width:2px;height:22px;background:#1D9E75;border-radius:1px;z-index:2;"></div>'
+      +'<div style="position:absolute;left:'+actualPct.toFixed(1)+'%;top:-26px;transform:translateX(-50%);background:#185FA5;color:#B5D4F4;font-size:10px;font-weight:500;padding:2px 7px;border-radius:4px;white-space:nowrap;">'+_pctToTarget+'% to target</div>'
       +'</div></div>'
       // Anchored bar labels — each sits below its corresponding marker.
       // Hide "Units to date" when its endpoint is within 10% of the target
