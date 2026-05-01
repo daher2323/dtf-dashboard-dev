@@ -90,6 +90,75 @@
   @keyframes dtfPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
   @keyframes spin { to{transform:rotate(360deg)} }
   @media (max-width: 700px) { .charts-row { grid-template-columns: 1fr; } }
+
+  /* ── Mobile (≤768px) ───────────────────────────────────────────────
+     Hide columns that compress badly (sparklines, bar columns, secondary
+     stats); stack two-column layouts; let the main nav scroll horizontally.
+     Test at 390px (iPhone 14 portrait). All overrides are mobile-only. */
+  @media (max-width: 768px) {
+    .shell { padding: 8px; }
+    .app-bar { padding: 0 8px; min-height: 56px; }
+    .brand-wrap { padding: 8px 12px 8px 4px; margin-right: 8px; }
+    .brand-name { font-size: 15px; }
+    .brand-sub { font-size: 10px; }
+
+    /* Top nav — scrollable horizontally */
+    .main-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding: 8px 0; }
+    .main-tabs::-webkit-scrollbar { display: none; }
+    .main-tab { flex-shrink: 0; padding: 6px 10px; }
+    .main-tab-icon { width: 26px; height: 26px; }
+
+    .full-card { padding: 0.75rem; }
+    .full-card h3 { font-size: 11px; }
+
+    /* Production — Daily gauge cards stack */
+    .daily-gauges { flex-direction: column; gap: 8px; }
+
+    /* Production — Daily KPI strip (2-col grid, hide vertical dividers).
+       !important needed because the inline style sets display:flex. */
+    .today-kpi-strip { display: grid !important; grid-template-columns: repeat(2, 1fr); gap: 14px 10px; }
+    .today-kpi-divider { display: none; }
+    .today-kpi-cell { text-align: center; }
+
+    /* Production — Year-end projection KPI columns row stacks; hide its dividers,
+       pace-comparison panel spans full width below the stat columns */
+    .proj-kpi-row { grid-template-columns: repeat(2, 1fr) !important; gap: 12px !important; margin-bottom: 60px !important; }
+    .proj-kpi-divider { display: none; }
+    .pace-comparison-panel { grid-column: 1 / -1; padding-left: 0 !important; }
+
+    /* Production — Product type split + Product mix two-column → single column */
+    .pm-twocol { grid-template-columns: 1fr !important; }
+
+    /* Customers — concentration strip stacks */
+    .concentration-strip { flex-direction: column; align-items: flex-start !important; gap: 8px !important; height: auto !important; padding: 8px 0; }
+    .concentration-strip > span:last-child { display: none; } /* "Higher % = …" helper */
+
+    /* Customers — table: hide bars (3rd), avg run (6th), sparkline (8th) */
+    .customer-row {
+      grid-template-columns: 24px 1.5fr 70px 50px 48px !important;
+      gap: 8px !important;
+      padding: 8px 10px !important;
+    }
+    .customer-row > :nth-child(3),
+    .customer-row > :nth-child(6),
+    .customer-row > :nth-child(8) { display: none; }
+
+    /* Customers — quarter drill-down KPI strip (5 chips) → 2-col grid;
+       last chip ("Format mix") spans full width on its own row */
+    .qtr-kpi-strip { display: grid !important; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .qtr-kpi-strip > div:last-child { grid-column: 1 / -1; }
+    .qtr-kpi-sep { display: none; }
+
+    /* Customers — quarter drill-down two-column section stacks */
+    .qtr-drilldown { flex-direction: column; gap: 12px; }
+    .qtr-drilldown-sep { display: none; }
+
+    /* Sub-bar / column headers / concentration outer — relax sticky tops so
+       they don't pile on top of each other on a phone where the app-bar shrank. */
+    .sub-bar-outer { top: 56px; }
+    .cust-concentration-outer { top: 56px; }
+    .cust-col-header-outer { top: 96px; }
+  }
 </style>
 </head>
 <body>
@@ -2493,16 +2562,16 @@ function renderToday() {
     }).join(''):'<div style="padding:8px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px;color:#5f5e5a;font-style:italic">Live data not available for past days</div>')
     +'<div style="border-top:0.5px solid #2c2c2a;margin-top:.75rem;padding-top:.75rem">'
     +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Production by line</div>'
-    +'<div style="display:flex;gap:12px;margin-bottom:10px">'+gaugesHTML+'</div>'
+    +'<div class="daily-gauges" style="display:flex;gap:12px;margin-bottom:10px">'+gaugesHTML+'</div>'
     +'<div id="today-banner" style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;position:relative;">'
     +'<div id="banner-check" style="display:none;position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:#1D9E75;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'
-    +'<div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;">'
+    +'<div class="today-kpi-strip" style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;">'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-total" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">'+(isLive?'Total units today':'Total units')+'</div><div style="display:flex;align-items:center;justify-content:center;gap:6px;"><span id="banner-total" style="font-size:26px;font-weight:500;color:#e8e6e0;line-height:1">0</span><span id="banner-bullseye" style="display:none;font-size:22px;line-height:1">&#127919;</span>'+(recTotalRank===0?'<span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:7px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;">\uD83C\uDFC6 Record</span>':'')+'</div></div>'
-    +'<div id="banner-div1" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
+    +'<div id="banner-div1" class="today-kpi-divider" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-goal" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">'+(allLinesHaveTarget?'Daily target (all lines)':'Daily avg (all lines)')+'</div><div style="font-size:18px;font-weight:500;color:#e8e6e0;line-height:1.2">'+totalGoal.toLocaleString()+'</div></div>'
-    +'<div id="banner-div2" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
+    +'<div id="banner-div2" class="today-kpi-divider" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-pct" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">'+bannerGoalLabel.toUpperCase()+'</div><div id="banner-pct" style="font-size:18px;font-weight:500;color:#e8e6e0;line-height:1.2">0%</div></div>'
-    +'<div id="banner-div3" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
+    +'<div id="banner-div3" class="today-kpi-divider" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-status" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Status</div><div id="banner-status" style="font-size:13px;font-weight:500;color:'+statusColor+';line-height:1.4">'+statusLabel+'</div></div>'
     +'</div>'
     +'<div id="banner-track" style="display:flex;gap:1px;background:rgba(255,255,255,0.06);border:2px solid #2c2c2a;border-radius:5px;height:20px;box-sizing:border-box;position:relative;overflow:hidden;margin-bottom:6px;">'
@@ -3663,11 +3732,11 @@ function renderPerformance() {
     var _col4Sub  = (toTarget >= 0 ? '+' : '') + toTarget.toLocaleString() + ' &middot; ' + targetPct + '% of target';
     var _colLbl   = 'font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;';
     var _valStyle = 'font-size:22px;font-weight:500;line-height:1.1;';
-    var _divider  = '<div style="background:#2c2c2a;width:1px;height:40px;align-self:center;"></div>';
+    var _divider  = '<div class="proj-kpi-divider" style="background:#2c2c2a;width:1px;height:40px;align-self:center;"></div>';
 
     // CSS grid gives ironclad equal column widths — flex had drift when
     // column contents varied in intrinsic width.
-    var _colsRow = '<div style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:44px;">'
+    var _colsRow = '<div class="proj-kpi-row" style="display:grid;grid-template-columns:120px 1px 1fr 1px 1fr 1px 1fr 1px 1.5fr;gap:20px;align-items:center;margin-bottom:44px;">'
       // Col 1: Day of year
       +'<div style="min-width:0;text-align:center;">'
         +'<div style="'+_colLbl+'">Day of year</div>'
@@ -3695,7 +3764,7 @@ function renderPerformance() {
       +_divider
       // Col 5: Pace comparison (24px left padding keeps bars clear of the divider;
       // badge sits inline with the label so the column matches the height of the others)
-      +'<div style="min-width:0;padding-left:24px;">'
+      +'<div class="pace-comparison-panel" style="min-width:0;padding-left:24px;">'
         +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap;">'
           +'<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Pace comparison</div>'
           +_momentumBadge
@@ -3965,7 +4034,7 @@ function renderPerformance() {
     +'<div class="full-card" style="padding-bottom:12px;"><h3 style="margin-bottom:16px;">Year-end projection vs target</h3>'+yearEndHTML+'</div>'
     // Two-column side-by-side layout: left card = Product Type Split + line
     // breakdown table; right card = Product Mix (toggle + donut + distribution).
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'
+    +'<div class="pm-twocol" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'
       +'<div class="full-card" style="padding-bottom:16px;margin-bottom:0;">'+typeSplitHTML
       +'<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>'
       +'<th style="text-align:left;padding:5px 10px;color:#888780;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:0.5px solid #2c2c2a">Line</th>'
@@ -4381,10 +4450,10 @@ function _custQuarterPanelHTML(qkey, q) {
       + '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">'+subHTML+'</div>'
     + '</div>';
   }
-  var sep = '<div style="width:0.5px;background:#2c2c2a;align-self:stretch;flex-shrink:0;"></div>';
+  var sep = '<div class="qtr-kpi-sep" style="width:0.5px;background:#2c2c2a;align-self:stretch;flex-shrink:0;"></div>';
   // Strip moved to the TOP of the panel — sits between the header label and
   // the two-column section, not at the bottom.
-  var insightStrip = '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:0.5px solid #2c2c2a;display:flex;align-items:stretch;gap:0;">'
+  var insightStrip = '<div class="qtr-kpi-strip" style="margin-bottom:16px;padding-bottom:14px;border-bottom:0.5px solid #2c2c2a;display:flex;align-items:stretch;gap:0;">'
     + chip('Avg run size',    thisAvg.toLocaleString(),                   avgChangeStr)
     + sep
     + chip('Biggest month',   bigMo.label,                                 bigMoSub)
@@ -4399,9 +4468,9 @@ function _custQuarterPanelHTML(qkey, q) {
   return '<div style="margin:0 14px 8px 14px;padding:14px 16px;background:#0f1217;border-left:2px solid #378ADD;border-radius:0 6px 6px 0;">'
     + '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:14px;">'+quarterLabel(qkey)+' &middot; breakdown</div>'
     + insightStrip
-    + '<div style="display:flex;align-items:stretch;">'
+    + '<div class="qtr-drilldown" style="display:flex;align-items:stretch;">'
       + cadenceCol
-      + '<div style="width:1px;background:rgba(255,255,255,0.08);align-self:stretch;flex-shrink:0;"></div>'
+      + '<div class="qtr-drilldown-sep" style="width:1px;background:rgba(255,255,255,0.08);align-self:stretch;flex-shrink:0;"></div>'
       + productsCol
     + '</div>'
   + '</div>';
@@ -4735,7 +4804,7 @@ function renderCustomerOverview(healthData) {
   var concentrationInner = document.getElementById('cust-concentration-inner');
   if (concentrationInner) {
     if (totalYtdAll > 0) {
-      concentrationInner.innerHTML = '<div style="height:52px;display:flex;align-items:center;gap:20px;">'
+      concentrationInner.innerHTML = '<div class="concentration-strip" style="height:52px;display:flex;align-items:center;gap:20px;">'
         +'<span style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Customer concentration &middot; '+nowYr+' YTD</span>'
         +_concStat('top 5',  top5CurPct,  top5PriorPct)
         +'<span style="width:1px;height:24px;background:#2c2c2a;"></span>'
@@ -4751,7 +4820,7 @@ function renderCustomerOverview(healthData) {
   // Shared 8-column grid template: rank | customer | bars | units | lots | avg | %prod | sparkline.
   var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px';
   var _thStyle  = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;';
-  var columnHeaderHTML = '<div style="position:sticky;top:160px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;margin-top:-16px;">'
+  var columnHeaderHTML = '<div class="customer-row" style="position:sticky;top:160px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;margin-top:-16px;">'
     +'<div></div>'
     +'<div style="'+_thStyle+'">Customer</div>'
     +'<div style="'+_thStyle+'">'+prevYr+' &middot; '+nowYr+'</div>'
@@ -4835,7 +4904,7 @@ function renderCustomerOverview(healthData) {
       ? '<div style="margin-top:2px;">'+_neutralBadge(cd.ytdPct, cd.ytdPct25)+'</div>'
       : '';
 
-    var summaryRow = '<div onclick="toggleCH(\''+sid+'\')" style="display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:8px 16px;background:#1a1d20;border-bottom:0.5px solid #1e2124;cursor:pointer;transition:background .12s;" onmouseover="this.style.background=\'#1e2124\'" onmouseout="this.style.background=\'#1a1d20\'">'
+    var summaryRow = '<div onclick="toggleCH(\''+sid+'\')" class="customer-row" style="display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:8px 16px;background:#1a1d20;border-bottom:0.5px solid #1e2124;cursor:pointer;transition:background .12s;" onmouseover="this.style.background=\'#1e2124\'" onmouseout="this.style.background=\'#1a1d20\'">'
       // Rank
       +'<div style="font-size:11px;color:#5f5e5a;font-variant-numeric:tabular-nums;">#'+rank+'</div>'
       // Customer
