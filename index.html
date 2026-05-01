@@ -2173,8 +2173,8 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
       var overTarget = (gaugeData[0].units+gaugeData[1].units+gaugeData[2].units) > totalGoal;
       var w4adj = overTarget ? Math.max(w4, 100-w1-w2) : w4;
       if(s1){s1.style.width=w1+'%';}
-      if(s2){s2.style.left=w1+'%';s2.style.width=w2+'%';}
-      if(s4){s4.style.left=(w1+w2)+'%';s4.style.width=w4adj+'%';}
+      if(s2){s2.style.width=w2+'%';}
+      if(s4){s4.style.width=w4adj+'%';}
       if(rem){
         var remaining=Math.round(totalGoal-todayTotal*e);
         rem.style.fontSize='11px';rem.style.fontWeight='500';
@@ -2505,10 +2505,10 @@ function renderToday() {
     +'<div id="banner-div3" style="width:0.5px;background:#2c2c2a;height:36px;flex-shrink:0;align-self:center"></div>'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-status" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Status</div><div id="banner-status" style="font-size:13px;font-weight:500;color:'+statusColor+';line-height:1.4">'+statusLabel+'</div></div>'
     +'</div>'
-    +'<div id="banner-track" style="background:#0d0f10;border:1.5px solid #2c2c2a;border-radius:8px;height:20px;position:relative;overflow:hidden;margin-bottom:6px;">'
-      +'<div id="banner-seg1" style="position:absolute;top:0;left:0;height:100%;width:0%;background:'+LINE_COLOR['line#1']+';border-radius:6px 0 0 6px;transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
-      +'<div id="banner-seg2" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#2']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
-      +'<div id="banner-seg4" style="position:absolute;top:0;height:100%;width:0%;background:'+LINE_COLOR['line#4']+';transition:width 1.2s cubic-bezier(.4,0,.2,1),left 1.2s cubic-bezier(.4,0,.2,1);"></div>'
+    +'<div id="banner-track" style="display:flex;gap:1px;background:rgba(255,255,255,0.06);border:2px solid #2c2c2a;border-radius:5px;height:20px;box-sizing:border-box;position:relative;overflow:hidden;margin-bottom:6px;">'
+      +'<div id="banner-seg1" style="flex-shrink:0;height:100%;width:0%;background:'+LINE_COLOR['line#1']+';transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
+      +'<div id="banner-seg2" style="flex-shrink:0;height:100%;width:0%;background:'+LINE_COLOR['line#2']+';transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
+      +'<div id="banner-seg4" style="flex-shrink:0;height:100%;width:0%;background:'+LINE_COLOR['line#4']+';transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-remaining" style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'+totalGoal.toLocaleString()+' to go</div>'
     +'</div>'
     +'<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;min-height:18px;">'
