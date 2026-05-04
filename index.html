@@ -428,6 +428,10 @@ var SKU_GROUPS = {
 };
 var showZeroDes = false;
 var lastRefreshTime = 0;
+// True while a CSV fetch is in flight — drives the "refreshing…" suffix on
+// the Daily freshness stamp so the label tells the truth (a fetch is actually
+// in progress) instead of just flagging staleness.
+var _refreshInFlight = false;
 var filterState = { customer:[], product:[], status:[], bottle:[], jar:[] };
 
 var _openMsId = null;
@@ -1461,14 +1465,21 @@ function computeRecords() {
 function hardRefresh() {
   var btn = document.querySelector('#app-bar-right button');
   if (btn) { btn.style.opacity = '.5'; btn.querySelector('span').textContent = 'Refreshing…'; }
+  _refreshInFlight = true; updateFreshnessStamp();
   fetchData(true).then(function(res){
+    _refreshInFlight = false;
     if (applyFreshData(res)) { lastRefreshTime = Date.now(); updateFreshnessStamp(); render(); }
-    else { if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = isViewingLive() ? 'Live' : 'Refresh'; } }
-  }).catch(function(){ if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); } });
+    else { updateFreshnessStamp(); if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = isViewingLive() ? 'Live' : 'Refresh'; } }
+  }).catch(function(){
+    _refreshInFlight = false; updateFreshnessStamp();
+    if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); }
+  });
 }
 
 function refreshAndRender(forceRender, _isRetry, fresh) {
+  _refreshInFlight = true; updateFreshnessStamp();
   fetchData(fresh).then(function(res){
+    _refreshInFlight = false;
     if(applyFreshData(res)){
       lastRefreshTime = Date.now();
       updateFreshnessStamp();
@@ -1478,14 +1489,20 @@ function refreshAndRender(forceRender, _isRetry, fresh) {
       if(forceRender || onToday || onWeekly) render();
       else if(topView==='summary' && subView==='performance') render();
       else if(topView==='detail') render();
-    } else if (!_isRetry) {
-      // Stale-guard rejected this fetch (truncated/shrunk CSV from the CDN).
-      // The retry bypasses the bucket — the cached response is what got us
-      // rejected, so we need a different token to stand a chance.
-      console.warn('[DTF] Refresh rejected — retrying in 1.5s');
-      setTimeout(function(){ refreshAndRender(forceRender, true, true); }, 1500);
+    } else {
+      updateFreshnessStamp();
+      if (!_isRetry) {
+        // Stale-guard rejected this fetch (truncated/shrunk CSV from the CDN).
+        // The retry bypasses the bucket — the cached response is what got us
+        // rejected, so we need a different token to stand a chance.
+        console.warn('[DTF] Refresh rejected — retrying in 1.5s');
+        setTimeout(function(){ refreshAndRender(forceRender, true, true); }, 1500);
+      }
     }
-  }).catch(function(e){ console.error('Refresh failed:', e); });
+  }).catch(function(e){
+    _refreshInFlight = false; updateFreshnessStamp();
+    console.error('Refresh failed:', e);
+  });
 }
 
 // ── Last-updated indicator (Daily view header) ─────────────────────────────
@@ -1493,15 +1510,22 @@ function refreshAndRender(forceRender, _isRetry, fresh) {
 // than implicit. The stamp turns amber after 90s and red after 3 min so the
 // viewer can tell real "no active lots" from "we haven't heard from the sheet
 // in a while". A 5s ticker keeps the display live between data refreshes.
+//
+// "refreshing…" only appends when _refreshInFlight is true — the label tells
+// the truth about whether a fetch is actually in progress, not just that the
+// data is old. When the data crosses the 90s mark and we're on the Daily
+// view, the ticker also kicks off a fresh fetch right then so the stamp
+// flips back to "just now" without waiting for the next 60s timer tick.
 var _freshnessTicker = null;
 function freshnessLabel() {
-  if (!lastRefreshTime) return { text:'', color:'#888780' };
+  if (!lastRefreshTime) return { text: _refreshInFlight ? 'Refreshing…' : '', color:'#888780' };
   var ageSec = Math.max(0, Math.floor((Date.now() - lastRefreshTime) / 1000));
-  if (ageSec < 20)  return { text:'Updated just now',        color:'#888780' };
-  if (ageSec < 90)  return { text:'Updated ' + ageSec + 's ago', color:'#888780' };
+  var refreshingSuffix = _refreshInFlight ? ' — refreshing…' : '';
+  if (ageSec < 20)  return { text:'Updated just now' + refreshingSuffix,        color:'#888780' };
+  if (ageSec < 90)  return { text:'Updated ' + ageSec + 's ago' + refreshingSuffix, color:'#888780' };
   var ageMin = Math.round(ageSec / 60);
-  if (ageSec < 180) return { text:'Updated ' + ageMin + 'm ago — refreshing…', color:'#EF9F27' };
-  return { text:'Updated ' + ageMin + 'm ago — data may be stale', color:'#F09595' };
+  if (ageSec < 180) return { text:'Updated ' + ageMin + 'm ago' + refreshingSuffix, color:'#EF9F27' };
+  return { text:'Updated ' + ageMin + 'm ago' + (_refreshInFlight ? ' — refreshing…' : ' — data may be stale'), color:'#F09595' };
 }
 function updateFreshnessStamp() {
   var el = document.getElementById('daily-freshness');
@@ -1509,6 +1533,15 @@ function updateFreshnessStamp() {
   var f = freshnessLabel();
   el.textContent = f.text;
   el.style.color = f.color;
+  // Proactive nudge: if the data has gone stale (>90s) while the user is
+  // looking at the Daily view, kick off a refresh now instead of waiting up
+  // to a full 60s for the next todayTimer tick. The fetch sets _refreshInFlight
+  // itself so we won't double-fire.
+  if (!_refreshInFlight && lastRefreshTime
+      && topView === 'summary' && subView === 'today'
+      && (Date.now() - lastRefreshTime) >= 90000) {
+    refreshAndRender(false, false, true);
+  }
 }
 function startFreshnessTicker() {
   if (_freshnessTicker) clearInterval(_freshnessTicker);
