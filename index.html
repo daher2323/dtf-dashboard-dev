@@ -3619,6 +3619,7 @@ function renderPerformance() {
   var devs25      = lots25.map(function(l){return lotDev(l);}).filter(function(d){return d!==null;});
   var avgDev25    = devs25.length?devs25.reduce(function(s,d){return s+d;},0)/devs25.length:0;
   var custs25     = new Set(lots25.map(function(l){return (l.product||'').split('-')[0].trim();}).filter(Boolean)).size;
+  var prods25     = new Set(lots25.map(function(l){return l.product;})).size;
 
   var byLineRange={};
   rangeRows.forEach(function(r){
@@ -3759,7 +3760,7 @@ function renderPerformance() {
     +'<div class="metric"><div class="label">Total lots</div><div class="value">'+totalLots.toLocaleString()+'</div><div class="sub">'+completeLots.length+' complete \u00b7 '+partialLots.length+' partial</div><div class="yoy">'+deltaTag(totalLots,total25lots,true,'pct',total25lots.toLocaleString(),compYearLabel)+'</div></div>'
     +'<div class="metric good"><div class="label">Completion rate</div><div class="value">'+compPct+'%</div><div class="sub">'+completeLots.length+' of '+totalLots+' lots</div><div class="yoy">'+deltaTag(compPct,comp25pct,true,'numPct',comp25pct+'%',compYearLabel)+'</div></div>'
     +'<div class="metric '+devClass+'"><div class="label">Avg deviation</div><div class="value" style="color:'+devColor+'">'+(avgDev>0?'+':'')+avgDev.toFixed(1)+'%</div><div class="sub">'+highDevCount+' lots >5% under</div><div class="yoy">'+deltaTag(avgDev,avgDev25,false,'numPct',(avgDev25>0?'+':'')+avgDev25.toFixed(1)+'%',compYearLabel)+'</div></div>'
-    +'<div class="metric"><div class="label">Unique products</div><div class="value">'+uniqueProds+'</div><div class="sub">across all lots</div></div>'
+    +'<div class="metric"><div class="label">Unique products</div><div class="value">'+uniqueProds+'</div><div class="sub">across all lots</div><div class="yoy">'+deltaTag(uniqueProds,prods25,true,'pct',prods25.toLocaleString(),compYearLabel)+'</div></div>'
     +'<div class="metric"><div class="label">Unique customers</div><div class="value">'+uniqueCusts+'</div><div class="sub">across all lots</div><div class="yoy">'+deltaTag(uniqueCusts,custs25,true,'pct',custs25.toLocaleString(),compYearLabel)+'</div></div>';
 
   var yearEndHTML;
