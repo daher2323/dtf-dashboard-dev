@@ -160,6 +160,14 @@
     .cust-col-header-outer { top: 96px; }
   }
 </style>
+<!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0. -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-MWCKT9L4N0"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){ dataLayer.push(arguments); }
+  gtag('js', new Date());
+  gtag('config', 'G-MWCKT9L4N0');
+</script>
 </head>
 <body>
 
@@ -262,6 +270,14 @@
 </div>
 
 <script>
+// GA4 helper — guarded so the dashboard never breaks if gtag failed to load
+// (offline, CSP, ad-blocker, etc.). All instrumentation flows through here.
+function trackEvent(eventName, params) {
+  if (typeof gtag === 'function') {
+    gtag('event', eventName, params || {});
+  }
+}
+
 var CORRECT_PW = '53381b5017ab006a3be103e760d153ad240bc964495bf36cc674dcfc5319250f';
 var ADMIN_PW   = '976130b2d1e873ea6c0f6663f7bab915393516be9fb4d69428d3daf59e459366';
 var userRole   = 'viewer'; // 'viewer' | 'admin'
@@ -1535,6 +1551,7 @@ function navBtnStyle(isActive) {
 function setMainSection(s) {
   closeMsPanel();
   mainSection = s;
+  trackEvent('tab_view', { tab_name: s === 'orders' ? 'open_orders' : s });
   // Hide customer col header when not on customers
   var hdrOuter = document.getElementById('cust-col-header-outer');
   if(hdrOuter && s !== 'customers') hdrOuter.style.display = 'none';
@@ -1659,6 +1676,9 @@ function setCustomerChartView(v) {
 function setCustomerChartLimit(v) {
   closeMsPanel();
   customerChartLimit = v || '10';
+  trackEvent('customer_filter_change', {
+    filter: customerChartLimit === 'all' ? 'all' : 'top' + customerChartLimit
+  });
   render();
 }
 
@@ -1711,22 +1731,26 @@ function setSub(v) {
 
 function navDay(dir) {
   selectedDayIdx = Math.max(0, Math.min(productionDays.length-1, selectedDayIdx+dir));
+  trackEvent('date_filter_change', { view: 'daily', value: productionDays[selectedDayIdx] || '' });
   render();
 }
 
 function navToToday() {
   selectedDayIdx = productionDays.length - 1;
+  trackEvent('date_filter_change', { view: 'daily', value: 'today' });
   render();
 }
 
 function goLive() {
   selectedDayIdx = productionDays.length - 1;
+  trackEvent('date_filter_change', { view: 'daily', value: 'live' });
   render();
 }
 
 function pickDay(str) {
   var idx = productionDays.indexOf(str);
   if (idx !== -1) selectedDayIdx = idx;
+  trackEvent('date_filter_change', { view: 'daily', value: str });
   closePicker();
   render();
 }
@@ -1793,11 +1817,21 @@ function dateKey(d) { return (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear(
 function navWeek(dir) {
   if(!selectedWeekMon) selectedWeekMon = getCurrentWeekMon();
   var d = new Date(selectedWeekMon); d.setDate(d.getDate() + dir*7);
-  selectedWeekMon = d; render();
+  selectedWeekMon = d;
+  trackEvent('date_filter_change', { view: 'weekly', value: dateKey(d) });
+  render();
 }
 
-function goWeekLive() { selectedWeekMon = getCurrentWeekMon(); render(); }
-function pickWeek(monStr) { selectedWeekMon = new Date(monStr); closeWeekPicker(); render(); }
+function goWeekLive() {
+  selectedWeekMon = getCurrentWeekMon();
+  trackEvent('date_filter_change', { view: 'weekly', value: 'current' });
+  render();
+}
+function pickWeek(monStr) {
+  selectedWeekMon = new Date(monStr);
+  trackEvent('date_filter_change', { view: 'weekly', value: monStr });
+  closeWeekPicker(); render();
+}
 
 function openWeekPicker() {
   var existing = document.getElementById('week-picker');
@@ -4125,22 +4159,31 @@ var _chQtrExpanded = {}; // safeId -> quarter key (e.g. "2026-Q1") or null/undef
 
 var _chSynopsis = {}; // cache generated synopses
 
-function toggleCH(safeId) {
+function toggleCH(safeId, customerName) {
   _chExpanded[safeId] = !_chExpanded[safeId];
   var body = document.getElementById('ch-body-' + safeId);
   var chev = document.getElementById('ch-chev-' + safeId);
   if (body) body.style.display = _chExpanded[safeId] ? 'block' : 'none';
   if (chev) chev.style.transform = _chExpanded[safeId] ? 'rotate(180deg)' : '';
-  if (_chExpanded[safeId]) generateSynopsis(safeId);
+  if (_chExpanded[safeId]) {
+    trackEvent('customer_drilldown_open', { customer_name: customerName || safeId });
+    generateSynopsis(safeId);
+  }
 }
 
 // Click a quarter row in the customer detail table → drill into the breakdown
 // panel for that quarter. Clicking the same quarter collapses it. Triggers a
 // full customer overview re-render so the inserted drill-down row picks up
 // the new state.
-function toggleCustQuarter(safeId, qkey) {
+function toggleCustQuarter(safeId, qkey, customerName) {
   if (_chQtrExpanded[safeId] === qkey) _chQtrExpanded[safeId] = null;
   else                                  _chQtrExpanded[safeId] = qkey;
+  if (_chQtrExpanded[safeId] === qkey) {
+    trackEvent('quarter_drilldown_open', {
+      customer_name: customerName || safeId,
+      quarter: quarterLabel(qkey)
+    });
+  }
   if (mainSection === 'customers') renderCustomers();
 }
 
@@ -4904,7 +4947,7 @@ function renderCustomerOverview(healthData) {
       ? '<div style="margin-top:2px;">'+_neutralBadge(cd.ytdPct, cd.ytdPct25)+'</div>'
       : '';
 
-    var summaryRow = '<div onclick="toggleCH(\''+sid+'\')" class="customer-row" style="display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:8px 16px;background:#1a1d20;border-bottom:0.5px solid #1e2124;cursor:pointer;transition:background .12s;" onmouseover="this.style.background=\'#1e2124\'" onmouseout="this.style.background=\'#1a1d20\'">'
+    var summaryRow = '<div onclick="toggleCH(\''+sid+'\', '+jsStr(cd.cust)+')" class="customer-row" style="display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:8px 16px;background:#1a1d20;border-bottom:0.5px solid #1e2124;cursor:pointer;transition:background .12s;" onmouseover="this.style.background=\'#1e2124\'" onmouseout="this.style.background=\'#1a1d20\'">'
       // Rank
       +'<div style="font-size:11px;color:#5f5e5a;font-variant-numeric:tabular-nums;">#'+rank+'</div>'
       // Customer
@@ -4950,7 +4993,7 @@ function renderCustomerOverview(healthData) {
       var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
       var rBg = qOpen ? 'background:#0d1a2a;' : (isCur ? 'background:#1a2030;' : '');
       var rowAttrs = clickable
-        ? ' onclick="toggleCustQuarter(\''+sid+'\',\''+q.key+'\')" style="cursor:pointer;'+(qOpen?'':' transition:background .12s;')+'" onmouseover="if(!this.dataset.open)this.style.background=\'#15212f\'" onmouseout="if(!this.dataset.open)this.style.background=\'\'"'
+        ? ' onclick="toggleCustQuarter(\''+sid+'\',\''+q.key+'\','+jsStr(cd.cust)+')" style="cursor:pointer;'+(qOpen?'':' transition:background .12s;')+'" onmouseover="if(!this.dataset.open)this.style.background=\'#15212f\'" onmouseout="if(!this.dataset.open)this.style.background=\'\'"'
           + (qOpen ? ' data-open="1"' : '')
         : '';
       // (when open, lock the bg via inline style so the hover handler doesn't flicker it)
@@ -5164,14 +5207,17 @@ function switchProcTab(sid, tab) {
   if (btnQ) btnQ.style.cssText = !onC ? navOn : navOff;
 }
 
-function toggleProc(sid) {
+function toggleProc(sid, skuName) {
   if (!window._procExpanded) window._procExpanded = {};
   window._procExpanded[sid] = !window._procExpanded[sid];
   var body = document.getElementById('pb-' + sid);
   var chev = document.getElementById('pc-' + sid);
   if (body) body.style.display = window._procExpanded[sid] ? 'block' : 'none';
   if (chev) chev.style.transform = window._procExpanded[sid] ? 'rotate(180deg)' : '';
-  if (window._procExpanded[sid]) generateProcSynopsis(sid);
+  if (window._procExpanded[sid]) {
+    trackEvent('sku_drilldown_open', { sku_name: skuName || sid });
+    generateProcSynopsis(sid);
+  }
 }
 
 function exportProcurement() {
@@ -7020,7 +7066,7 @@ function renderProcurement() {
       return '<div style="width:7px;height:'+h+'px;background:'+col+';opacity:'+op+';border-radius:1px 1px 0 0;align-self:flex-end;"></div>';
     }).join('');
 
-    var header = '<div onclick="toggleProc(\''+sid+'\')" '
+    var header = '<div onclick="toggleProc(\''+sid+'\', '+jsStr(cd.sku)+')" '
       +'style="display:flex;align-items:center;gap:0;padding:11px 14px 11px 12px;cursor:pointer;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
       +'<div style="width:160px;flex-shrink:0;">'
         +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;margin-bottom:4px;">'+cd.sku+'</div>'
@@ -7448,6 +7494,21 @@ if (sessionStorage.getItem('dtf_auth') === '1') {
     var pw = document.getElementById('pw-input');
     if(pw) pw.focus();
   });
-}</script>
+}
+
+// GA4 — fire dashboard_load once per page load. Script lives at the bottom of
+// <body>, so DOMContentLoaded may have already fired — handle both cases.
+function _gaDashboardLoad() {
+  trackEvent('dashboard_load', {
+    screen_width: window.innerWidth,
+    is_mobile: window.innerWidth < 768
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _gaDashboardLoad);
+} else {
+  _gaDashboardLoad();
+}
+</script>
 </body>
 </html>
