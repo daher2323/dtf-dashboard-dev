@@ -1006,11 +1006,24 @@ function jarSizeKey(j) {
 function deltaTag(vCur, vComp, isHigherBetter, fmt, compLabel, compYearLabel) {
   if (!vComp && vComp !== 0) return '';
   var diff = vCur - vComp, pctDiff = vComp ? ((diff/Math.abs(vComp))*100) : 0;
+  // Treat as "no change" whenever the rendered value rounds to zero — keeps
+  // the badge neutral instead of red when e.g. completion rate is identical
+  // YoY (98% vs 98%) or when the float diff rounds to "+0.0%".
+  var renderedDiff = fmt === 'pct' ? parseFloat(pctDiff.toFixed(1)) : Math.round(diff);
   var positive = isHigherBetter ? diff > 0 : diff < 0;
-  var bg = positive ? '#085041' : '#791F1F', txt = positive ? '#9FE1CB' : '#F09595';
-  var sign = diff > 0 ? '+' : '';
+  var bg, txt;
+  if (renderedDiff === 0) { bg = '#2c2c2a'; txt = '#888780'; }
+  else if (positive)      { bg = '#085041'; txt = '#9FE1CB'; }
+  else                    { bg = '#791F1F'; txt = '#F09595'; }
+  var sign = renderedDiff > 0 ? '+' : '';
   var vsLabel = compYearLabel || String(PRIOR_YEAR);
-  var label = fmt === 'pct' ? sign+pctDiff.toFixed(1)+'% vs '+vsLabel : sign+Math.round(diff).toLocaleString()+' vs '+vsLabel;
+  // 'pct'    — relative % change (e.g. "+27.8% vs 2025")
+  // 'numPct' — absolute percentage-point change for already-% values (e.g. "0% vs 2025")
+  // 'num'    — raw count difference (e.g. "+5 vs 2025")
+  var label;
+  if (fmt === 'pct')         label = sign+pctDiff.toFixed(1)+'% vs '+vsLabel;
+  else if (fmt === 'numPct') label = sign+Math.round(diff).toLocaleString()+'% vs '+vsLabel;
+  else                       label = sign+Math.round(diff).toLocaleString()+' vs '+vsLabel;
   return '<div style="font-size:10px;color:#5f5e5a;margin-bottom:3px">'+vsLabel+': '+(compLabel||vComp.toLocaleString())+'</div>'
        + '<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+bg+';color:'+txt+'">'+label+'</span>';
 }
@@ -3744,8 +3757,8 @@ function renderPerformance() {
     '<div class="metric info"><div class="label">Units produced</div><div class="value">'+totalUnits.toLocaleString()+'</div><div class="sub">vs '+totalProj.toLocaleString()+' projected</div><div class="yoy">'+deltaTag(totalUnits,total25,true,'pct',total25.toLocaleString(),compYearLabel)+'</div></div>'
     +'<div class="metric"><div class="label">Avg units / day</div><div class="value">'+avgPerDay.toLocaleString()+'</div><div class="sub">'+uniqDays+' production days</div><div class="yoy">'+deltaTag(avgPerDay,avg25perDay,true,'pct',avg25perDay.toLocaleString(),compYearLabel)+'</div></div>'
     +'<div class="metric"><div class="label">Total lots</div><div class="value">'+totalLots.toLocaleString()+'</div><div class="sub">'+completeLots.length+' complete \u00b7 '+partialLots.length+' partial</div><div class="yoy">'+deltaTag(totalLots,total25lots,true,'pct',total25lots.toLocaleString(),compYearLabel)+'</div></div>'
-    +'<div class="metric good"><div class="label">Completion rate</div><div class="value">'+compPct+'%</div><div class="sub">'+completeLots.length+' of '+totalLots+' lots</div><div class="yoy">'+deltaTag(compPct,comp25pct,true,'num',comp25pct+'%',compYearLabel)+'</div></div>'
-    +'<div class="metric '+devClass+'"><div class="label">Avg deviation</div><div class="value" style="color:'+devColor+'">'+(avgDev>0?'+':'')+avgDev.toFixed(1)+'%</div><div class="sub">'+highDevCount+' lots >5% under</div><div class="yoy">'+deltaTag(avgDev,avgDev25,false,'num',(avgDev25>0?'+':'')+avgDev25.toFixed(1)+'%',compYearLabel)+'</div></div>'
+    +'<div class="metric good"><div class="label">Completion rate</div><div class="value">'+compPct+'%</div><div class="sub">'+completeLots.length+' of '+totalLots+' lots</div><div class="yoy">'+deltaTag(compPct,comp25pct,true,'numPct',comp25pct+'%',compYearLabel)+'</div></div>'
+    +'<div class="metric '+devClass+'"><div class="label">Avg deviation</div><div class="value" style="color:'+devColor+'">'+(avgDev>0?'+':'')+avgDev.toFixed(1)+'%</div><div class="sub">'+highDevCount+' lots >5% under</div><div class="yoy">'+deltaTag(avgDev,avgDev25,false,'numPct',(avgDev25>0?'+':'')+avgDev25.toFixed(1)+'%',compYearLabel)+'</div></div>'
     +'<div class="metric"><div class="label">Unique products</div><div class="value">'+uniqueProds+'</div><div class="sub">across all lots</div></div>'
     +'<div class="metric"><div class="label">Unique customers</div><div class="value">'+uniqueCusts+'</div><div class="sub">across all lots</div><div class="yoy">'+deltaTag(uniqueCusts,custs25,true,'pct',custs25.toLocaleString(),compYearLabel)+'</div></div>';
 
