@@ -160,13 +160,18 @@
     .cust-col-header-outer { top: 96px; }
   }
 </style>
-<!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0. -->
+<!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
+     Production-only: the gtag('config') call is gated on the URL not
+     containing 'dtf-dashboard-dev', so the dev repo (which keeps that
+     string in its URL) records zero analytics traffic. -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-MWCKT9L4N0"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){ dataLayer.push(arguments); }
   gtag('js', new Date());
-  gtag('config', 'G-MWCKT9L4N0');
+  if (window.location.href.indexOf('dtf-dashboard-dev') === -1) {
+    gtag('config', 'G-MWCKT9L4N0');
+  }
 </script>
 </head>
 <body>
@@ -271,11 +276,12 @@
 
 <script>
 // GA4 helper — guarded so the dashboard never breaks if gtag failed to load
-// (offline, CSP, ad-blocker, etc.). All instrumentation flows through here.
+// (offline, CSP, ad-blocker, etc.). Also silences ALL events when the URL
+// contains 'dtf-dashboard-dev' so the dev repo records zero analytics.
 function trackEvent(eventName, params) {
-  if (typeof gtag === 'function') {
-    gtag('event', eventName, params || {});
-  }
+  if (typeof gtag !== 'function') return;
+  if (window.location.href.indexOf('dtf-dashboard-dev') !== -1) return;
+  gtag('event', eventName, params || {});
 }
 
 var CORRECT_PW = '53381b5017ab006a3be103e760d153ad240bc964495bf36cc674dcfc5319250f';
