@@ -1428,14 +1428,29 @@ function isViewingLive() { return selectedDayIdx === productionDays.length - 1; 
 function computeRecords() {
   var allRowsBoth = allRows.concat(allRows25);
   var dailyMap = {};
+  var monthlyMap = {};
+  var lotsAccum = {};
   allRowsBoth.forEach(function(r) {
     var dt = new Date(r['Date']); if(isNaN(dt)) return;
     var dk = (dt.getMonth()+1)+'/'+dt.getDate()+'/'+dt.getFullYear();
     var line = (r['Line']||'').trim();
     var units = num(r['Final Units']);
+    var lot   = (r['Lot Number']||'').trim();
+    var product = (r['Product']||'').trim();
+    var customer = product ? product.split('-')[0].trim() : '';
     if(!dailyMap[dk]) dailyMap[dk] = {date:dk, total:0, byLine:{}};
     dailyMap[dk].total += units;
     if(line) dailyMap[dk].byLine[line] = (dailyMap[dk].byLine[line]||0) + units;
+    var mk = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    if(!monthlyMap[mk]) monthlyMap[mk] = {key:mk, year:dt.getFullYear(), month:dt.getMonth(), units:0};
+    monthlyMap[mk].units += units;
+    if (lot) {
+      if (!lotsAccum[lot]) lotsAccum[lot] = {lot:lot, units:0, customer:customer, date:dk, line:canonicalLine(line)||line};
+      lotsAccum[lot].units += units;
+      if (customer) lotsAccum[lot].customer = customer;
+      if (line) lotsAccum[lot].line = canonicalLine(line)||line;
+      lotsAccum[lot].date = dk;
+    }
   });
   var weeklyMap = {};
   allRowsBoth.forEach(function(r) {
@@ -1443,13 +1458,19 @@ function computeRecords() {
     var d = new Date(dt); d.setHours(0,0,0,0);
     var dow = d.getDay();
     var mon = new Date(d); mon.setDate(d.getDate()-(dow===0?6:dow-1));
+    var line = (r['Line']||'').trim();
+    var units = num(r['Final Units']);
     var wk = mon.getFullYear()+'-'+String(getWeekNum(mon)).padStart(2,'0');
-    if(!weeklyMap[wk]) weeklyMap[wk] = {mon:mon, units:0};
-    weeklyMap[wk].units += num(r['Final Units']);
+    if(!weeklyMap[wk]) weeklyMap[wk] = {mon:mon, units:0, byLine:{}};
+    weeklyMap[wk].units += units;
+    if (line) weeklyMap[wk].byLine[line] = (weeklyMap[wk].byLine[line]||0) + units;
   });
   var days = Object.values(dailyMap);
   var weeks = Object.values(weeklyMap);
-  var top5days = days.slice().sort(function(a,b){return b.total-a.total;}).slice(0,5);
+  var months = Object.values(monthlyMap);
+  var top5days   = days.slice().sort(function(a,b){return b.total-a.total;}).slice(0,5);
+  var top5weeks  = weeks.slice().sort(function(a,b){return b.units-a.units;}).slice(0,5);
+  var top5months = months.slice().sort(function(a,b){return b.units-a.units;}).slice(0,5);
   var top5byLine = {};
   ALL_LINES.forEach(function(line) {
     top5byLine[line] = days
@@ -1458,8 +1479,90 @@ function computeRecords() {
       .slice(0,5)
       .map(function(d){ return {date:d.date, units:d.byLine[line]}; });
   });
-  var top5weeks = weeks.slice().sort(function(a,b){return b.units-a.units;}).slice(0,5);
-  return { dailyMap:dailyMap, top5days:top5days, top5byLine:top5byLine, top5weeks:top5weeks };
+
+  // ── YTD performance stats ────────────────────────────────────────
+  // Hit rate / adherence are scoped to the current calendar year and use
+  // TARGET_HIT_THRESHOLD as the hit gate (same constant the Weekly view
+  // and Daily gauges use, so all "target met" surfaces stay consistent).
+  var nowDt = new Date();
+  var nowYear = nowDt.getFullYear();
+  var ytdWeeks = weeks.filter(function(w){
+    return w.mon.getFullYear() === nowYear && w.mon <= nowDt;
+  });
+  function lineTargetForWeek(mon, line){
+    var t = 0;
+    for (var i=0; i<7; i++) {
+      var d = new Date(mon); d.setDate(mon.getDate()+i);
+      var dk = (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear();
+      var row = dailyTargets[dk] || {};
+      t += (row[line] || 0);
+    }
+    return t;
+  }
+  var weeksHit = 0, weeksWithTarget = 0, totalActual = 0, totalPlanned = 0;
+  ytdWeeks.forEach(function(w){
+    var dk = (w.mon.getMonth()+1)+'/'+w.mon.getDate()+'/'+w.mon.getFullYear();
+    var t = (weeklyTargets[dk] || {}).target || 0;
+    if (t > 0) {
+      weeksWithTarget++;
+      if (w.units >= t * TARGET_HIT_THRESHOLD) weeksHit++;
+      totalPlanned += t;
+      totalActual  += w.units;
+    }
+  });
+  var lineStats = {};
+  ALL_LINES.forEach(function(line){
+    var hits = 0, withTgt = 0, lActual = 0, lPlanned = 0;
+    ytdWeeks.forEach(function(w){
+      var lt = lineTargetForWeek(w.mon, line);
+      if (lt > 0) {
+        withTgt++;
+        var lu = w.byLine[line] || 0;
+        if (lu >= lt * TARGET_HIT_THRESHOLD) hits++;
+        lPlanned += lt;
+        lActual  += lu;
+      }
+    });
+    lineStats[line] = {
+      hits: hits, withTarget: withTgt,
+      hitRate: withTgt ? Math.round((hits/withTgt)*100) : 0,
+      actual: lActual, planned: lPlanned,
+      adherence: lPlanned ? (lActual/lPlanned)*100 : 0
+    };
+  });
+
+  // ── Top day of week (all-time, Mon–Fri) ──────────────────────────
+  var DOW_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var dowSum = [0,0,0,0,0,0,0], dowCnt = [0,0,0,0,0,0,0];
+  days.forEach(function(d){
+    var dt = new Date(d.date); if (isNaN(dt)) return;
+    var dow = dt.getDay();
+    dowSum[dow] += d.total; dowCnt[dow] += 1;
+  });
+  var bestDow = -1, bestDowAvg = 0;
+  for (var i=1; i<=5; i++) {
+    var avg = dowCnt[i] ? dowSum[i]/dowCnt[i] : 0;
+    if (avg > bestDowAvg) { bestDowAvg = avg; bestDow = i; }
+  }
+
+  // ── Biggest single lot ───────────────────────────────────────────
+  var bigLot = {units:0, customer:'—', date:'—', line:''};
+  Object.keys(lotsAccum).forEach(function(k){
+    if (lotsAccum[k].units > bigLot.units) bigLot = lotsAccum[k];
+  });
+
+  return {
+    dailyMap:dailyMap, top5days:top5days, top5byLine:top5byLine,
+    top5weeks:top5weeks, top5months:top5months,
+    weeksHit:weeksHit, weeksWithTarget:weeksWithTarget,
+    hitRate: weeksWithTarget ? Math.round((weeksHit/weeksWithTarget)*100) : 0,
+    totalActual:totalActual, totalPlanned:totalPlanned,
+    adherence: totalPlanned ? (totalActual/totalPlanned)*100 : 0,
+    lineStats:lineStats,
+    bestDow: bestDow >= 0 ? DOW_NAMES[bestDow] : '—',
+    bestDowAvg: Math.round(bestDowAvg),
+    bigLot: bigLot
+  };
 }
 
 function hardRefresh() {
@@ -4047,64 +4150,181 @@ function renderPerformance() {
   var custHTML = buildCustTableHTML(visibleCusts, showSummaryRow);
 
   var recs2 = computeRecords();
-  var medals2 = ['\uD83E\uDD47','\uD83E\uDD48','\uD83E\uDD49'];
+  var nowYrStat = now.getFullYear();
+  var MEDAL_COLORS = ['#BA7517','#888780','#854F0B'];
+  var LINE_DOT_PERF = {'line#1':'#378ADD','line#2':'#7F77DD','line#4':'#D4537E'};
+  function tolerancePct(){ return Math.round(TARGET_HIT_THRESHOLD*100); }
+  function adhColor(pct){ return pct >= 95 ? '#1D9E75' : pct >= 85 ? '#BA7517' : '#E24B4A'; }
   var todayStr2 = (now.getMonth()+1)+'/'+now.getDate()+'/'+now.getFullYear();
   function fmtRecDate(str){ var d=new Date(str); return isNaN(d)?str:d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
 
-  function recRowHTML(medal, units, dateStr, isGold) {
-    var isToday = dateStr === todayStr2;
-    return '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:0.5px solid #2c2c2a;'+(isGold?'background:#1c1a0a;':'')+'">'
-      +'<span style="font-size:13px;width:18px;flex-shrink:0;text-align:center;">'+medal+'</span>'
-      +'<span style="font-size:12px;font-weight:500;color:#e8e6e0;min-width:72px;">'+units.toLocaleString()+'</span>'
-      +'<span style="font-size:11px;color:#888780;flex:1;">'+fmtRecDate(dateStr)+(isToday?' <span style="color:#1D9E75;font-weight:500;">(today)</span>':'')+'</span>'
+  function statRow(marker, value, meta, valueColor) {
+    return '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:0.5px solid #2c2c2a;">'
+      +marker
+      +'<span style="font-size:12px;font-weight:500;color:'+(valueColor||'#e8e6e0')+';min-width:72px;font-variant-numeric:tabular-nums;">'+value+'</span>'
+      +'<span style="font-size:11px;color:#888780;flex:1;">'+meta+'</span>'
       +'</div>';
   }
-
-  function recBlockHTML(headerHTML, rows) {
-    return '<div style="flex:1;min-width:180px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;overflow:hidden;">'
-      +'<div style="padding:7px 10px;border-bottom:0.5px solid #2c2c2a;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:6px;">'+headerHTML+'</div>'
-      +rows+'</div>';
+  function medalMarker(rank){
+    return '<span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:'+MEDAL_COLORS[rank]+';color:#141618;font-size:10px;font-weight:500;flex-shrink:0;">'+(rank+1)+'</span>';
+  }
+  function lineDotMarker(color){
+    return '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:'+color+';flex-shrink:0;margin:0 5px;"></span>';
+  }
+  function statBlock(headerHTML, rowsHTML){
+    return '<div style="flex:1;min-width:0;background:#141618;border-radius:8px;overflow:hidden;">'
+      +'<div style="padding:7px 10px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;border-bottom:0.5px solid #2c2c2a;">'+headerHTML+'</div>'
+      +rowsHTML+'</div>';
   }
 
-  var top3DaysRows = recs2.top5days.slice(0,3).map(function(d,i){ return recRowHTML(medals2[i],d.total,d.date,i===0); }).join('');
-  var top3WeeksRows = recs2.top5weeks.slice(0,3).map(function(w,i){
-    var wn=getWeekNum(w.mon), fri=new Date(w.mon); fri.setDate(w.mon.getDate()+4);
-    var label='Wk '+wn+' \u00b7 '+w.mon.toLocaleDateString('en-US',{month:'short',day:'numeric'})+'\u2013'+fri.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  // Tier 1 - Records
+  var top3DaysHTML = recs2.top5days.slice(0,3).map(function(d,i){
+    var meta = fmtRecDate(d.date) + (d.date===todayStr2?' <span style="color:#1D9E75;font-weight:500;">(today)</span>':'');
+    return statRow(medalMarker(i), d.total.toLocaleString(), meta);
+  }).join('') || '<div style="padding:8px 10px;font-size:11px;color:#5f5e5a;font-style:italic;">No data</div>';
+
+  var top3WeeksHTML = recs2.top5weeks.slice(0,3).map(function(w,i){
+    var wn = getWeekNum(w.mon);
+    var fri = new Date(w.mon); fri.setDate(w.mon.getDate()+4);
     var isThisWeek = w.mon <= now && now <= fri;
-    return '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:0.5px solid #2c2c2a;'+(i===0?'background:#1c1a0a;':'')+'">'
-      +'<span style="font-size:13px;width:18px;flex-shrink:0;text-align:center;">'+medals2[i]+'</span>'
-      +'<span style="font-size:12px;font-weight:500;color:#e8e6e0;min-width:72px;">'+w.units.toLocaleString()+'</span>'
-      +'<span style="font-size:11px;color:#888780;flex:1;">'+label+(isThisWeek?' <span style="color:#1D9E75;font-weight:500;">(this week)</span>':'')+'</span>'
-      +'</div>';
+    var meta = 'Wk '+wn+' \u00b7 '+w.mon.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+      + (isThisWeek?' <span style="color:#1D9E75;font-weight:500;">(this week)</span>':'');
+    return statRow(medalMarker(i), w.units.toLocaleString(), meta);
+  }).join('') || '<div style="padding:8px 10px;font-size:11px;color:#5f5e5a;font-style:italic;">No data</div>';
+
+  var top3MonthsHTML = recs2.top5months.slice(0,3).map(function(m,i){
+    var d = new Date(m.year, m.month, 1);
+    var isThisMonth = m.year===now.getFullYear() && m.month===now.getMonth();
+    var meta = d.toLocaleDateString('en-US',{month:'short',year:'numeric'})
+      + (isThisMonth?' <span style="color:#1D9E75;font-weight:500;">(this month)</span>':'');
+    return statRow(medalMarker(i), m.units.toLocaleString(), meta);
+  }).join('') || '<div style="padding:8px 10px;font-size:11px;color:#5f5e5a;font-style:italic;">No data</div>';
+
+  var bestDayByLineHTML = ALL_LINES.map(function(line){
+    var k2 = lk(line);
+    var color = LINE_DOT_PERF[k2] || '#888780';
+    var entry = (recs2.top5byLine[line]||[])[0];
+    if (!entry) return statRow(lineDotMarker(color), '\u2014', line, color);
+    var meta = '<span style="color:'+color+';font-weight:500;">'+line.replace('Line #','L#')+'</span> \u00b7 '+fmtRecDate(entry.date);
+    return statRow(lineDotMarker(color), entry.units.toLocaleString(), meta, color);
   }).join('');
 
-  var lineBlocksHTML = ALL_LINES.map(function(line){
-    var k2=lk(line), bg=LINE_BG[k2]||'#2c2c2a', txt2=LINE_TXT[k2]||'#e8e6e0';
-    var entries=(recs2.top5byLine[line]||[]).slice(0,3);
-    var rows3=entries.length ? entries.map(function(d,i){ return recRowHTML(medals2[i],d.units,d.date,i===0); }).join('')
-      : '<div style="padding:8px 10px;font-size:11px;color:#5f5e5a;font-style:italic;">No data</div>';
-    var hdr='<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+bg+';color:'+txt2+';">'+line+'</span>'
-      +'<span style="font-size:10px;color:#888780;">'+LINE_TYPE[k2]+'</span>';
-    return recBlockHTML(hdr, rows3);
-  }).join('');
+  var tier1HTML = '<div style="display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr 1px 1fr;gap:0;margin-bottom:1.25rem;">'
+    + statBlock('Best day \u2014 all lines', top3DaysHTML)
+    + '<div style="background:#2c2c2a;width:1px;"></div>'
+    + statBlock('Best week \u2014 all lines', top3WeeksHTML)
+    + '<div style="background:#2c2c2a;width:1px;"></div>'
+    + statBlock('Best month \u2014 all lines', top3MonthsHTML)
+    + '<div style="background:#2c2c2a;width:1px;"></div>'
+    + statBlock('Best day by line', bestDayByLineHTML)
+    + '</div>';
+
+  // Tier 2 - Performance (YTD)
+  function perfBar(pct, color){
+    var w = Math.max(0, Math.min(100, pct));
+    return '<div style="height:5px;background:#2c2c2a;border-radius:3px;overflow:hidden;margin:6px 0 4px;"><div style="height:100%;width:'+w.toFixed(1)+'%;background:'+color+';border-radius:3px;"></div></div>';
+  }
+  var hitRatePct  = recs2.hitRate;
+  var adhPct      = recs2.adherence;
+  var hitRateColor = adhColor(hitRatePct);
+  var adhTextColor = adhColor(adhPct);
+  function kFmt(n){ return Math.round(n/1000).toLocaleString()+'K'; }
+  var toleranceTxt    = 'Week counted as hit if units \u2265 '+tolerancePct()+'% of target';
+  var adhToleranceTxt = 'Planned = sum of weekly targets \u00b7 same '+tolerancePct()+'% threshold';
+
+  var hitRateCell = '<div style="flex:1;min-width:0;padding:14px 18px;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Weekly target hit rate</div>'
+    +'<div style="font-size:24px;font-weight:500;color:'+hitRateColor+';line-height:1;font-variant-numeric:tabular-nums;">'+hitRatePct+'%</div>'
+    +'<div style="font-size:11px;color:#888780;margin-top:3px;">'+recs2.weeksHit+' of '+recs2.weeksWithTarget+' weeks</div>'
+    +perfBar(hitRatePct, hitRateColor)
+    +'<div style="font-size:10px;color:#5f5e5a;">'+toleranceTxt+'</div>'
+    +'</div>';
+  var adhCell = '<div style="flex:1;min-width:0;padding:14px 18px;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Unit adherence</div>'
+    +'<div style="font-size:24px;font-weight:500;color:'+adhTextColor+';line-height:1;font-variant-numeric:tabular-nums;">'+adhPct.toFixed(1)+'%</div>'
+    +'<div style="font-size:11px;color:#888780;margin-top:3px;">'+kFmt(recs2.totalActual)+' of '+kFmt(recs2.totalPlanned)+' planned</div>'
+    +perfBar(Math.min(adhPct,100), adhTextColor)
+    +'<div style="font-size:10px;color:#5f5e5a;">'+adhToleranceTxt+'</div>'
+    +'</div>';
+
+  function perLineRows(modeIsHit){
+    return ALL_LINES.map(function(line){
+      var k2 = lk(line);
+      var color = LINE_DOT_PERF[k2] || '#888780';
+      var s = recs2.lineStats[line];
+      if (!s || (modeIsHit ? s.withTarget===0 : s.planned===0)) {
+        return '<div style="display:flex;align-items:center;gap:10px;font-size:11px;padding:5px 0;">'
+          +'<div style="width:36px;color:'+color+';font-weight:500;flex-shrink:0;">'+line.replace('Line #','L#')+'</div>'
+          +'<div style="flex:1;height:5px;background:#2c2c2a;border-radius:3px;"></div>'
+          +'<div style="width:50px;text-align:right;color:#5f5e5a;font-variant-numeric:tabular-nums;flex-shrink:0;">\u2014</div>'
+          +'</div>';
+      }
+      var pct = modeIsHit ? s.hitRate : s.adherence;
+      var w   = Math.max(0, Math.min(100, pct));
+      var lbl = modeIsHit ? pct+'%' : pct.toFixed(1)+'%';
+      return '<div style="display:flex;align-items:center;gap:10px;font-size:11px;padding:5px 0;">'
+        +'<div style="width:36px;color:'+color+';font-weight:500;flex-shrink:0;">'+line.replace('Line #','L#')+'</div>'
+        +'<div style="flex:1;height:5px;background:#2c2c2a;border-radius:3px;overflow:hidden;"><div style="height:100%;width:'+w.toFixed(1)+'%;background:'+color+';border-radius:3px;"></div></div>'
+        +'<div style="width:50px;text-align:right;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;flex-shrink:0;">'+lbl+'</div>'
+        +'</div>';
+    }).join('');
+  }
+  var hitByLineCell = '<div style="flex:1;min-width:0;padding:12px 18px 14px;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Hit rate by line</div>'
+    +perLineRows(true)
+    +'</div>';
+  var adhByLineCell = '<div style="flex:1;min-width:0;padding:12px 18px 14px;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Adherence by line</div>'
+    +perLineRows(false)
+    +'</div>';
+
+  var tier2HTML = '<div style="background:#141618;border-radius:8px;margin-bottom:1.25rem;overflow:hidden;">'
+    +'<div style="padding:8px 14px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;border-bottom:0.5px solid #2c2c2a;">Performance \u2014 '+nowYrStat+' YTD</div>'
+    +'<div style="display:flex;align-items:stretch;border-bottom:0.5px solid #2c2c2a;">'
+      +hitRateCell
+      +'<div style="background:#2c2c2a;width:1px;"></div>'
+      +adhCell
+    +'</div>'
+    +'<div style="display:flex;align-items:stretch;">'
+      +hitByLineCell
+      +'<div style="background:#2c2c2a;width:1px;"></div>'
+      +adhByLineCell
+    +'</div>'
+    +'</div>';
+
+  // Tier 3 - Top day of week + Biggest single lot
+  var bigLot = recs2.bigLot;
+  var bigLotMeta = (bigLot.units > 0)
+    ? esc(bigLot.customer || '\u2014')+' \u00b7 '+fmtRecDate(bigLot.date)+(bigLot.line?(' \u00b7 '+bigLot.line.replace('Line #','L#')):'')
+    : '\u2014';
+  var tier3HTML = '<div style="display:grid;grid-template-columns:1fr 1px 1fr;gap:0;background:#141618;border-radius:8px;overflow:hidden;">'
+    +'<div style="padding:14px 18px;">'
+      +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Top day of week</div>'
+      +'<div style="font-size:18px;font-weight:500;color:#e8e6e0;line-height:1.1;">'+recs2.bestDow+'</div>'
+      +'<div style="font-size:11px;color:#888780;margin-top:4px;">avg '+recs2.bestDowAvg.toLocaleString()+' units \u00b7 all lines</div>'
+    +'</div>'
+    +'<div style="background:#2c2c2a;width:1px;"></div>'
+    +'<div style="padding:14px 18px;">'
+      +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Biggest single lot</div>'
+      +'<div style="font-size:18px;font-weight:500;color:#e8e6e0;line-height:1.1;font-variant-numeric:tabular-nums;">'+(bigLot.units>0?bigLot.units.toLocaleString():'\u2014')+'</div>'
+      +'<div style="font-size:11px;color:#888780;margin-top:4px;">'+bigLotMeta+'</div>'
+    +'</div>'
+    +'</div>';
 
   var recordsCardHTML =
     '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;margin-bottom:10px;overflow:hidden;">'
     +'<div onclick="toggleRecords()" style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1.25rem;cursor:pointer;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
     +'<div style="display:flex;align-items:center;gap:8px;">'
     +'<svg width="13" height="13" viewBox="0 0 14 14" fill="none" style="flex-shrink:0"><path d="M7 1l1.5 3.5 3.5.5-2.5 2.5.5 3.5L7 9.5 4 11l.5-3.5L2 5l3.5-.5L7 1z" stroke="#888780" stroke-width="1.3" stroke-linejoin="round"/></svg>'
-    +'<span style="font-size:12px;font-weight:500;color:#888780;">Production records</span>'
-    +'<span style="font-size:11px;color:#5f5e5a;">All-time top 3 by day &amp; week</span>'
+    +'<span style="font-size:12px;font-weight:500;color:#888780;">Production statistics</span>'
+    +'<span style="font-size:11px;color:#5f5e5a;">All-time \u00b7 2025\u20132026</span>'
     +'</div>'
     +'<svg id="rec-chevron" width="13" height="13" viewBox="0 0 13 13" fill="none" style="transition:transform .2s;flex-shrink:0;"><polyline points="2,4 6.5,9 11,4" stroke="#5f5e5a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     +'</div>'
     +'<div id="rec-body" style="display:none;border-top:0.5px solid #2c2c2a;padding:1rem 1.25rem;">'
-    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1rem;">'
-    +recBlockHTML('Best days \u2014 all lines', top3DaysRows)
-    +recBlockHTML('Best weeks \u2014 all lines', top3WeeksRows)
-    +'</div>'
-    +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem;">Best days by line</div>'
-    +'<div style="display:flex;gap:10px;flex-wrap:wrap;">'+lineBlocksHTML+'</div>'
+    +tier1HTML
+    +tier2HTML
+    +tier3HTML
     +'</div>'
     +'</div>';
 
