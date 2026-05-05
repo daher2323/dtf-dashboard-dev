@@ -1,18 +1,3 @@
-// Bound to: Central Orders spreadsheet
-// Purpose:   Append an audit entry to the CHANGE LOG sheet whenever a row on
-//            POWDER OPEN ORDERS or CAPSULE OPEN ORDERS is edited or added/deleted.
-// Triggers:
-//   - Installable "on edit"   -> onEdit
-//   - Installable "on change" -> onChangeHandler
-//
-// The onEdit handler uses LockService.tryLock(500) as a fast-path guard so
-// burst edits (pastes, array formulas recalculating) don't pile up into the
-// "Too many simultaneous invocations: Spreadsheets" error. Under contention
-// an edit is dropped from the log rather than queued — intentional trade-off
-// for stability. Row add/delete detection lives in onChangeHandler where
-// e.changeType is reliable (unlike PropertiesService-based row counts which
-// race under concurrency).
-
 var TRACKED_SHEETS = ['POWDER OPEN ORDERS', 'CAPSULE OPEN ORDERS'];
 var LOT_COL = 8;
 var BRAND_COL = 1;
@@ -75,7 +60,7 @@ function onChangeHandler(e) {
   if (e.changeType !== 'INSERT_ROW' && e.changeType !== 'REMOVE_ROW') return;
 
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(2000)) return;
+  if (!lock.tryLock(10000)) return;  // increased from 2000ms
   try {
     var sheet = e.source.getActiveSheet();
     var sheetName = sheet.getName();
@@ -84,7 +69,13 @@ function onChangeHandler(e) {
     var log = e.source.getSheetByName('CHANGE LOG');
     if (!log) return;
 
-    var user = Session.getActiveUser().getEmail() || 'Unknown';
+    var user = 'Unknown';
+    try {
+      user = Session.getActiveUser().getEmail() || 'Unknown';
+    } catch (e2) {
+      user = 'Unknown';
+    }
+
     var action = e.changeType === 'INSERT_ROW' ? 'Row Added' : 'Row Deleted';
 
     log.appendRow([new Date(), user, sheetName, action, '', '', '', '', '', action + ' via structural change']);
