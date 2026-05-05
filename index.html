@@ -1494,12 +1494,28 @@ function hardRefresh() {
   _refreshInFlight = true; updateFreshnessStamp();
   fetchData(true).then(function(res){
     _refreshInFlight = false;
-    if (applyFreshData(res)) { lastRefreshTime = Date.now(); updateFreshnessStamp(); render(); }
+    if (applyFreshData(res)) { lastRefreshTime = Date.now(); updateFreshnessStamp(); render(); _maybeRetryFromOrphans(false); }
     else { updateFreshnessStamp(); if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = isViewingLive() ? 'Live' : 'Refresh'; } }
   }).catch(function(){
     _refreshInFlight = false; updateFreshnessStamp();
     if (btn) { btn.style.opacity = '1'; btn.querySelector('span').textContent = 'Error'; setTimeout(function(){ render(); }, 1500); }
   });
+}
+
+// Self-heal hook: orphan_line skips usually mean a CDN snapshot delivered a
+// row with a blanked Line cell during a publish rebuild — exactly the case
+// where a brand-new lot can't be recovered from lotMap (no prior-day rows).
+// When we detect any orphan_line skip after render, schedule one fresh-token
+// retry so the user doesn't have to wait up to 60s for the next auto-refresh
+// or hit Cmd+Shift+R themselves. Gated on Daily view (the only place running
+// lots show), and on _isRetry so we never recurse if the retry produces more
+// orphans (we'll just live with whatever the next auto-refresh brings).
+function _maybeRetryFromOrphans(alreadyRetried) {
+  if (alreadyRetried) return;
+  if (!_skipStats || _skipStats.orphan_line === 0) return;
+  if (topView !== 'summary' || subView !== 'today') return;
+  console.warn('[DTF] orphan_line skips detected ('+_skipStats.orphan_line+') — scheduling fresh-token retry to recover.');
+  setTimeout(function(){ refreshAndRender(false, true, true); }, 1500);
 }
 
 function refreshAndRender(forceRender, _isRetry, fresh) {
@@ -1511,10 +1527,11 @@ function refreshAndRender(forceRender, _isRetry, fresh) {
       updateFreshnessStamp();
       var onToday = topView==='summary' && subView==='today';
       var onWeekly = topView==='summary' && subView==='weekly';
-      if(onToday && !isViewingLive()) return;
+      if(onToday && !isViewingLive()) { _maybeRetryFromOrphans(_isRetry); return; }
       if(forceRender || onToday || onWeekly) render();
       else if(topView==='summary' && subView==='performance') render();
       else if(topView==='detail') render();
+      _maybeRetryFromOrphans(_isRetry);
     } else {
       updateFreshnessStamp();
       if (!_isRetry) {
@@ -2501,7 +2518,12 @@ function renderToday() {
     var lotData=lotMap[lot];
     var product=lotData?lotData.product:d.product;
     var projected=lotData?lotData.projected:d.projected;
-    var line=d.line;
+    // Prefer today's Line value, but fall back to the lot's known line from
+    // prior days when today's rows came in with the Line cell empty/non-canonical
+    // (e.g., a partially-rebuilt CDN snapshot, or an in-progress edit). Without
+    // this fallback the lot lands in runningByLine[''] and silently disappears
+    // from the UI, even though we know which line it's running on.
+    var line=d.line || canonicalLine(lotData ? lotData.line : '') || '';
     var startTime=d.startTime;
     var todayStatus=d.status;
     var todayUnits=todayUnitsByLot[lot]||0;
