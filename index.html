@@ -4123,7 +4123,7 @@ function renderPerformance() {
         + '</div>';
     }).join('');
     function chip(label, value, valColor, sub) {
-      return '<div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:9px 12px;font-family:system-ui;">'
+      return '<div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:9px 12px;font-family:system-ui;text-align:center;">'
         + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
         + '<div style="font-size:14px;font-weight:500;color:'+(valColor||'#e8e6e0')+';line-height:1.2;">'+value+'</div>'
         + '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">'+sub+'</div>'
@@ -4182,7 +4182,8 @@ function renderPerformance() {
     var yoyDelta='<td style="text-align:right">';
     if(m.yoyDiff!==null){var yPos=m.yoyDiff>=0,yBg=yPos?'#085041':'#791F1F',yTxt=yPos?'#9FE1CB':'#F09595';yoyDelta+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+m.yoyDiff.toFixed(1)+'%</span>';}else yoyDelta+='\u2014';
     yoyDelta+=prior25Sub+'</td>';
-    var chev='<svg id="mo-chev-'+key+'" width="9" height="9" viewBox="0 0 10 10" fill="none" style="display:inline-block;margin-right:6px;transition:transform .15s;vertical-align:middle;"><polyline points="2,3.5 5,6.5 8,3.5" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var isOpen = !!_monthExpanded[key];
+    var chev='<svg id="mo-chev-'+key+'" width="9" height="9" viewBox="0 0 10 10" fill="none" style="display:inline-block;margin-right:6px;transition:transform .15s;vertical-align:middle;'+(isOpen?'transform:rotate(180deg);':'')+'"><polyline points="2,3.5 5,6.5 8,3.5" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     var dataRow = '<tr onclick="toggleMonth(\''+key+'\')" style="cursor:pointer;">'
       + '<td style="font-weight:500">'+chev+monthLabel+'</td>'
       + '<td style="text-align:right">'+m.units.toLocaleString()+'</td>'
@@ -4192,7 +4193,7 @@ function renderPerformance() {
       + yoyDelta
       + '</tr>';
     var drill = _moDrill(m.year, m.month);
-    var drillRow = '<tr id="mo-drill-'+key+'" style="display:none;"><td colspan="6" style="padding:0;background:#141618;">'+_moDrillHTML(key, m, drill)+'</td></tr>';
+    var drillRow = '<tr id="mo-drill-'+key+'" style="display:'+(isOpen?'':'none')+';"><td colspan="6" style="padding:0;background:#141618;">'+_moDrillHTML(key, m, drill)+'</td></tr>';
     return dataRow + drillRow;
   }).join('');
   var partialMonths=monthRows.filter(function(m){return m.isPartial;});
@@ -4444,7 +4445,8 @@ function toggleRecords() {
 }
 
 // Toggle expand/collapse for a row in the "Units produced by month" table.
-// Drill-down panels are pre-rendered hidden so toggling is purely DOM display.
+// Drill-down panels are pre-rendered; toggling is DOM display + persisted
+// state so re-renders (e.g. the 5-min Trend auto-refresh) don't reset it.
 function toggleMonth(key) {
   var drill = document.getElementById('mo-drill-' + key);
   var chev  = document.getElementById('mo-chev-' + key);
@@ -4452,6 +4454,7 @@ function toggleMonth(key) {
   var open = drill.style.display === 'none';
   drill.style.display = open ? '' : 'none';
   if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
+  _monthExpanded[key] = open;
 }
 
 // Click handler on a week bar inside a monthly drill-down panel.
@@ -4505,6 +4508,9 @@ function quarterLabel(key) {
 
 var _chExpanded = {};
 var _chQtrExpanded = {}; // safeId -> quarter key (e.g. "2026-Q1") or null/undefined
+// Persists which monthly drill-down panels are open across renders so a 5-min
+// Trend auto-refresh doesn't slam them shut. Keyed by 'YYYY-MM'.
+var _monthExpanded = {};
 
 var _chSynopsis = {}; // cache generated synopses
 
