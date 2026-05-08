@@ -3799,7 +3799,7 @@ function renderPerformance() {
     var u25=mo25.units;
     var yoyDiff=u25?((mo.units-u25)/u25*100):null;
     var isCur=(now.getFullYear()===mo.year&&now.getMonth()+1===mo.month);
-    return {label:mo.month+'/'+mo.year,units:mo.units,target:tgt,fullMonthTarget:fmtgt,pctOfTarget:pctT,isPartial:isPartial,isCurrentMonth:isCur,daysInMonth:dim,daysInRange:daysInRange,units25:u25,yoyDiff:yoyDiff};
+    return {label:mo.month+'/'+mo.year,year:mo.year,month:mo.month,units:mo.units,target:tgt,fullMonthTarget:fmtgt,pctOfTarget:pctT,isPartial:isPartial,isCurrentMonth:isCur,daysInMonth:dim,daysInRange:daysInRange,units25:u25,yoyDiff:yoyDiff};
   });
 
   var lineTotal=lineEntries.reduce(function(s,e){return s+e[1].units;},0);
@@ -4014,7 +4014,187 @@ function renderPerformance() {
     + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;" title="Unique lots across all lines. Per-line counts can sum higher because some lots ran on more than one line.">'+totalLots.toLocaleString()+'</td>'
     + '<td style="padding:11px 10px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;">'+_allLineAvg.toLocaleString()+'</td>'
   + '</tr>';
-  var monthHTML=monthRows.map(function(m){ var isG=m.pctOfTarget>=100,isY=m.pctOfTarget>=80&&m.pctOfTarget<100; var pBg=isG?'#0F6E56':isY?'#633806':'#791F1F',pTxt=isG?'#9FE1CB':isY?'#FAC775':'#F09595',bCol=isG?'#1D9E75':isY?'#EF9F27':'#E24B4A'; var bw=Math.min(Math.round(m.pctOfTarget),100); var monthLabel=m.isPartial?m.label+'<sup style="color:#9FE1CB;font-size:9px"> *</sup>':m.label; var prior25Sub=m.units25?'<div style="font-size:11px;color:#5f5e5a;margin-top:2px;">'+m.units25.toLocaleString()+' in '+compYearLabel+'</div>':''; var yoyDelta='<td style="text-align:right">'; if(m.yoyDiff!==null){var yPos=m.yoyDiff>=0,yBg=yPos?'#085041':'#791F1F',yTxt=yPos?'#9FE1CB':'#F09595';yoyDelta+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+m.yoyDiff.toFixed(1)+'%</span>';}else yoyDelta+='\u2014'; yoyDelta+=prior25Sub+'</td>'; return '<tr><td style="font-weight:500">'+monthLabel+'</td><td style="text-align:right">'+m.units.toLocaleString()+'</td><td style="text-align:right;color:#888780">'+m.target.toLocaleString()+'</td><td style="text-align:right"><span class="badge" style="background:'+pBg+';color:'+pTxt+'">'+m.pctOfTarget.toFixed(2)+'%</span></td><td style="min-width:100px;padding:6px 10px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div></div></td>'+yoyDelta+'</tr>'; }).join('');
+  // Drill-down data builder for the monthly table — top-5 customers + weekly
+  // cadence within the month, derived entirely from rangeRows (no extra fetch).
+  function _moDrill(year, month1to12) {
+    var moRows = rangeRows.filter(function(r){
+      var dt = new Date(r['Date']); if (isNaN(dt)) return false;
+      return dt.getFullYear() === year && (dt.getMonth()+1) === month1to12;
+    });
+    var totalUnits = moRows.reduce(function(s,r){return s+num(r['Final Units']);},0);
+    var byCust = {};
+    moRows.forEach(function(r){
+      var prod = (r['Product']||'').trim(); if (!prod) return;
+      var cust = prod.split('-')[0].trim(); if (!cust) return;
+      if (!byCust[cust]) byCust[cust] = {cust:cust, units:0};
+      byCust[cust].units += num(r['Final Units']);
+    });
+    var custList = Object.keys(byCust).map(function(k){return byCust[k];})
+      .sort(function(a,b){return b.units-a.units;});
+    var top5 = custList.slice(0,5);
+    var rest = custList.slice(5);
+    var restUnits = rest.reduce(function(s,c){return s+c.units;},0);
+    var byWeek = {};
+    moRows.forEach(function(r){
+      var dt = new Date(r['Date']); if (isNaN(dt)) return;
+      var d = new Date(dt); d.setHours(0,0,0,0);
+      var dow = d.getDay();
+      var mon = new Date(d); mon.setDate(d.getDate() - (dow===0?6:dow-1));
+      var monKey = mon.getFullYear()+'-'+String(mon.getMonth()+1).padStart(2,'0')+'-'+String(mon.getDate()).padStart(2,'0');
+      if (!byWeek[monKey]) byWeek[monKey] = {monKey:monKey, monday:mon, units:0, weekNum:getWeekNum(mon), minDate:dt, maxDate:dt, dates:{}};
+      byWeek[monKey].units += num(r['Final Units']);
+      if (dt < byWeek[monKey].minDate) byWeek[monKey].minDate = dt;
+      if (dt > byWeek[monKey].maxDate) byWeek[monKey].maxDate = dt;
+      byWeek[monKey].dates[d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate()] = true;
+    });
+    var weeks = Object.keys(byWeek).sort().map(function(k){return byWeek[k];});
+    weeks.forEach(function(w){ w.daysCount = Object.keys(w.dates).length; });
+    var bestWeek = weeks.length ? weeks.reduce(function(a,b){return b.units>a.units?b:a;}) : {units:0,weekNum:0,monKey:''};
+    // "Active" weeks have \u2265 3 distinct production days within the month \u2014 single-
+    // day boundary straddlers (e.g. May 1 falling on a Friday at the tail end of
+    // ISO week 18) get excluded from momentum / avg-per-week so they don't skew
+    // the comparison against full Mon\u2013Fri weeks. The chart still shows every week
+    // for visual context; only the KPI math is filtered.
+    var activeWeeks = weeks.filter(function(w){ return w.daysCount >= 3; });
+    var nActive = activeWeeks.length;
+    var activeUnits = activeWeeks.reduce(function(s,w){return s+w.units;},0);
+    var avgPerWeek = nActive ? activeUnits/nActive : 0;
+    return {totalUnits:totalUnits, top5:top5, restCount:rest.length, restUnits:restUnits,
+            weeks:weeks, bestWeek:bestWeek, avgPerWeek:avgPerWeek, nActive:nActive};
+  }
+
+  function _moDrillHTML(key, m, drill) {
+    var max = drill.top5.length ? drill.top5[0].units : 1;
+    var ops = [1.0, 0.8, 0.65, 0.55, 0.45];
+    var custRows = drill.top5.map(function(c, i){
+      var w = Math.max(2, Math.round(c.units/max*100));
+      var pct = drill.totalUnits ? (c.units/drill.totalUnits*100).toFixed(1) : '0';
+      return '<div style="display:flex;align-items:center;gap:10px;padding:5px 0;font-family:system-ui;">'
+        + '<div style="width:18px;font-size:11px;color:#5f5e5a;font-weight:500;flex-shrink:0;">#'+(i+1)+'</div>'
+        + '<div style="width:140px;font-size:12px;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;" title="'+esc(c.cust)+'">'+esc(c.cust)+'</div>'
+        + '<div style="flex:1;min-width:0;height:5px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+w+'%;background:#378ADD;opacity:'+ops[i]+';border-radius:2px;"></div></div>'
+        + '<div style="width:80px;text-align:right;font-size:12px;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;flex-shrink:0;">'+c.units.toLocaleString()+'</div>'
+        + '<div style="width:50px;text-align:right;font-size:11px;color:#888780;font-variant-numeric:tabular-nums;flex-shrink:0;">'+pct+'%</div>'
+        + '</div>';
+    }).join('');
+    var restFooter = drill.restCount > 0
+      ? '<div style="font-size:10px;color:#5f5e5a;border-top:0.5px solid #2c2c2a;padding-top:8px;margin-top:8px;">Remaining '+drill.restUnits.toLocaleString()+' units across '+drill.restCount+' other customer'+(drill.restCount===1?'':'s')+'</div>'
+      : '';
+    var custCol = '<div style="flex:1;min-width:0;padding-right:20px;">'
+      + '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;font-family:system-ui;">Top 5 customers</div>'
+      + (drill.top5.length ? custRows : '<div style="font-size:11px;color:#5f5e5a;font-style:italic;">No customer data</div>')
+      + restFooter
+      + '</div>';
+
+    var maxW = drill.weeks.length ? drill.bestWeek.units : 1;
+    var monthName = new Date(m.year, m.month-1, 1).toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    // Each week is a single clickable column: bar area on top (100px box, bars
+    // share baseline because every column has the same flex-end alignment),
+    // labels below. Hovering anywhere in the column brightens the bar fill and
+    // reveals a "\u2192 view week" hint; clicking jumps to the Weekly view with
+    // selectedWeekMon set to the clicked week's Monday.
+    var weekItems = drill.weeks.map(function(w){
+      var hPct   = w.units ? Math.max(8, Math.round(w.units/maxW*100)) : 0;
+      var op     = w.units ? Math.max(0.5, w.units/maxW) : 0.5;
+      var isBest = w.monKey === drill.bestWeek.monKey;
+      var col    = isBest ? '#1D9E75' : '#378ADD';
+      var dispOp = (isBest ? 1 : op).toFixed(2);
+      var unitsLbl = w.units ? Math.round(w.units/1000)+'K' : '';
+      var minD = w.minDate, maxD = w.maxDate;
+      var sameDay   = minD.getMonth()===maxD.getMonth() && minD.getDate()===maxD.getDate();
+      var sameMonth = minD.getMonth()===maxD.getMonth();
+      var rng;
+      if (sameDay)        rng = minD.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      else if (sameMonth) rng = minD.toLocaleDateString('en-US',{month:'short',day:'numeric'})+'\u2013'+maxD.getDate();
+      else                rng = minD.toLocaleDateString('en-US',{month:'short',day:'numeric'})+'\u2013'+maxD.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      var clickArgs = jsStr(w.monKey)+','+w.weekNum+','+jsStr(monthName)+','+w.units;
+      var overJS = "var b=this.querySelector('.mw-bar');if(b){b.dataset.op=b.dataset.op||b.style.opacity;b.style.opacity=Math.min(parseFloat(b.dataset.op||'1')+0.2,1);}var h=this.querySelector('.mw-hint');if(h)h.style.visibility='visible';";
+      var outJS  = "var b=this.querySelector('.mw-bar');if(b&&b.dataset.op){b.style.opacity=b.dataset.op;}var h=this.querySelector('.mw-hint');if(h)h.style.visibility='hidden';";
+      return '<div onclick="_jumpToWeekFromMonth('+clickArgs+')" onmouseover="'+overJS+'" onmouseout="'+outJS+'" style="cursor:pointer;flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;font-family:system-ui;">'
+        + '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100px;width:100%;overflow:hidden;border-bottom:0.5px solid rgba(255,255,255,0.08);">'
+          + (unitsLbl?'<div style="font-size:10px;color:#888780;margin-bottom:4px;font-variant-numeric:tabular-nums;">'+unitsLbl+'</div>':'')
+          + '<div class="mw-bar" style="width:44px;height:'+hPct+'%;background:'+col+';opacity:'+dispOp+';border-radius:3px 3px 0 0;transition:opacity .12s;"></div>'
+        + '</div>'
+        + '<div style="text-align:center;margin-top:8px;">'
+          + '<div style="font-size:11px;color:#888780;">Wk '+w.weekNum+'</div>'
+          + '<div style="font-size:10px;color:#5f5e5a;">'+rng+'</div>'
+          + '<div class="mw-hint" style="font-size:10px;color:#5f5e5a;margin-top:2px;visibility:hidden;">\u2192 view week</div>'
+        + '</div>'
+        + '</div>';
+    }).join('');
+    function chip(label, value, valColor, sub) {
+      return '<div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:9px 12px;font-family:system-ui;">'
+        + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">'+label+'</div>'
+        + '<div style="font-size:14px;font-weight:500;color:'+(valColor||'#e8e6e0')+';line-height:1.2;">'+value+'</div>'
+        + '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">'+sub+'</div>'
+        + '</div>';
+    }
+    var bestWkLbl = drill.bestWeek.units>0 ? 'Wk '+drill.bestWeek.weekNum : '\u2014';
+    var bestWkSub = drill.bestWeek.units>0 ? Math.round(drill.bestWeek.units/1000)+'K units' : '';
+    var avgK = drill.avgPerWeek ? Math.round(drill.avgPerWeek/1000)+'K' : '0';
+    var avgSub = drill.nActive+' active week'+(drill.nActive===1?'':'s');
+    var chips = '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:12px;">'
+      + chip('Best week',  bestWkLbl, null, bestWkSub)
+      + chip('Avg / week', avgK,      null, avgSub)
+      + '</div>';
+    var weekCol = '<div style="flex:1;min-width:0;padding-left:20px;">'
+      + '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;font-family:system-ui;">Weekly cadence</div>'
+      + (drill.weeks.length===0
+          ? '<div style="font-size:11px;color:#5f5e5a;font-style:italic;">No production data this month</div>'
+          : '<div style="display:flex;align-items:flex-start;gap:0;">'+weekItems+'</div>'
+            + chips
+        )
+      + '</div>';
+
+    var pctG = m.pctOfTarget>=100, pctY = m.pctOfTarget>=80&&m.pctOfTarget<100;
+    var pBg2 = pctG?'#0F6E56':pctY?'#633806':'#791F1F', pTxt2 = pctG?'#9FE1CB':pctY?'#FAC775':'#F09595';
+    var yoyHTML = '';
+    if (m.yoyDiff !== null) {
+      var yPos2 = m.yoyDiff>=0;
+      var yBg2 = yPos2?'#085041':'#791F1F', yTxt2 = yPos2?'#9FE1CB':'#F09595';
+      var prevMoLbl = new Date(m.year-1, m.month-1, 1).toLocaleDateString('en-US',{month:'short',year:'numeric'});
+      yoyHTML = '<span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+yBg2+';color:'+yTxt2+';font-family:system-ui;">'+(yPos2?'+':'')+m.yoyDiff.toFixed(1)+'% vs '+prevMoLbl+'</span>';
+    }
+    var headerStrip = '<div style="display:flex;align-items:center;gap:12px;padding:0 0 14px;border-bottom:0.5px solid #2c2c2a;margin-bottom:14px;flex-wrap:wrap;font-family:system-ui;">'
+      + '<div style="font-size:13px;font-weight:500;color:#e8e6e0;">'+monthName+'</div>'
+      + '<div style="font-size:12px;color:#888780;">'+m.units.toLocaleString()+' units</div>'
+      + '<span class="badge" style="background:'+pBg2+';color:'+pTxt2+';">'+m.pctOfTarget.toFixed(2)+'%</span>'
+      + yoyHTML
+      + '</div>';
+
+    return '<div style="margin:0 14px 8px;padding:14px 16px;background:#0f1217;border-left:2px solid #378ADD;border-radius:0 6px 6px 0;">'
+      + headerStrip
+      + '<div style="display:flex;align-items:stretch;">'
+        + custCol
+        + '<div style="width:1px;background:rgba(255,255,255,0.08);align-self:stretch;flex-shrink:0;"></div>'
+        + weekCol
+      + '</div>'
+      + '</div>';
+  }
+
+  var monthHTML=monthRows.map(function(m){
+    var key = m.year+'-'+String(m.month).padStart(2,'0');
+    var isG=m.pctOfTarget>=100, isY=m.pctOfTarget>=80&&m.pctOfTarget<100;
+    var pBg=isG?'#0F6E56':isY?'#633806':'#791F1F', pTxt=isG?'#9FE1CB':isY?'#FAC775':'#F09595', bCol=isG?'#1D9E75':isY?'#EF9F27':'#E24B4A';
+    var bw=Math.min(Math.round(m.pctOfTarget),100);
+    var monthLabel=m.isPartial?m.label+'<sup style="color:#9FE1CB;font-size:9px"> *</sup>':m.label;
+    var prior25Sub=m.units25?'<div style="font-size:11px;color:#5f5e5a;margin-top:2px;">'+m.units25.toLocaleString()+' in '+compYearLabel+'</div>':'';
+    var yoyDelta='<td style="text-align:right">';
+    if(m.yoyDiff!==null){var yPos=m.yoyDiff>=0,yBg=yPos?'#085041':'#791F1F',yTxt=yPos?'#9FE1CB':'#F09595';yoyDelta+='<span style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:'+yBg+';color:'+yTxt+'">'+(yPos?'+':'')+m.yoyDiff.toFixed(1)+'%</span>';}else yoyDelta+='\u2014';
+    yoyDelta+=prior25Sub+'</td>';
+    var chev='<svg id="mo-chev-'+key+'" width="9" height="9" viewBox="0 0 10 10" fill="none" style="display:inline-block;margin-right:6px;transition:transform .15s;vertical-align:middle;"><polyline points="2,3.5 5,6.5 8,3.5" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var dataRow = '<tr onclick="toggleMonth(\''+key+'\')" style="cursor:pointer;">'
+      + '<td style="font-weight:500">'+chev+monthLabel+'</td>'
+      + '<td style="text-align:right">'+m.units.toLocaleString()+'</td>'
+      + '<td style="text-align:right;color:#888780">'+m.target.toLocaleString()+'</td>'
+      + '<td style="text-align:right"><span class="badge" style="background:'+pBg+';color:'+pTxt+'">'+m.pctOfTarget.toFixed(2)+'%</span></td>'
+      + '<td style="min-width:100px;padding:6px 10px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div></div></td>'
+      + yoyDelta
+      + '</tr>';
+    var drill = _moDrill(m.year, m.month);
+    var drillRow = '<tr id="mo-drill-'+key+'" style="display:none;"><td colspan="6" style="padding:0;background:#141618;">'+_moDrillHTML(key, m, drill)+'</td></tr>';
+    return dataRow + drillRow;
+  }).join('');
   var partialMonths=monthRows.filter(function(m){return m.isPartial;});
   var asterisk='';
   if(partialMonths.length===1){
@@ -4261,6 +4441,39 @@ function toggleRecords() {
   var open = body.style.display === 'none';
   body.style.display = open ? 'block' : 'none';
   if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
+}
+
+// Toggle expand/collapse for a row in the "Units produced by month" table.
+// Drill-down panels are pre-rendered hidden so toggling is purely DOM display.
+function toggleMonth(key) {
+  var drill = document.getElementById('mo-drill-' + key);
+  var chev  = document.getElementById('mo-chev-' + key);
+  if (!drill) return;
+  var open = drill.style.display === 'none';
+  drill.style.display = open ? '' : 'none';
+  if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
+}
+
+// Click handler on a week bar inside a monthly drill-down panel.
+// Pre-selects the clicked week and switches to the Weekly view, mirroring what
+// the top-nav Weekly button + week navigation arrows do (no logic duplication).
+// setSub re-renders, which implicitly collapses the drill panel (the new Weekly
+// view replaces the Trend view entirely; the panel's "open" state lives in the
+// DOM that just got swapped out).
+//
+// Scroll: the render() wrapper normally restores the pre-render scrollY so the
+// page doesn't jump on re-renders. _nextRenderScrollY is the documented hook
+// for opting out — setting it to 0 makes render() land at the top of the new
+// Weekly view instead of restoring the bottom-of-Trend scroll position.
+function _jumpToWeekFromMonth(mondayKey, weekNumber, monthLabel, units) {
+  trackEvent('month_drilldown_week_click', {
+    week_number: weekNumber,
+    month: monthLabel,
+    units: units
+  });
+  selectedWeekMon = new Date(mondayKey);
+  _nextRenderScrollY = 0;
+  setSub('weekly');
 }
 
 function selectCustomer(name) {
