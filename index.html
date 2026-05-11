@@ -432,6 +432,13 @@ var lastRefreshTime = 0;
 // the Daily freshness stamp so the label tells the truth (a fetch is actually
 // in progress) instead of just flagging staleness.
 var _refreshInFlight = false;
+// Last-known canonical line per lot — sticks across data refreshes so a
+// publish snapshot that briefly blanks the Line cell can't make a running
+// lot vanish from the Daily UI. Reset only by page reload. Only updated
+// when we have a confidently canonical line value; legitimate line changes
+// (operator reassigns a lot to a different line) overwrite naturally on
+// the next render where r['Line'] resolves.
+var _knownLineByLot = {};
 var filterState = { customer:[], product:[], status:[], bottle:[], jar:[] };
 
 var _openMsId = null;
@@ -2480,7 +2487,11 @@ function renderToday() {
   var todayByLine={};
   allRows.forEach(function(r){
     if(!matchDate(r['Date'])) return;
-    var line = canonicalLine(r['Line']);
+    var lot = (r['Lot Number']||'').trim();
+    // Fall back to the last-known-good line for this lot when the snapshot
+    // returns an empty/non-canonical Line cell so the line totals don't
+    // briefly drop a known running lot's contribution.
+    var line = canonicalLine(r['Line']) || (lot && _knownLineByLot[lot]) || '';
     if (!line) {
       if ((r['Line']||'').trim() && num(r['Final Units']) > 0) {
         _recordSkip('orphan_line', {date:r['Date'], lot:r['Lot Number'], line:r['Line'], units:r['Final Units']});
@@ -2503,7 +2514,7 @@ function renderToday() {
     if(r['Product']) todayLotData[lot].product=r['Product'];
     if(r['Projected Units']) todayLotData[lot].projected=num(r['Projected Units']);
     var cl = canonicalLine(r['Line']);
-    if (cl) todayLotData[lot].line = cl;
+    if (cl) { todayLotData[lot].line = cl; _knownLineByLot[lot] = cl; }
     if(r['Start Time']) todayLotData[lot].startTime=(r['Start Time']||'').trim();
     if(r['Complete or Partial']) todayLotData[lot].status=(r['Complete or Partial']||'').trim();
   });
@@ -2518,12 +2529,12 @@ function renderToday() {
     var lotData=lotMap[lot];
     var product=lotData?lotData.product:d.product;
     var projected=lotData?lotData.projected:d.projected;
-    // Prefer today's Line value, but fall back to the lot's known line from
-    // prior days when today's rows came in with the Line cell empty/non-canonical
-    // (e.g., a partially-rebuilt CDN snapshot, or an in-progress edit). Without
-    // this fallback the lot lands in runningByLine[''] and silently disappears
-    // from the UI, even though we know which line it's running on.
-    var line=d.line || canonicalLine(lotData ? lotData.line : '') || '';
+    // Prefer today's Line value, but fall back to: (a) the lot's known line
+    // from prior days via lotMap, then (b) the session-wide last-known-good
+    // cache. Covers brand-new today lots where lotMap[lot].line is also empty
+    // because every CSV row for that lot was caught in the same blank-snapshot.
+    var line=d.line || canonicalLine(lotData ? lotData.line : '') || _knownLineByLot[lot] || '';
+    if (line) _knownLineByLot[lot] = line;
     var startTime=d.startTime;
     var todayStatus=d.status;
     var todayUnits=todayUnitsByLot[lot]||0;
