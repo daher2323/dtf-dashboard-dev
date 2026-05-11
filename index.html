@@ -1324,10 +1324,14 @@ function applyFreshData(res) {
   }
   // Today-row regression guard: the global shrink guard above tolerates 15%
   // loss, which is fine for an 80k-row sheet but useless for today's handful
-  // of rows — today slips through unnoticed. If today had ≥3 rows in memory
-  // and the new fetch shows them nearly all gone, that's almost certainly a
-  // truncated/regenerating publish snapshot, not a real edit. We tolerate a
-  // 2-row correction (typical typo-fix pattern) and reject anything worse.
+  // of rows — today slips through unnoticed. Reject any snapshot that drops
+  // today rows, scaled by current count:
+  //   curToday 1–4: zero tolerance — a 1-row drop in this range is almost
+  //     always a CDN snapshot artifact, not a real edit, and the cost of
+  //     waiting one refresh cycle for a legitimate delete to propagate is
+  //     much lower than the cost of running lots vanishing from the UI.
+  //   curToday ≥ 5: 2-row tolerance for typical typo-fix edits (delete +
+  //     re-enter pattern can briefly net -2 mid-edit).
   if (allRows.length > 0) {
     var _today = getTodayStr();
     function _countToday(rows) {
@@ -1339,9 +1343,10 @@ function applyFreshData(res) {
       return n;
     }
     var curToday = _countToday(allRows);
-    if (curToday >= 3) {
+    if (curToday > 0) {
       var newToday = _countToday(newRows);
-      if (newToday < curToday - 2) {
+      var tolerance = curToday >= 5 ? 2 : 0;
+      if (newToday < curToday - tolerance) {
         console.warn('[DTF] Refresh aborted: today-row count regressed (' + curToday + ' -> ' + newToday + '). Keeping existing data.');
         return false;
       }
