@@ -3736,7 +3736,12 @@ function renderPerformance() {
   var rangeIsCurrentYear = range.start.getFullYear() === currentYear && range.end.getFullYear() === currentYear;
   var rangeCoversFullYearStart = range.start.getMonth() === 0 && range.start.getDate() === 1;
   var showYearEnd = rangeIsCurrentYear && rangeCoversFullYearStart;
-  var dayOfYear=Math.round((new Date(now.getFullYear(),now.getMonth(),now.getDate())-new Date(now.getFullYear(),0,0))/86400000);
+  // Anchor dayOfYear to range.end (capped at today) rather than now — when the
+  // user narrows the range to e.g. Jan 1–May 1, the projection should answer
+  // "what would year-end look like if we'd stopped tracking on May 1?", which
+  // means dividing totalUnits (units through May 1) by 121, not 134.
+  var dayOfYearAnchor = (range.end < now) ? range.end : now;
+  var dayOfYear=Math.round((new Date(dayOfYearAnchor.getFullYear(),dayOfYearAnchor.getMonth(),dayOfYearAnchor.getDate())-new Date(dayOfYearAnchor.getFullYear(),0,0))/86400000);
   var yearProj=showYearEnd&&dayOfYear?Math.round((totalUnits/dayOfYear)*365):null;
   var toTarget=yearProj!==null?yearProj-YEAR_TARGET:null;
   var targetPct=yearProj!==null?Math.round((yearProj/YEAR_TARGET)*100):null;
@@ -3755,13 +3760,16 @@ function renderPerformance() {
   //               the rates match "Avg units / day" in the metrics card above.
   var pace30Proj = null, pace30Pct = null, pace30OnTrack = false, pace30DailyAvg = 0, ytdDailyAvg = 0;
   if (showYearEnd && dayOfYear) {
-    var pace30Start = new Date(now); pace30Start.setDate(pace30Start.getDate() - 29);
+    // Pace window anchors to range.end as well so the "last 30 days" lines up
+    // with the rest of the range-filtered math when the user narrows the range.
+    var pace30End = dayOfYearAnchor;
+    var pace30Start = new Date(pace30End); pace30Start.setDate(pace30Start.getDate() - 29);
     var pace30Units = 0;
     var pace30Dates = {};
     allRowsCombined.forEach(function(r){
       var _dt = new Date(r['Date']);
       if (isNaN(_dt)) return;
-      if (_dt >= pace30Start && _dt <= now && num(r['Final Units']) > 0) {
+      if (_dt >= pace30Start && _dt <= pace30End && num(r['Final Units']) > 0) {
         pace30Units += num(r['Final Units']);
         pace30Dates[_dt.getFullYear()+'-'+_dt.getMonth()+'-'+_dt.getDate()] = true;
       }
