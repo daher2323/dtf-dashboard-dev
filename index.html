@@ -3116,7 +3116,8 @@ function renderWeekly() {
       var sharePct=lineWeeklyShare?Math.min(Math.round((u/lineWeeklyShare)*100),100):0;
       var weekElapsedPct=Math.round((daysElapsed/wkDayCount)*100);
       // On track = actual units >= cumulative daily targets for completed days only (not today)
-      var lineCumTarget=0, lineCumActual=u;
+      var lineTodayUnits=isLiveWeek?((dayLineUnits[line]||{})[dateKey(now)]||0):0;
+      var lineCumTarget=0, lineCumActual=u-((isLiveWeek && !todayComplete)?lineTodayUnits:0);
       wkDates.slice(0,daysElapsed).forEach(function(d){
         var dk=dateKey(d);
         if(isLiveWeek && !todayComplete && dk===dateKey(now)) return; // skip only if today still in progress
