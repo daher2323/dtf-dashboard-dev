@@ -3037,8 +3037,6 @@ function renderWeekly() {
         return (u/barScale)*100;
       });
       var segLeft=[0,segs[0],segs[0]+segs[1]];
-      // leg positions (midpoints)
-      var legPos=segs.map(function(w,i){return segLeft[i]+w/2;});
       return '<div style="background:#141618;border:'+bannerBorder+';border-radius:10px;padding:1rem 1.25rem;margin-bottom:10px;position:relative;box-shadow:'+bannerShadow+';">'
         // nav + badges row
         +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:'+(weekNote?'8px':'14px')+';flex-wrap:wrap;gap:8px;">'+weekNavHTML
@@ -3084,12 +3082,15 @@ function renderWeekly() {
           }).join('')
           +'<div style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:'+(allHitWeek?'#9FE1CB':'#888780')+';font-family:system-ui;white-space:nowrap;">'+remText+'</div>'
         +'</div>'
-        // per-line labels under bar
-        +'<div style="position:relative;height:18px;">'
+        // per-line labels under bar — flex row so labels can never overlap
+        // when segments cluster at the start of a mostly-empty bar (e.g. early
+        // in the week). Labels for slices <2% are hidden — no swatch to anchor
+        // them to.
+        +'<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;min-height:18px;">'
           +ALL_LINES.map(function(line,i){
             var k2=lk(line),color=LINE_COLOR[k2];
             var u=weekByLine[line]||0;
-            return segs[i]>2?'<div style="position:absolute;font-size:10px;font-weight:500;color:'+color+';font-family:system-ui;white-space:nowrap;transform:translateX(-50%);left:'+legPos[i]+'%;">'+line+' — '+u.toLocaleString()+'</div>':'';
+            return segs[i]>2?'<div style="font-size:10px;font-weight:500;color:'+color+';font-family:system-ui;white-space:nowrap;">'+line+' — '+u.toLocaleString()+'</div>':'';
           }).join('')
         +'</div>'
         // checkmark badge when target hit
