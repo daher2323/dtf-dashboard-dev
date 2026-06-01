@@ -2510,10 +2510,12 @@ function renderToday() {
   var completedToday=[];
   var todayUnitsByLot={};
   var todayLotData={};
-  allRows.forEach(function(r){
+  var todayRowIdxByLot={};
+  allRows.forEach(function(r,idx){
     if(!matchDate(r['Date'])) return;
     var lot=(r['Lot Number']||'').trim(); if(!lot) return;
     todayUnitsByLot[lot]=(todayUnitsByLot[lot]||0)+num(r['Final Units']);
+    if(todayRowIdxByLot[lot]===undefined) todayRowIdxByLot[lot]=idx;
     // Keep updating so last row wins for status/line
     if(!todayLotData[lot]) todayLotData[lot]={product:'',projected:0,line:'',startTime:'',status:''};
     if(r['Product']) todayLotData[lot].product=r['Product'];
@@ -2546,7 +2548,8 @@ function renderToday() {
     var runningTotal=runningTotalByLot[lot]||0;
     var st=todayStatus.toLowerCase();
     if(st.includes('complete')||st.includes('partial')){
-      completedToday.push({lot:lot,product:product,projected:projected,finalUnits:runningTotal,todayUnits:todayUnits,status:todayStatus,line:line,rowIdx:lotData?lotData.rowIdx:0,bottleSize:lotData?lotData.bottleSize:'',jarSize:lotData?lotData.jarSize:'',lidSize:lotData?lotData.lidSize:'',lidColor:lotData?lotData.lidColor:'',lidProfile:lotData?lotData.lidProfile:''});
+      var todayRowIdx=todayRowIdxByLot[lot]!==undefined?todayRowIdxByLot[lot]:(lotData?lotData.rowIdx:0);
+      completedToday.push({lot:lot,product:product,projected:projected,finalUnits:runningTotal,todayUnits:todayUnits,status:todayStatus,line:line,rowIdx:todayRowIdx,bottleSize:lotData?lotData.bottleSize:'',jarSize:lotData?lotData.jarSize:'',lidSize:lotData?lotData.lidSize:'',lidColor:lotData?lotData.lidColor:'',lidProfile:lotData?lotData.lidProfile:''});
     } else {
       // Running lots with an unrecognized line would be silently dropped by the render loop;
       // record so __dtfSkipped() can surface it in the console.
