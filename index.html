@@ -4463,7 +4463,7 @@ function renderPerformance() {
         +'</div>'
       +'</div>'
     +'</div>'
-    +'<div class="full-card"><h3>Units produced by month vs. target</h3><div class="tbl-wrap"><table><thead><tr><th>Month</th><th style="text-align:right">Actual</th><th style="text-align:right">Target</th><th style="text-align:right">% of target</th><th></th><th style="text-align:right">vs '+compYearLabel+'</th></tr></thead><tbody>'+monthHTML+'</tbody></table>'+asterisk+'</div></div>'
+    +'<div class="full-card"><div style="display:flex;align-items:center;gap:12px;margin-bottom:.75rem;"><h3 style="margin:0;">Units produced by month vs. target</h3><button id="mo-toggle-all" onclick="toggleAllMonths()" style="font-size:12px;font-weight:500;color:#888780;background:transparent;border:0.5px solid #444441;border-radius:8px;padding:4px 12px;cursor:pointer;white-space:nowrap;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">Expand All</button></div><div class="tbl-wrap"><table><thead><tr><th>Month</th><th style="text-align:right">Actual</th><th style="text-align:right">Target</th><th style="text-align:right">% of target</th><th></th><th style="text-align:right">vs '+compYearLabel+'</th></tr></thead><tbody>'+monthHTML+'</tbody></table>'+asterisk+'</div></div>'
     +recordsCardHTML;
 
   // Pre-compute product-mix data for all three views so the toggle can swap
@@ -4474,6 +4474,7 @@ function renderPerformance() {
     capsule: _pmComputeView(lots, 'capsule')
   };
   renderProductMix();
+  _syncMonthToggleLabel();
 }
 
 function toggleRecords() {
@@ -4496,6 +4497,45 @@ function toggleMonth(key) {
   drill.style.display = open ? '' : 'none';
   if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
   _monthExpanded[key] = open;
+  _syncMonthToggleLabel();
+}
+
+// Expand or collapse every month drill-down at once. Mirrors toggleMonth's
+// DOM-display + persisted-state pattern so the 5-min Trend auto-refresh keeps
+// whatever state the user left it in. If any row is collapsed, expand all;
+// otherwise collapse all.
+function toggleAllMonths() {
+  var drills = document.querySelectorAll('[id^="mo-drill-"]');
+  if (!drills.length) return;
+  var allOpen = true, i;
+  for (i = 0; i < drills.length; i++) {
+    if (drills[i].style.display === 'none') { allOpen = false; break; }
+  }
+  var expand = !allOpen;
+  for (i = 0; i < drills.length; i++) {
+    var key = drills[i].id.replace('mo-drill-', '');
+    drills[i].style.display = expand ? '' : 'none';
+    var chev = document.getElementById('mo-chev-' + key);
+    if (chev) chev.style.transform = expand ? 'rotate(180deg)' : '';
+    _monthExpanded[key] = expand;
+  }
+  _syncMonthToggleLabel();
+}
+
+// Keep the header toggle's label in sync with the rows. "Collapse all" only
+// when every row is open; otherwise "Expand all". Hides the button if the
+// table has no month rows (e.g. an empty date range).
+function _syncMonthToggleLabel() {
+  var btn = document.getElementById('mo-toggle-all');
+  if (!btn) return;
+  var drills = document.querySelectorAll('[id^="mo-drill-"]');
+  if (!drills.length) { btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  var allOpen = true, i;
+  for (i = 0; i < drills.length; i++) {
+    if (drills[i].style.display === 'none') { allOpen = false; break; }
+  }
+  btn.textContent = allOpen ? 'Collapse All' : 'Expand All';
 }
 
 // Click handler on a week bar inside a monthly drill-down panel.
