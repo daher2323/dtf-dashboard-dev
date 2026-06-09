@@ -733,16 +733,17 @@ function clearFilters() {
 
 function exportDetailExcel() {
   var lots = getFilteredLots().slice().sort(function(a,b){ return new Date(b.date)-new Date(a.date); });
-  var headers = ['Date','Lot #','Customer','Product','Line','Bottle Size','Jar Size','Projected','Final Units','Deviation %','Status'];
+  var scopeLabel = window._detailScopeLabel || 'Period Units';
+  var headers = ['Date','Lot #','Customer','Product','Line','Bottle Size','Jar Size','Projected',scopeLabel,'Final Units','Deviation %','Status'];
   var data = [headers].concat(lots.map(function(l){
     var dev = lotDev(l);
     var cust = (l.product||'').split('-')[0].trim();
     var prod = (l.product||'').split('-').slice(1).join('-').trim() || l.product;
     return [l.date, l.lot, cust, prod, l.line||'', l.bottleSize||'', l.jarSize||'',
-      l.projected||'', l.finalUnits||'', dev!==null?parseFloat(dev.toFixed(2)):'', l.status||''];
+      l.projected||'', (l.dayUnits!=null?l.dayUnits:'')||'', l.finalUnits||'', dev!==null?parseFloat(dev.toFixed(2)):'', l.status||''];
   }));
   var ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:12},{wch:22},{wch:34},{wch:10},{wch:14},{wch:14},{wch:12},{wch:12},{wch:13},{wch:12}];
+  ws['!cols'] = [{wch:12},{wch:12},{wch:22},{wch:34},{wch:10},{wch:14},{wch:14},{wch:12},{wch:12},{wch:12},{wch:13},{wch:12}];
   var range = selectedDetailRange ? selectedDetailRange.label : 'All';
   var summary = [
     ['DTF Production Export'],
@@ -1002,7 +1003,12 @@ function buildLotMap(rows) {
 
 function lotDev(l) {
   if (!l||!l.projected) return null;
-  if (l.status && l.status.toLowerCase().includes('partial')) return null;
+  // Only completed lots have a meaningful deviation — an in-progress or
+  // not-yet-started lot hasn't produced its full run, so comparing partial
+  // output against the full projection reads as a huge bogus shortfall (e.g.
+  // -100% before a lot starts). Anything not marked Complete returns null so
+  // it's excluded from the Dev % column and the avg-deviation metrics.
+  if (!l.status || !l.status.toLowerCase().includes('complete')) return null;
   return ((l.finalUnits - l.projected) / l.projected) * 100;
 }
 
@@ -3296,10 +3302,15 @@ function renderWeekly() {
 function renderDetail() {
   var now=new Date();
   var navHTML='', sourceRows=[];
+  // cumThrough = end of the scope window; scopeUnitsLabel = header for the
+  // period-production column. Both are set per subView below.
+  var cumThrough=null, scopeUnitsLabel='Day units';
 
   if(subView==='today') {
     var viewStr=productionDays[selectedDayIdx]||((now.getMonth()+1)+'/'+now.getDate()+'/'+now.getFullYear());
     var viewDate=new Date(viewStr);
+    cumThrough=new Date(viewDate); cumThrough.setHours(23,59,59,999);
+    scopeUnitsLabel='Day units';
     var isLive=selectedDayIdx===productionDays.length-1;
     var viewFmt=viewDate.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
     var dayLabel=isLive?'(Today)':(function(){ var diff=Math.round((now-viewDate)/86400000); return diff===1?'(Yesterday)':'('+diff+' days ago)'; })();
@@ -3329,6 +3340,7 @@ function renderDetail() {
     var monFmt2=selectedWeekMon.toLocaleDateString('en-US',{month:'short',day:'numeric'});
     var friEndFmt2=wkLastDay2.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     sourceRows=allRows.concat(allRows25).filter(function(r){ var dt=new Date(r['Date']); return !isNaN(dt)&&dt>=selectedWeekMon&&dt<=wkEnd2; });
+    cumThrough=wkEnd2; scopeUnitsLabel='Week units';
     navHTML='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;position:relative;" id="week-nav-anchor">'
       +'<button onclick="navWeek(-1)" style="width:28px;height:28px;flex-shrink:0;border-radius:8px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#e8e6e0;font-size:16px;display:flex;align-items:center;justify-content:center;font-family:system-ui">&#8249;</button>'
       +'<div onclick="openWeekPicker()" style="text-align:center;width:260px;flex-shrink:0;cursor:pointer;padding:4px 12px;border-radius:8px;border:0.5px solid #444441;background:transparent;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
@@ -3344,6 +3356,7 @@ function renderDetail() {
     var fmtShort=function(d){ return (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear(); };
     var displayLabel=range.label||(fmtShort(range.start)+' \u2013 '+fmtShort(range.end));
     sourceRows=allRows.concat(allRows25).filter(function(r){ var dt=new Date(r['Date']); if(isNaN(dt)) return false; return dt>=range.start&&dt<=range.end; });
+    cumThrough=range.end; scopeUnitsLabel='Range units';
     navHTML='<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;position:relative;" id="detail-range-anchor">'
       +'<div onclick="openDetailRangePicker()" style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;padding:6px 14px;border-radius:8px;border:0.5px solid #444441;background:transparent;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
       +'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="2" width="11" height="10" rx="2" stroke="#888780" stroke-width="1.2"/><line x1="4" y1="1" x2="4" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="9" y1="1" x2="9" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="1" y1="6" x2="12" y2="6" stroke="#888780" stroke-width="1.2"/></svg>'
@@ -3353,6 +3366,25 @@ function renderDetail() {
 
   var scopedLotMap=buildLotMap(sourceRows);
   var lots=Object.values(scopedLotMap).filter(Boolean);
+
+  // buildLotMap only summed in-scope Final Units, but every lot carries its full
+  // projection — so a multi-day lot scoped to one day showed partial units against
+  // a full projection (bogus deviation). Keep that scoped sum as `dayUnits`, and
+  // set `finalUnits` to the lot's running total through the end of the scope
+  // window (mirrors the Daily summary tiles' runningTotalByLot). The new "Day/Week/
+  // Range units" column shows the period's production; Final units + Dev % now
+  // reflect the lot's cumulative output vs projection.
+  var _cumByLot={};
+  allRows.concat(allRows25).forEach(function(r){
+    var dt=parseLocalDate(r['Date']); if(!dt||(cumThrough&&dt>cumThrough)) return;
+    var lot=(r['Lot Number']||'').trim(); if(!lot) return;
+    _cumByLot[lot]=(_cumByLot[lot]||0)+num(r['Final Units']);
+  });
+  lots.forEach(function(l){
+    l.dayUnits=l.finalUnits;
+    if(_cumByLot[l.lot]!=null) l.finalUnits=_cumByLot[l.lot];
+  });
+  window._detailScopeLabel=scopeUnitsLabel;
   var customers=Array.from(new Set(lots.map(function(l){ return (l.product||'').split('-')[0].trim(); }).filter(Boolean))).sort();
   var products=Array.from(new Set(lots.map(function(l){ return l.product; }).filter(Boolean))).sort();
   var bottleSizes=Array.from(new Set(sourceRows.map(function(r){ return r['Bottle Size']; }).filter(Boolean))).sort();
@@ -3377,7 +3409,7 @@ function renderDetail() {
     +'</div>'
     +'<div id="ops-metrics" class="metrics" style="margin-bottom:1rem"></div>'
     +'<div class="full-card"><div class="tbl-wrap"><table style="min-width:600px"><thead><tr>'
-    +'<th onclick="sortBy(\'date\')" style="cursor:pointer">Date &#x21d5;</th><th onclick="sortBy(\'lot\')" style="cursor:pointer">Lot # &#x21d5;</th><th onclick="sortBy(\'product\')" style="cursor:pointer">Product &#x21d5;</th><th onclick="sortBy(\'line\')" style="cursor:pointer">Line &#x21d5;</th><th onclick="sortBy(\'bottleSize\')" style="cursor:pointer">Bottle &#x21d5;</th><th onclick="sortBy(\'jarSize\')" style="cursor:pointer">Jar &#x21d5;</th><th onclick="sortBy(\'projected\')" style="cursor:pointer">Projected &#x21d5;</th><th onclick="sortBy(\'finalUnits\')" style="cursor:pointer">Final units &#x21d5;</th><th onclick="sortBy(\'dev\')" style="cursor:pointer">Dev % &#x21d5;</th><th onclick="sortBy(\'status\')" style="cursor:pointer">Status &#x21d5;</th>'
+    +'<th onclick="sortBy(\'date\')" style="cursor:pointer">Date &#x21d5;</th><th onclick="sortBy(\'lot\')" style="cursor:pointer">Lot # &#x21d5;</th><th onclick="sortBy(\'product\')" style="cursor:pointer">Product &#x21d5;</th><th onclick="sortBy(\'line\')" style="cursor:pointer">Line &#x21d5;</th><th onclick="sortBy(\'bottleSize\')" style="cursor:pointer">Bottle &#x21d5;</th><th onclick="sortBy(\'jarSize\')" style="cursor:pointer">Jar &#x21d5;</th><th onclick="sortBy(\'projected\')" style="cursor:pointer">Projected &#x21d5;</th><th onclick="sortBy(\'dayUnits\')" style="cursor:pointer">'+esc(scopeUnitsLabel)+' &#x21d5;</th><th onclick="sortBy(\'finalUnits\')" style="cursor:pointer">Final units &#x21d5;</th><th onclick="sortBy(\'dev\')" style="cursor:pointer">Dev % &#x21d5;</th><th onclick="sortBy(\'status\')" style="cursor:pointer">Status &#x21d5;</th>'
     +'</tr></thead><tbody id="ops-body"></tbody></table></div>'
     +'<div class="pagination"><button id="prevBtn" onclick="changePage(-1)">\u2190 Prev</button><span id="pageInfo"></span><button id="nextBtn" onclick="changePage(1)">Next \u2192</button><span id="rowCount" style="margin-left:auto"></span></div></div>';
 
@@ -3411,7 +3443,10 @@ function updateOpsTable() {
   page=Math.min(Math.max(1,page),totalPages);
   var slice=lots.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
   var tP=lots.reduce(function(s,l){return s+l.projected;},0);
-  var tF=lots.reduce(function(s,l){return s+l.finalUnits;},0);
+  // "Units produced" stays the period's actual output (sum of dayUnits), not the
+  // cumulative finalUnits now shown per-lot — so the Daily metric keeps meaning
+  // "produced that day". Falls back to finalUnits if dayUnits isn't set.
+  var tF=lots.reduce(function(s,l){return s+(l.dayUnits!=null?l.dayUnits:l.finalUnits);},0);
   var comp=lots.filter(function(l){return l.status.toLowerCase().includes('complete');}).length;
   var devs=lots.map(function(l){return lotDev(l);}).filter(function(d){return d!==null;});
   var aD=devs.length?devs.reduce(function(s,d){return s+d;},0)/devs.length:0;
@@ -3419,7 +3454,7 @@ function updateOpsTable() {
   var om=document.getElementById('ops-metrics');
   if(om) om.innerHTML='<div class="metric info"><div class="label">Lots shown</div><div class="value">'+total.toLocaleString()+'</div></div><div class="metric"><div class="label">Units produced</div><div class="value">'+tF.toLocaleString()+'</div><div class="sub">vs '+tP.toLocaleString()+' projected</div></div><div class="metric"><div class="label">Avg deviation</div><div class="value" style="color:'+dc+'">'+(aD>0?'+':'')+aD.toFixed(1)+'%</div><div class="sub">lot by lot</div></div><div class="metric good"><div class="label">Complete lots</div><div class="value">'+comp+'</div><div class="sub">of '+total+' shown</div></div>';
   var body=document.getElementById('ops-body'); if(!body) return;
-  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; return '<tr><td>'+esc(l.date)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
+  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; return '<tr><td>'+esc(l.date)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
   var pi=document.getElementById('pageInfo'),pb=document.getElementById('prevBtn'),nb=document.getElementById('nextBtn'),rc=document.getElementById('rowCount');
   if(pi) pi.textContent='Page '+page+' of '+totalPages;
   if(pb) pb.disabled=page<=1;

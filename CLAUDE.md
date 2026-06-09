@@ -88,7 +88,7 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
 
 - **Three production lines**: `Line #1` (Powder), `Line #2` (Capsules), `Line #4` (Powder). Colors/backgrounds/text colors per line are in `LINE_COLOR`, `LINE_TRACK`, `LINE_BG`, `LINE_TXT`, `LINE_TYPE`. `ALL_LINES` is the canonical list — no Line #3.
 - **Annual/weekly targets**: `YEAR_TARGET` (2026) and `YEAR_TARGET_2025` drive gauges; `WEEKLY_TARGET` is derived. `TARGET_HIT_THRESHOLD = 0.99` is the "hit" tolerance.
-- **Lot deviation** (`lotDev`): `(finalUnits − projected) / projected × 100`. Returns `null` for partials or lots with no projection — callers must null-check.
+- **Lot deviation** (`lotDev`): `(finalUnits − projected) / projected × 100`. Returns `null` for any lot not marked Complete (in-progress, partial, or blank status) or with no projection — deviation is only meaningful once a lot has produced its full run, so callers must null-check.
 - **SKU grouping** (`SKU_GROUPS`): several part numbers roll up under one display name (e.g. multiple `20-xxxx` SKUs all map to "Whey Protein Concentrate (WPC)"). Used by the Procurement/Materials views.
 - **Product field convention**: the `Product` string is `"<Customer> - <Product Name>"`. Customer is extracted as `product.split('-')[0].trim()` throughout the code.
 - **Jar size normalization** (`jarSizeKey`): fuzzy-parses strings like "1 gal", "32 oz", "500ml" to a canonical key.
