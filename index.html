@@ -159,6 +159,24 @@
     .cust-concentration-outer { top: 56px; }
     .cust-col-header-outer { top: 96px; }
   }
+
+  /* Customer drill-down — "2026 pace vs 2025 full year" benchmark bar.
+     Solid = produced YTD; dashed = seasonal/YoY projected finish; the dashed
+     vertical marker is 2025's full-year total. rgba values use the dashboard's
+     dark-theme tokens (#2c2c2a track, #378ADD primary, #85B7EB highlight). */
+  .bench-bar { margin: 6px 0 4px; padding: 14px 16px; background: #1a1d20; border: 0.5px solid #2c2c2a; border-radius: 8px; }
+  .bench-label { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: #888780; margin-bottom: 20px; }
+  .bench-track-wrap { position: relative; margin: 0 0 8px; }
+  .bench-track { position: relative; width: 100%; height: 26px; background: #2c2c2a; border-radius: 6px; }
+  .bench-solid { position: absolute; left: 0; top: 0; height: 100%; background: #378ADD; border-radius: 6px 0 0 6px; }
+  .bench-dashed { position: absolute; top: 0; height: 100%; background: rgba(55,138,221,0.16); border: 1px dashed #378ADD; border-left: none; border-radius: 0 6px 6px 0; box-sizing: border-box; }
+  .bench-bm-line { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1.5px dashed #888780; z-index: 3; }
+  .bench-bm-text { position: absolute; top: -17px; transform: translateX(-50%); white-space: nowrap; font-size: 10px; color: #888780; }
+  .bench-done { position: absolute; top: 30px; transform: translateX(-50%); white-space: nowrap; font-size: 10px; color: #85B7EB; font-weight: 500; }
+  .bench-proj { position: absolute; top: 30px; transform: translateX(-50%); white-space: nowrap; font-size: 10px; color: #888780; font-style: italic; cursor: help; }
+  .bench-readouts { display: flex; gap: 18px; margin-top: 44px; font-size: 11px; color: #888780; }
+  .bench-readouts b { color: #e8e6e0; font-weight: 500; }
+  .bench-foot { font-size: 10px; color: #5f5e5a; margin-top: 12px; }
 </style>
 <!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
      Production-only: the gtag('config') call is gated on the URL not
@@ -5174,7 +5192,7 @@ function computeCustomerData() {
     var qmap = custQtr[cust];
     var qtrs = displayQtrs.map(function(qk) {
       var d = qmap[qk];
-      if (!d || d.lots.size === 0) return {key:qk, units:0, lots:0, avgRun:0, freqDays:null, pctOfProd:null};
+      if (!d || d.lots.size === 0) return {key:qk, units:0, lots:0, avgRun:0, freqDays:null, pctOfProd:null, companyUnits:totalQtr[qk]||0};
       var lotCount = d.lots.size;
       var avgRun = Math.round(d.units / lotCount);
       // Frequency: quarter length in days ÷ number of lots
@@ -5188,7 +5206,7 @@ function computeCustomerData() {
         : Math.round((qEnd - qStart) / 86400000);
       var freqDays = parseFloat((qDays / lotCount).toFixed(1));
       var pctOfProd = totalQtr[qk] ? parseFloat(((d.units / totalQtr[qk]) * 100).toFixed(1)) : null;
-      return {key:qk, units:d.units, lots:lotCount, avgRun:avgRun, freqDays:freqDays, pctOfProd:pctOfProd};
+      return {key:qk, units:d.units, lots:lotCount, avgRun:avgRun, freqDays:freqDays, pctOfProd:pctOfProd, companyUnits:totalQtr[qk]||0};
     });
 
     var withData = qtrs.filter(function(q){return q.units>0;});
@@ -5359,6 +5377,110 @@ function renderCustomerOverview(healthData) {
   // Max scaling for the 2025/2026 bar comparison — visible customers only.
   var maxBarUnits = Math.max.apply(null, visibleCustomers.map(function(c){return Math.max(c.ytd||0, c.ytd25||0);})) || 1;
 
+  // ── Year subtotal rollups for the per-customer quarterly table ────
+  // Sum a customer's quarters for one calendar year. companyUnits is the same
+  // per-quarter denominator the % prod column uses (totalQtr[qk]), so the
+  // subtotal's % prod stays internally consistent: FY customer units ÷ FY
+  // company units summed across that year's quarters.
+  function buildYearRollup(qtrs, targetYear) {
+    var i, q, sumUnits = 0, sumLots = 0, sumCompany = 0;
+    for (i = 0; i < qtrs.length; i++) {
+      q = qtrs[i];
+      if (parseInt(q.key.split('-')[0], 10) !== targetYear) { continue; }
+      sumUnits   += q.units;
+      sumLots    += q.lots;
+      sumCompany += (q.companyUnits || 0);
+    }
+    return {
+      units:   sumUnits,
+      lots:    sumLots,
+      avgRun:  sumLots > 0 ? Math.round(sumUnits / sumLots) : 0,
+      pctProd: sumCompany > 0 ? parseFloat((sumUnits / sumCompany * 100).toFixed(1)) : null
+    };
+  }
+  // Static subtotal <tr> mirroring the 9-column quarter row. Divider + tint +
+  // bold treatment marks it as a rollup; the comparison cells (vs prev) and the
+  // volume sparkline cell stay empty/em-dash since a sum has no prior period.
+  function subtotalRow(label, tag, units, lots, avgRun, pct) {
+    var tdS = 'padding:7px 10px;border-top:1.5px solid #444441;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;background:#1e2124;';
+    var pctStr = (pct !== null && pct !== undefined) ? pct + '%' : '—';
+    return '<tr>'
+      + '<td style="'+tdS+'padding-left:16px;color:#e8e6e0;font-weight:600;">'+label
+        + ' <span style="font-size:10px;font-weight:500;letter-spacing:.04em;padding:1px 5px;border:0.5px solid #444441;border-radius:4px;color:#888780;margin-left:4px;vertical-align:1px;">'+tag+'</span></td>'
+      + '<td style="'+tdS+'text-align:right;color:#e8e6e0;font-weight:600;">'+units.toLocaleString()+'</td>'
+      + '<td style="'+tdS+'text-align:right;">—</td>'
+      + '<td style="'+tdS+'text-align:right;color:#888780;">'+lots+'</td>'
+      + '<td style="'+tdS+'text-align:right;color:#e8e6e0;">'+(avgRun?avgRun.toLocaleString():'—')+'</td>'
+      + '<td style="'+tdS+'text-align:right;">—</td>'
+      + '<td style="'+tdS+'text-align:right;color:#888780;">'+pctStr+'</td>'
+      + '<td style="'+tdS+'text-align:right;">—</td>'
+      + '<td style="'+tdS+'padding-right:16px;"></td>'
+    + '</tr>';
+  }
+
+  // ── "2026 pace vs 2025 full year" benchmark bar ───────────────────
+  // Annualizes the customer's YTD using 2025's seasonal split: priorPeriodUnits
+  // (Jan 1→cutoff last year) ÷ fyUnits gives the fraction of 2025 normally done
+  // by now, so ytd / share projects the full-year finish. priorPeriodUnits is
+  // cd.ytd25 (the seasonal anchor) — NOT fy2025.units. Returns null with no 2025
+  // baseline so "New" customers skip the bar entirely.
+  function buildBenchmarkData(fyUnits, ytdUnits, priorPeriodUnits) {
+    if (!fyUnits || fyUnits <= 0 || !priorPeriodUnits || priorPeriodUnits <= 0) {
+      return null;
+    }
+    var share = priorPeriodUnits / fyUnits;
+    if (share > 1) { share = 1; }
+    var projUnits = Math.round(ytdUnits / share);
+    var pctYTD  = ytdUnits / fyUnits * 100;
+    var pctProj = projUnits / fyUnits * 100;
+    var trackMax = Math.max(120, Math.ceil((pctProj + 12) / 10) * 10);
+    return {
+      projUnits:    projUnits,
+      unitsToMatch: Math.max(0, fyUnits - ytdUnits),
+      sharePct:     Math.round(share * 100),
+      pctYTDLabel:  Math.round(pctYTD),
+      pctProjLabel: Math.round(pctProj),
+      solidW:       (pctYTD  / trackMax * 100),
+      dashedLeft:   (pctYTD  / trackMax * 100),
+      dashedW:      ((pctProj - pctYTD) / trackMax * 100),
+      benchLeft:    (100 / trackMax * 100),
+      exceeded:     ytdUnits >= fyUnits
+    };
+  }
+  function fmtCompactEst(n) {
+    if (n >= 1000000) { return '≈ ' + (Math.round(n / 10000) / 100) + 'M'; }
+    return '≈ ' + Math.round(n).toLocaleString();
+  }
+  function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
+    var d = buildBenchmarkData(fyUnits, ytdUnits, priorPeriodUnits);
+    if (!d) { return ''; }
+    var matchText = d.exceeded
+      ? 'matched &mdash; exceeding 2025'
+      : d.unitsToMatch.toLocaleString() + ' to match all of 2025';
+    var tip = 'Projected from YTD using 2025’s seasonal split (Jan–cutoff was '
+            + d.sharePct + '% of 2025). Estimate, not recorded production.';
+    return '' +
+    '<div class="bench-bar">' +
+      '<div class="bench-label">2026 pace vs 2025 full year</div>' +
+      '<div class="bench-track-wrap">' +
+        '<div class="bench-bm-text" style="left:' + d.benchLeft.toFixed(1) + '%">2025 total &middot; ' + fyUnits.toLocaleString() + '</div>' +
+        '<div class="bench-bm-line" style="left:' + d.benchLeft.toFixed(1) + '%"></div>' +
+        '<div class="bench-track">' +
+          '<div class="bench-solid" style="width:' + d.solidW.toFixed(1) + '%"></div>' +
+          '<div class="bench-dashed" style="left:' + d.dashedLeft.toFixed(1) + '%;width:' + d.dashedW.toFixed(1) + '%"></div>' +
+        '</div>' +
+        '<div class="bench-done" style="left:' + d.solidW.toFixed(1) + '%">' + ytdUnits.toLocaleString() + ' done</div>' +
+        '<div class="bench-proj" style="left:' + (d.dashedLeft + d.dashedW).toFixed(1) + '%" title="' + tip + '">proj. ' + fmtCompactEst(d.projUnits) + '</div>' +
+      '</div>' +
+      '<div class="bench-readouts">' +
+        '<div><b>' + d.pctYTDLabel + '%</b> of 2025 produced</div>' +
+        '<div><b>' + matchText + '</b></div>' +
+        '<div><b>' + d.pctProjLabel + '%</b> projected finish</div>' +
+      '</div>' +
+      '<div class="bench-foot">Projected = YTD annualized on 2025’s seasonal split. Estimate, not recorded production.</div>' +
+    '</div>';
+  }
+
   // ── Customer rows ─────────────────────────────────────────────────
   var rows = visibleCustomers.map(function(cd, idx) {
     var sid  = safeid(cd.cust);
@@ -5450,7 +5572,7 @@ function renderCustomerOverview(healthData) {
     // beneath that quarter via a colspan=9 row.
     var maxUnits = Math.max.apply(null, cd.qtrs.map(function(q){return q.units;})) || 1;
     var openQ   = _chQtrExpanded[sid] || null;
-    var tableRows = cd.qtrs.map(function(q, qidx) {
+    var _rowParts = cd.qtrs.map(function(q, qidx) {
       var isCur = q.key === curQk;
       var qOpen = openQ === q.key;
       var clickable = q.units > 0;
@@ -5509,7 +5631,19 @@ function renderCustomerOverview(healthData) {
       }
 
       return mainTr + drillTr;
-    }).join('');
+    });
+
+    // Inject static year-subtotal rows: FY 2025 right after the 2025-Q4 row,
+    // 2026 YTD at the end. Built outside cd.qtrs so no sparkline / chart / delta
+    // loop (all of which iterate cd.qtrs) ever picks them up. The 2026 row reuses
+    // the headline card figures (cd.ytd / cd.ytdLots / ytdAvgRun / cd.ytdPct) so
+    // it matches the summary row to the decimal.
+    var _fy2025 = buildYearRollup(cd.qtrs, 2025);
+    var _q4idx = -1;
+    for (var _fi = 0; _fi < cd.qtrs.length; _fi++) { if (cd.qtrs[_fi].key === '2025-Q4') { _q4idx = _fi; break; } }
+    if (_q4idx !== -1) _rowParts[_q4idx] += subtotalRow('2025 Full Year', 'FY', _fy2025.units, _fy2025.lots, _fy2025.avgRun, _fy2025.pctProd);
+    var tableRows = _rowParts.join('')
+      + subtotalRow('2026 YTD', 'YTD', cd.ytd, cd.ytdLots, ytdAvgRun, cd.ytdPct);
 
     var custDataObj = {
       name: cd.cust, tag: cd.tag,
@@ -5538,6 +5672,7 @@ function renderCustomerOverview(healthData) {
       +'</tr></thead>'
       +'<tbody>'+tableRows+'</tbody>'
       +'</table>'
+      +buildBenchmarkBar(_fy2025.units, cd.ytd, cd.ytd25)
     +'</div>';
 
     return summaryRow + detailTable;
