@@ -1582,11 +1582,14 @@ function freshnessLabel() {
   if (!lastRefreshTime) return { text: _refreshInFlight ? 'Refreshing…' : '', color:'#888780' };
   var ageSec = Math.max(0, Math.floor((Date.now() - lastRefreshTime) / 1000));
   var refreshingSuffix = _refreshInFlight ? ' — refreshing…' : '';
-  if (ageSec < 20)  return { text:'Updated just now' + refreshingSuffix,        color:'#888780' };
-  if (ageSec < 90)  return { text:'Updated ' + ageSec + 's ago' + refreshingSuffix, color:'#888780' };
-  var ageMin = Math.round(ageSec / 60);
-  if (ageSec < 180) return { text:'Updated ' + ageMin + 'm ago' + refreshingSuffix, color:'#EF9F27' };
-  return { text:'Updated ' + ageMin + 'm ago' + (_refreshInFlight ? ' — refreshing…' : ' — data may be stale'), color:'#F09595' };
+  // Minute-granular only — per-second counting reads as too jittery for a
+  // background refresh. Under a minute is "just now"; after that, whole minutes.
+  if (ageSec < 60) return { text:'Updated just now' + refreshingSuffix, color:'#888780' };
+  var ageMin = Math.floor(ageSec / 60);
+  var minStr = 'Updated ' + ageMin + ' minute' + (ageMin === 1 ? '' : 's') + ' ago';
+  if (ageMin < 2) return { text: minStr + refreshingSuffix, color:'#888780' };
+  if (ageMin < 3) return { text: minStr + refreshingSuffix, color:'#EF9F27' };
+  return { text: minStr + (_refreshInFlight ? ' — refreshing…' : ' — data may be stale'), color:'#F09595' };
 }
 function updateFreshnessStamp() {
   var el = document.getElementById('daily-freshness');
