@@ -177,6 +177,27 @@
   .bench-readouts { display: flex; gap: 18px; margin-top: 44px; font-size: 11px; color: #888780; }
   .bench-readouts b { color: #e8e6e0; font-weight: 500; }
   .bench-foot { font-size: 10px; color: #5f5e5a; margin-top: 12px; }
+
+  /* Customers tab — search box that sits right of the Top 10/25/All toggle.
+     Filters the fleet table across the full customer list. Tokens match the
+     dashboard's existing inputs (#1e2124 bg / #444441 border / #e8e6e0 text);
+     focus ring is the neutral-informational blue #378ADD. */
+  .cust-search-wrap { position: relative; display: inline-flex; align-items: center; min-width: 200px; }
+  .cust-search-icon { position: absolute; left: 10px; display: flex; align-items: center; pointer-events: none; }
+  .cust-search-input {
+    width: 220px; height: 30px; box-sizing: border-box;
+    background: #1e2124; border: 0.5px solid #444441; border-radius: 8px;
+    color: #e8e6e0; font-size: 12px; padding: 0 28px 0 30px; outline: none;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .cust-search-input::placeholder { color: #5f5e5a; }
+  .cust-search-input:focus { border-color: #378ADD; box-shadow: 0 0 0 3px rgba(55,138,221,0.18); }
+  .cust-search-clear {
+    position: absolute; right: 6px; border: none; background: transparent;
+    color: #888780; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 5px;
+  }
+  .cust-search-clear:hover { color: #e8e6e0; }
+  .cust-empty { padding: 28px 16px; text-align: center; font-size: 13px; color: #888780; }
 </style>
 <!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
      Production-only: the gtag('config') call is gated on the URL not
@@ -406,6 +427,7 @@ var topView = 'summary', subView = 'today';
 var selectedCustomer = null;
 var sortCol = 'date', sortDir = -1, page = 1, PAGE_SIZE = 50;
 var custLimit = 10;
+var customerSearchQuery = ""; // Customers-tab fleet search; when non-empty it filters the full customer list and overrides custLimit.
 var charts = {}, todayTimer = null, refreshTimer = null;
 var productionDays = [], selectedDayIdx = -1;
 var selectedWeekMon = null;
@@ -1741,10 +1763,17 @@ function renderSubBar() {
         + '<span style="font-size:12px;font-weight:500;color:#e8e6e0;">'+esc(selectedCustomer)+'</span>';
     } else {
       sb.innerHTML =
-        '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-        + '<button onclick="setCustLimit(10)" style="'+navBtnStyle(custLimit===10)+'">Top 10</button>'
-        + '<button onclick="setCustLimit(25)" style="'+navBtnStyle(custLimit===25)+'">Top 25</button>'
-        + '<button onclick="setCustLimit(0)" style="'+navBtnStyle(custLimit===0)+'">All</button>'
+        '<div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">'
+        + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+        +   '<button onclick="setCustLimit(10)" style="'+navBtnStyle(custLimit===10)+'">Top 10</button>'
+        +   '<button onclick="setCustLimit(25)" style="'+navBtnStyle(custLimit===25)+'">Top 25</button>'
+        +   '<button onclick="setCustLimit(0)" style="'+navBtnStyle(custLimit===0)+'">All</button>'
+        + '</div>'
+        + '<div class="cust-search-wrap">'
+        +   '<span class="cust-search-icon"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#888780" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#888780" stroke-width="1.3" stroke-linecap="round"/></svg></span>'
+        +   '<input id="customerSearchInput" type="text" class="cust-search-input" placeholder="Search customers&hellip;" aria-label="Search customers" autocomplete="off" value="'+esc(customerSearchQuery)+'" oninput="onCustomerSearchInput(this.value)" onkeydown="onCustomerSearchKey(event)" />'
+        +   '<button id="customerSearchClear" type="button" class="cust-search-clear" aria-label="Clear search" style="display:'+(customerSearchQuery?'inline-flex':'none')+';" onclick="clearCustomerSearch(true)">&times;</button>'
+        + '</div>'
         + '</div>';
     }
   } else if (mainSection === 'procurement') {
@@ -4612,10 +4641,50 @@ function selectCustomer(name) {
 }
 
 function setCustLimit(n) {
+  // Clicking a scope chip cancels any active search so the toggle behaves
+  // predictably. renderSubBar() below rebuilds the (now empty) search input.
+  customerSearchQuery = "";
   custLimit = n;
   renderSubBar();
   if (mainSection === 'customers') renderCustomers();
   else renderPerformance();
+}
+
+// ── Customers-tab fleet search ────────────────────────────────────────
+// Inline handlers (matching the dashboard's onclick convention) keep the
+// listeners alive across sub-bar rebuilds. Typing re-renders only #content
+// (not the sub-bar), so the input keeps focus and value while filtering.
+function getCustomerSearchTerm() {
+  return (customerSearchQuery || "").replace(/^\s+|\s+$/g, "").toLowerCase();
+}
+function onCustomerSearchInput(value) {
+  customerSearchQuery = value;
+  var clearBtn = document.getElementById("customerSearchClear");
+  if (clearBtn) clearBtn.style.display = value ? "inline-flex" : "none";
+  if (mainSection === 'customers') renderCustomers();
+  trackCustomerSearch(value);
+}
+function onCustomerSearchKey(e) {
+  var isEsc = (e.key === "Escape" || e.key === "Esc" || e.keyCode === 27);
+  if (isEsc) clearCustomerSearch(true);
+}
+function clearCustomerSearch(refocus) {
+  var input = document.getElementById("customerSearchInput");
+  var clearBtn = document.getElementById("customerSearchClear");
+  customerSearchQuery = "";
+  if (input) input.value = "";
+  if (clearBtn) clearBtn.style.display = "none";
+  if (mainSection === 'customers') renderCustomers();
+  if (refocus && input) input.focus();
+}
+var customerSearchGaTimer = null;
+function trackCustomerSearch(value) {
+  if (customerSearchGaTimer) clearTimeout(customerSearchGaTimer);
+  customerSearchGaTimer = setTimeout(function () {
+    var term = (value || "").replace(/^\s+|\s+$/g, "");
+    if (!term) return;
+    trackEvent('customer_search', { search_term_length: term.length });
+  }, 800);
 }
 
 // ── Customer Health ───────────────────────────────────────────────────────
@@ -5259,7 +5328,24 @@ function renderCustomerOverview(healthData) {
   var prevYr = nowYr - 1;
   var ytdLabel = now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
   var maxYtd = Math.max.apply(null, customers.map(function(c){return Math.max(c.ytd, c.ytd25);})) || 1;
-  var visibleCustomers = custLimit === 0 ? customers : customers.slice(0, custLimit);
+  // Stamp each customer with its overall rank (list is already sorted by YTD
+  // desc) so rank labels stay correct even when search reorders/filters the
+  // visible set — e.g. a #11 customer found via search still shows "#11".
+  for (var _ri = 0; _ri < customers.length; _ri++) { customers[_ri].rank = _ri + 1; }
+
+  // Search overrides the scope toggle: when a term is present, filter the full
+  // customer list by name; otherwise apply Top 10 / Top 25 / All.
+  var _searchTerm = getCustomerSearchTerm();
+  var visibleCustomers;
+  if (_searchTerm) {
+    visibleCustomers = customers.filter(function (c) {
+      return (c.cust || "").toLowerCase().indexOf(_searchTerm) !== -1;
+    });
+  } else if (custLimit === 0) {
+    visibleCustomers = customers;
+  } else {
+    visibleCustomers = customers.slice(0, custLimit);
+  }
 
   var thS  = 'text-align:right;padding:5px 10px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;';
   var thSL = 'text-align:left;padding:5px 10px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;';
@@ -5485,7 +5571,7 @@ function renderCustomerOverview(healthData) {
   var rows = visibleCustomers.map(function(cd, idx) {
     var sid  = safeid(cd.cust);
     var expanded = !!_chExpanded[sid];
-    var rank = idx + 1;
+    var rank = cd.rank || (idx + 1);
 
     var tagBadge = cd.tag==='growing'
       ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;">&#x2191; Growing</span>'
@@ -5681,6 +5767,12 @@ function renderCustomerOverview(healthData) {
   // Hide the legacy external sticky header — replaced by the inline sticky rows.
   var hdrOuter = document.getElementById('cust-col-header-outer');
   if(hdrOuter) hdrOuter.style.display = 'none';
+
+  // No-match state when a search returns nothing.
+  if (_searchTerm && visibleCustomers.length === 0) {
+    return columnHeaderHTML
+      + '<div class="cust-empty">No customers match &ldquo;' + esc(customerSearchQuery) + '&rdquo;</div>';
+  }
 
   return columnHeaderHTML + rows;
 }
