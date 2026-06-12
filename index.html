@@ -198,6 +198,22 @@
   }
   .cust-search-clear:hover { color: #e8e6e0; }
   .cust-empty { padding: 28px 16px; text-align: center; font-size: 13px; color: #888780; }
+
+  /* Weekly "% of target" celebratory pulse — fires when the week hits/exceeds
+     target. inline-block + centered transform-origin so the scale stays centered
+     within the (text-align:center) column. */
+  @keyframes pctTargetPulse {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1.18); }
+    55%  { transform: scale(0.97); }
+    78%  { transform: scale(1.03); }
+    100% { transform: scale(1); }
+  }
+  .pct-target-pulse {
+    display: inline-block;
+    transform-origin: center;
+    animation: pctTargetPulse 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
 </style>
 <!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
      Production-only: the gtag('config') call is gated on the URL not
@@ -2942,6 +2958,17 @@ function showMixPanel(panelId, sizeKey) {
   panel.style.display = 'block';
 }
 
+// Replays the celebratory scale-pulse on the Weekly "% of target" number.
+// The void offsetWidth forces a reflow so removing+re-adding the class restarts
+// the animation on every weekly render (e.g. flipping weeks), not just once.
+function pulsePctTarget() {
+  var el = document.getElementById("week-pct-target");
+  if (!el) { return; }
+  el.classList.remove("pct-target-pulse");
+  void el.offsetWidth;
+  el.classList.add("pct-target-pulse");
+}
+
 function filterWeekLots() {
   var sel=document.getElementById('weekCustFilter');
   var cust=sel?sel.value:'';
@@ -3097,7 +3124,7 @@ function renderWeekly() {
     +'<div style="font-size:10px;color:#5f5e5a;margin-top:2px;height:14px;">'+(isLiveWeek?'(This week)':daysElapsed+' of '+wkDayCount+' days')+'</div>'
     +'</div>'
     +'<button onclick="navWeek(1)" '+(isLiveWeek?'disabled':'')+' style="width:28px;height:28px;flex-shrink:0;border-radius:8px;border:0.5px solid #444441;background:transparent;cursor:'+(isLiveWeek?'default':'pointer')+';color:'+(isLiveWeek?'#444441':'#e8e6e0')+';font-size:16px;display:flex;align-items:center;justify-content:center;font-family:system-ui">&#8250;</button>'
-    +(!isLiveWeek?'<button onclick="selectedWeekMon=getCurrentWeekMon();renderWeekly();" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;margin-left:4px;">Jump to this week</button>':'')
+    +(!isLiveWeek?'<button onclick="selectedWeekMon=getCurrentWeekMon();renderWeekly();" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;margin-left:4px;">Jump to current week</button>':'')
     +'</div>';
 
   // Per-day per-line units for the day breakdown
@@ -3158,7 +3185,7 @@ function renderWeekly() {
           +'<div style="background:#2c2c2a;"></div>'
           +'<div style="text-align:center;padding:0 10px;">'
             +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">% of target</div>'
-            +'<div style="font-size:22px;font-weight:500;color:'+pctColor+';font-family:system-ui;">'+realBarPct+'%</div>'
+            +'<div id="week-pct-target" style="font-size:22px;font-weight:500;color:'+pctColor+';font-family:system-ui;">'+realBarPct+'%</div>'
           +'</div>'
           +'<div style="background:#2c2c2a;"></div>'
           +'<div style="text-align:center;padding:0 10px;">'
@@ -3385,6 +3412,10 @@ function renderWeekly() {
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){if(ctx.dataset.label==='Weekly target') return 'Target: '+chartStaticTarget.toLocaleString(); if(ctx.dataset.label==='8-week avg') return '8-wk avg: '+week8Avg.toLocaleString(); return 'Units: '+ctx.raw.toLocaleString();}}}},scales:{x:{ticks:{color:'#888780',font:{size:10},maxRotation:20},grid:{color:'#2c2c2a'}},y:{ticks:{color:'#888780',callback:function(v){return(v/1000).toFixed(0)+'k';}},grid:{color:'#2c2c2a'}}}},
     plugins:[{id:'wkLabels',afterDatasetsDraw:function(chart){var ctx2=chart.ctx,meta=chart.getDatasetMeta(0);ctx2.save();ctx2.font='500 10px system-ui,sans-serif';ctx2.textAlign='center';ctx2.textBaseline='bottom';meta.data.forEach(function(bar,i){ctx2.fillStyle=weeks8[i].mon.toDateString()===wkMon.toDateString()?'rgba(133,183,235,0.7)':'#85B7EB';ctx2.fillText(weekData[i].toLocaleString(),bar.x,bar.y-4);});ctx2.restore();}}]
   });
+
+  // Celebrate hitting/exceeding the weekly target — pulse the % of target number.
+  // Weekly-render-only so flipping to Daily/Trend never triggers it.
+  if (realBarPct >= 100) { pulsePctTarget(); }
 }
 
 function renderDetail() {
