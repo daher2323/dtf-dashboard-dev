@@ -428,6 +428,7 @@ var selectedCustomer = null;
 var sortCol = 'date', sortDir = -1, page = 1, PAGE_SIZE = 50;
 var custLimit = 10;
 var customerSearchQuery = ""; // Customers-tab fleet search; when non-empty it filters the full customer list and overrides custLimit.
+var dailyCustomerFilter = "all"; // Daily view "Completed today" customer filter. Independent of the Weekly filter (#weekCustFilter).
 var charts = {}, todayTimer = null, refreshTimer = null;
 var productionDays = [], selectedDayIdx = -1;
 var selectedWeekMon = null;
@@ -2677,73 +2678,28 @@ function renderToday() {
       +'</div>';
   }).join('');
 
-  var completedHTML;
-  if(completedToday.length===0){
-    completedHTML='<div style="font-size:12px;color:#5f5e5a;font-style:italic;padding:6px 0">'+(isLive?'No completed lots yet today':'No completed lots for this day')+'</div>';
-  } else {
-    var byLine={'Line #1':[],'Line #2':[],'Line #4':[]};
-    completedToday.forEach(function(l){
-      if (byLine[l.line]) { byLine[l.line].push(l); return; }
-      // Unrecognized line on a completed lot — record so it shows up in __dtfSkipped().
-      // With Google Sheets data validation this should never fire; included as belt-and-braces.
+  // Diagnostic: completed lots whose line isn't recognized (should never happen
+  // with Sheets validation). Recorded once over the full list here so it doesn't
+  // re-fire on every customer-filter re-render of the grid below.
+  completedToday.forEach(function(l){
+    if (l.line!=='Line #1' && l.line!=='Line #2' && l.line!=='Line #4') {
       _recordSkip('orphan_line', {date:viewStr, lot:l.lot, line:l.line||'(empty)', product:l.product, status:l.status});
-    });
-    // Sort each line's lots by rowIdx — order they appear in the sheet = completion order
-    Object.keys(byLine).forEach(function(line){ byLine[line].sort(function(a,b){ return (a.rowIdx||0)-(b.rowIdx||0); }); });
-    completedHTML='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:start">'
-      +ALL_LINES.map(function(line){
-        var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',type=LINE_TYPE[k2]||'';
-        var color=LINE_COLOR[k2]||'#888780';
-        var trackColor=LINE_TRACK[k2]||'#2c2c2a';
-        var hdrBg=k2==='line#1'?'#0a1520':k2==='line#2'?'#110f22':'#1a0c14';
-        var lots=byLine[line]||[];
-        var totalLineUnits=lots.reduce(function(s,l){return s+l.todayUnits;},0);
-        var rows=lots.length===0?'<div style="padding:10px;font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;">No completed lots</div>'
-          :lots.map(function(l){
-            var parts=(l.product||'').split('-'); var brand=parts[0].trim(); var product=parts.slice(1).join('-').trim()||brand;
-            var isPartial=l.status.toLowerCase().includes('partial');
-            var sBg=isPartial?'#633806':'#085041', sTxt=isPartial?'#FAC775':'#9FE1CB';
-            var sLabel=isPartial?'Partial':'Complete';
-            var runPct=l.projected?Math.min(Math.round((l.finalUnits/l.projected)*100),100):0;
-            var dev=(!isPartial&&l.projected)?((l.finalUnits-l.projected)/l.projected*100):null;
-            var devS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'';
-            var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
-            var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
-            function cleanLid(v){ return v&&!/^(n\/a|none|n\/a n\/a|n\/a n\/a n\/a)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; }
-            var lidStr=[l.lidSize,l.lidColor,l.lidProfile].map(cleanLid).filter(Boolean).join(' ');
-            var containerStr=[l.bottleSize||l.jarSize,lidStr].filter(Boolean).join(' / ');
-            var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
-              +'<div>'
-              +(l.lot?'<div style="font-size:11px;font-weight:500;color:#5f5e5a;font-family:system-ui;margin-bottom:2px;">#'+esc(l.lot)+'</div>':'')
-              +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+esc(brand)+'</div>'
-              +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+esc(product)+'</div>'
-              +(containerStr?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+esc(containerStr)+'</div>':'')
-              +'</div>'
-              +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
-              +'</div>'
-              +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;">'
-                +'<div style="display:flex;align-items:baseline;gap:6px;">'
-                  +'<span style="font-size:24px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.finalUnits.toLocaleString()+'</span>'
-                  +(l.finalUnits!==l.todayUnits?'<span style="font-size:10px;font-family:system-ui;"><span style="color:'+txt+';font-weight:500;">'+l.todayUnits.toLocaleString()+'</span><span style="color:#5f5e5a;"> today &middot; '+(l.projected?l.projected.toLocaleString():'—')+' proj</span></span>':'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>')
-                +'</div>'
-                +(devS?'<span style="font-size:11px;font-weight:500;padding:2px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;">'+devS+'</span>':'')
-              +'</div>';
-            if(isPartial){
-              tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
-            }
-            return '<div style="background:#141618;border-left:3px solid '+color+';border-radius:0 8px 8px 0;padding:11px 13px;">'+tileContent+'</div>';
-          }).join('');
-        return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
-          +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
-            +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span><span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span></div>'
-            +(lots.length>0?'<span style="font-size:10px;color:'+txt+';font-weight:500;font-family:system-ui;">'+totalLineUnits.toLocaleString()+' units</span>':'')
-          +'</div>'
-          +'<div style="padding:8px;display:flex;flex-direction:column;gap:6px;">'
-          +rows
-          +'</div>'
-          +'</div>';
-      }).join('')+'</div>';
-  }
+    }
+  });
+
+  // Daily "Completed today" customer filter — independent port of the Weekly
+  // #weekCustFilter. Options are the customers with completed lots on the viewed
+  // day; persist the active selection across renders/refreshes if it still has
+  // lots, otherwise fall back to All. Stored on window so filterDailyLots() can
+  // rebuild just the grid (no chart re-render), mirroring filterWeekLots().
+  var dailyCustomers=Array.from(new Set(completedToday.map(function(l){return (l.product||'').split('-')[0].trim();}).filter(Boolean))).sort();
+  if (dailyCustomerFilter!=='all' && dailyCustomers.indexOf(dailyCustomerFilter)===-1) { dailyCustomerFilter='all'; }
+  window._completedToday=completedToday;
+  window._dailyIsLive=isLive;
+  var _dailyShown=dailyCustomerFilter==='all'
+    ? completedToday
+    : completedToday.filter(function(l){ return (l.product||'').split('-')[0].trim()===dailyCustomerFilter; });
+  var completedHTML=buildDailyCompletedGrid(_dailyShown, isLive);
 
   document.getElementById('content').innerHTML = ''
     +'<div class="full-card">'
@@ -2796,11 +2752,93 @@ function renderToday() {
     +'</div>'
     +'</div>'
     +'<div style="border-top:0.5px solid #2c2c2a;padding-top:.75rem;">'
-    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.75rem">'+(isLive?'Completed today':'Completed')+'</div>'
-    +completedHTML+'</div></div></div>';
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:.75rem;flex-wrap:wrap;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">'+(isLive?'Completed today':'Completed')+'</div>'
+    +'<select id="dailyCustFilter" aria-label="Filter by customer" onchange="filterDailyLots()" style="padding:5px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;"><option value="all">All customers</option>'+dailyCustomers.map(function(c){return '<option value="'+esc(c)+'"'+(c===dailyCustomerFilter?' selected':'')+'>'+esc(c)+'</option>';}).join('')+'</select>'
+    +'<span id="dailyLotCount" style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+_dailyShown.length+' lot'+(_dailyShown.length!==1?'s':'')+'</span>'
+    +'</div>'
+    +'<div id="dailyCompletedGrid">'+completedHTML+'</div></div></div></div>';
 
   var gaugeData=ALL_LINES.map(function(line,i){ var k2=lk(line), goal=lineGoal(line); return {idx:i,line:line,color:LINE_COLOR[k2]||'#888780',track:LINE_TRACK[k2]||'#2c2c2a',units:todayByLine[line]||0,avg:goal.value,sfx:goal.lineDown?'% of Target (down)':goal.isTarget?'% of Target':'% of Avg',lineDown:goal.lineDown}; });
   setTimeout(function(){ applyHitStates(gaugeData,todayTotal,totalGoal,statusLabel,statusColor); animateGauges(gaugeData,todayTotal,totalGoal,barColor); }, 0);
+}
+
+// Builds the Daily "Completed today" 3-column (per-line) grid from a list of
+// completed lots. Extracted from renderToday so the customer filter can rebuild
+// just the grid. Orphan-line diagnostics are recorded once in renderToday, so
+// unrecognized lines are silently skipped here.
+function buildDailyCompletedGrid(completedToday, isLive) {
+  if(completedToday.length===0){
+    return '<div style="font-size:12px;color:#5f5e5a;font-style:italic;padding:6px 0">'+(isLive?'No completed lots yet today':'No completed lots for this day')+'</div>';
+  }
+  var byLine={'Line #1':[],'Line #2':[],'Line #4':[]};
+  completedToday.forEach(function(l){ if (byLine[l.line]) { byLine[l.line].push(l); } });
+  // Sort each line's lots by rowIdx — order they appear in the sheet = completion order
+  Object.keys(byLine).forEach(function(line){ byLine[line].sort(function(a,b){ return (a.rowIdx||0)-(b.rowIdx||0); }); });
+  return '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:start">'
+    +ALL_LINES.map(function(line){
+      var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',type=LINE_TYPE[k2]||'';
+      var color=LINE_COLOR[k2]||'#888780';
+      var trackColor=LINE_TRACK[k2]||'#2c2c2a';
+      var hdrBg=k2==='line#1'?'#0a1520':k2==='line#2'?'#110f22':'#1a0c14';
+      var lots=byLine[line]||[];
+      var totalLineUnits=lots.reduce(function(s,l){return s+l.todayUnits;},0);
+      var rows=lots.length===0?'<div style="padding:10px;font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;">No completed lots</div>'
+        :lots.map(function(l){
+          var parts=(l.product||'').split('-'); var brand=parts[0].trim(); var product=parts.slice(1).join('-').trim()||brand;
+          var isPartial=l.status.toLowerCase().includes('partial');
+          var sBg=isPartial?'#633806':'#085041', sTxt=isPartial?'#FAC775':'#9FE1CB';
+          var sLabel=isPartial?'Partial':'Complete';
+          var runPct=l.projected?Math.min(Math.round((l.finalUnits/l.projected)*100),100):0;
+          var dev=(!isPartial&&l.projected)?((l.finalUnits-l.projected)/l.projected*100):null;
+          var devS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'';
+          var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
+          var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
+          function cleanLid(v){ return v&&!/^(n\/a|none|n\/a n\/a|n\/a n\/a n\/a)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; }
+          var lidStr=[l.lidSize,l.lidColor,l.lidProfile].map(cleanLid).filter(Boolean).join(' ');
+          var containerStr=[l.bottleSize||l.jarSize,lidStr].filter(Boolean).join(' / ');
+          var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
+            +'<div>'
+            +(l.lot?'<div style="font-size:11px;font-weight:500;color:#5f5e5a;font-family:system-ui;margin-bottom:2px;">#'+esc(l.lot)+'</div>':'')
+            +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+esc(brand)+'</div>'
+            +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+esc(product)+'</div>'
+            +(containerStr?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+esc(containerStr)+'</div>':'')
+            +'</div>'
+            +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
+            +'</div>'
+            +'<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;">'
+              +'<div style="display:flex;align-items:baseline;gap:6px;">'
+                +'<span style="font-size:24px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+l.finalUnits.toLocaleString()+'</span>'
+                +(l.finalUnits!==l.todayUnits?'<span style="font-size:10px;font-family:system-ui;"><span style="color:'+txt+';font-weight:500;">'+l.todayUnits.toLocaleString()+'</span><span style="color:#5f5e5a;"> today &middot; '+(l.projected?l.projected.toLocaleString():'—')+' proj</span></span>':'<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">/ '+(l.projected?l.projected.toLocaleString():'—')+' proj</span>')
+              +'</div>'
+              +(devS?'<span style="font-size:11px;font-weight:500;padding:2px 6px;border-radius:5px;background:'+devBg+';color:'+devTxt+';font-family:system-ui;">'+devS+'</span>':'')
+            +'</div>';
+          if(isPartial){
+            tileContent+='<div style="height:3px;background:#2c2c2a;border-radius:2px;margin-top:6px;"><div style="height:100%;width:'+runPct+'%;background:#EF9F27;border-radius:2px;"></div></div>';
+          }
+          return '<div style="background:#141618;border-left:3px solid '+color+';border-radius:0 8px 8px 0;padding:11px 13px;">'+tileContent+'</div>';
+        }).join('');
+      return '<div style="background:#1e2124;border:0.5px solid '+trackColor+';border-top:2px solid '+color+';border-radius:10px;overflow:hidden;">'
+        +'<div style="padding:9px 12px;border-bottom:0.5px solid #2c2c2a;background:'+hdrBg+';display:flex;align-items:center;justify-content:space-between;">'
+          +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:6px;background:'+bg+';color:'+txt+';font-family:system-ui;">'+line+'</span><span style="font-size:10px;color:#888780;font-family:system-ui;">'+type+'</span></div>'
+          +(lots.length>0?'<span style="font-size:10px;color:'+txt+';font-weight:500;font-family:system-ui;">'+totalLineUnits.toLocaleString()+' units</span>':'')
+        +'</div>'
+        +'<div style="padding:8px;display:flex;flex-direction:column;gap:6px;">'
+        +rows
+        +'</div>'
+        +'</div>';
+    }).join('')+'</div>';
+}
+
+function filterDailyLots() {
+  var sel=document.getElementById('dailyCustFilter');
+  dailyCustomerFilter=sel?sel.value:'all';
+  var all=window._completedToday||[];
+  var filtered=dailyCustomerFilter==='all'?all:all.filter(function(l){return (l.product||'').split('-')[0].trim()===dailyCustomerFilter;});
+  var grid=document.getElementById('dailyCompletedGrid');
+  var count=document.getElementById('dailyLotCount');
+  if(grid) grid.innerHTML=buildDailyCompletedGrid(filtered, window._dailyIsLive);
+  if(count) count.textContent=filtered.length+' lot'+(filtered.length!==1?'s':'');
 }
 
 function buildWeekLotsGrid(lots) {
