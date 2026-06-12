@@ -6352,6 +6352,15 @@ function renderMatInline(m, idx) {
         var label = monthLabels[barIdx];
         renderMatMonthDrill(m, idx, mk, label, barIdx);
       },
+      // Bars are clickable (drill into products), so show the hand cursor over a
+      // bar and the default arrow over empty chart space. Chart.js won't do this
+      // on its own.
+      onHover:function(event, elements) {
+        var target = event.native ? event.native.target : event.target;
+        if (target) {
+          target.style.cursor = elements.length ? 'pointer' : 'default';
+        }
+      },
       scales:{
         x:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},autoSkip:skipLabels,maxRotation:skipLabels?45:0},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}},
         y:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},callback:function(v){return Math.round(v).toLocaleString();}},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}}
