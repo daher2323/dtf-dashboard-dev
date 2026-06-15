@@ -3401,7 +3401,9 @@ function renderWeekly() {
 
   var weekLabels=weeks8.map(function(w){return w.mon.toDateString()===wkMon.toDateString()?'Wk '+w.num+' (this)':'Wk '+w.num;});
   var weekData=weeks8.map(function(w){return w.units;});
-  var weekColors=weeks8.map(function(w){return w.mon.toDateString()===wkMon.toDateString()?'rgba(55,138,221,0.35)':'#378ADD';}); 
+  var weekColors=weeks8.map(function(w){return w.mon.toDateString()===wkMon.toDateString()?'rgba(55,138,221,0.35)':'#378ADD';});
+  // headroom so the value label above the tallest bar isn't clipped at the top
+  var weekChartMax=Math.max.apply(null,weekData.concat([chartStaticTarget,week8Avg]))*1.12;
   charts.weeklyW=new Chart(document.getElementById('cWeeklyW'),{
     type:'bar',
     data:{labels:weekLabels,datasets:[
@@ -3409,7 +3411,7 @@ function renderWeekly() {
       {type:'line',label:'Weekly target',data:weeks8.map(function(){return chartStaticTarget;}),borderColor:'#1D9E75',borderWidth:2,borderDash:[6,4],pointRadius:0,fill:false,tension:0,order:1},
       {type:'line',label:'8-week avg',data:weeks8.map(function(){return week8Avg;}),borderColor:'#EF9F27',borderWidth:1.5,borderDash:[3,3],pointRadius:0,fill:false,tension:0,order:2}
     ]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){if(ctx.dataset.label==='Weekly target') return 'Target: '+chartStaticTarget.toLocaleString(); if(ctx.dataset.label==='8-week avg') return '8-wk avg: '+week8Avg.toLocaleString(); return 'Units: '+ctx.raw.toLocaleString();}}}},scales:{x:{ticks:{color:'#888780',font:{size:10},maxRotation:20},grid:{color:'#2c2c2a'}},y:{ticks:{color:'#888780',callback:function(v){return(v/1000).toFixed(0)+'k';}},grid:{color:'#2c2c2a'}}}},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){if(ctx.dataset.label==='Weekly target') return 'Target: '+chartStaticTarget.toLocaleString(); if(ctx.dataset.label==='8-week avg') return '8-wk avg: '+week8Avg.toLocaleString(); return 'Units: '+ctx.raw.toLocaleString();}}}},scales:{x:{ticks:{color:'#888780',font:{size:10},maxRotation:20},grid:{color:'#2c2c2a'}},y:{suggestedMax:weekChartMax,ticks:{color:'#888780',callback:function(v){return(v/1000).toFixed(0)+'k';}},grid:{color:'#2c2c2a'}}}},
     plugins:[{id:'wkLabels',afterDatasetsDraw:function(chart){var ctx2=chart.ctx,meta=chart.getDatasetMeta(0);ctx2.save();ctx2.font='500 10px system-ui,sans-serif';ctx2.textAlign='center';ctx2.textBaseline='bottom';meta.data.forEach(function(bar,i){ctx2.fillStyle=weeks8[i].mon.toDateString()===wkMon.toDateString()?'rgba(133,183,235,0.7)':'#85B7EB';ctx2.fillText(weekData[i].toLocaleString(),bar.x,bar.y-4);});ctx2.restore();}}]
   });
 
