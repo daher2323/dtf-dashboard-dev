@@ -3618,6 +3618,20 @@ function _pmSizeForLot(lot, view) {
   if (t === 'capsule') return (lot.bottleSize||'').trim() || null;
   return null;
 }
+function computeMedianLotSize(sizes) {
+  if (!sizes || sizes.length === 0) {
+    return 0;
+  }
+  var sorted = sizes.slice().sort(function (a, b) {
+    return a - b;
+  });
+  var mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  }
+  return sorted[mid];
+}
+
 function _pmComputeView(lots, view) {
   var filtered = lots.filter(function(l){
     if (view === 'all') return true;
@@ -3627,6 +3641,7 @@ function _pmComputeView(lots, view) {
   var bucketCounts = {u1k:0, '1_2_5':0, '2_5_5':0, o5k:0};
   var bucketLots   = {u1k:[], '1_2_5':[], '2_5_5':[], o5k:[]};
   var totalUnits = 0;
+  var lotSizes = [];  // same source the average divides over and the buckets iterate
   filtered.forEach(function(l){
     var sz = _pmSizeForLot(l, view);
     if (sz) container[sz] = (container[sz]||0) + l.finalUnits;
@@ -3638,15 +3653,18 @@ function _pmComputeView(lots, view) {
       }
     }
     totalUnits += l.finalUnits;
+    lotSizes.push(l.finalUnits);
   });
   var entries = Object.entries(container).sort(function(a,b){return b[1]-a[1];}).slice(0,10);
   var avgLotSize = filtered.length ? Math.round(totalUnits / filtered.length) : 0;
+  var medianLotSize = computeMedianLotSize(lotSizes);
   return {
     entries: entries,
     containerTotal: entries.reduce(function(s,e){return s+e[1];},0),
     bucketCounts: bucketCounts,
     bucketLots: bucketLots,
     avgLotSize: avgLotSize,
+    medianLotSize: medianLotSize,
     lotCount: filtered.length
   };
 }
@@ -3717,7 +3735,9 @@ function renderProductMix() {
   // and the bucket cards.
   var avgEl = document.getElementById('pm-avg-lot');
   if (avgEl) {
-    avgEl.textContent = 'Avg lot size: ' + data.avgLotSize.toLocaleString() + ' units';
+    avgEl.innerHTML = 'Avg lot size: ' + data.avgLotSize.toLocaleString() + ' units'
+      + '&nbsp;&nbsp;&nbsp;&nbsp;'
+      + 'Median lot size: ' + data.medianLotSize.toLocaleString() + ' units';
   }
 
   // Auto-close drill-down if its bucket became empty (e.g. after a range change).
