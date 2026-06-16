@@ -3849,10 +3849,15 @@ function renderPerformance() {
   var now=d.now;
   if(!selectedPerfRange) selectedPerfRange = getDefaultPerfRange();
   // YTD-anchored ranges drift stale because range.end is cached at init time;
-  // re-stamp it to "now" on every render so the partial-month math (and the
-  // last-day-of-month asterisk in particular) tracks the actual current date.
+  // re-stamp it on every render so the partial-month math (and the last-day-of-
+  // month asterisk in particular) tracks the actual current date. Anchor the end
+  // to today's month/day but in the RANGE's own year — a prior-year YTD (e.g.
+  // "Year to date 2025") must end Jun 16 2025, not run forward into the current
+  // year, which would fold all of 2025 + the current YTD into one range.
   if (selectedPerfRange && /^Year to date/.test(selectedPerfRange.label||'')) {
-    selectedPerfRange.end = new Date();
+    var _now = new Date();
+    var _yr = selectedPerfRange.start.getFullYear();
+    selectedPerfRange.end = new Date(_yr, _now.getMonth(), _now.getDate(), 23, 59, 59);
   }
   var range = selectedPerfRange;
 
