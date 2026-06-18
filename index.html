@@ -2287,6 +2287,12 @@ function applyPerfCustomRange() {
 
 function closePerfRangePicker() { var p = document.getElementById('perf-range-picker'); if(p) p.remove(); }
 
+function goToDefaultPerfRange() {
+  selectedPerfRange = getDefaultPerfRange();
+  closePerfRangePicker();
+  renderPerformance();
+}
+
 // Wraps the actual render (renderImpl) to preserve scroll position, active-element
 // focus, and text-input selection across full re-renders. Callers don't need to
 // capture/restore scroll manually — rAF-scroll hacks at navigation sites are
@@ -4581,11 +4587,13 @@ function renderPerformance() {
 
   document.getElementById('content').innerHTML=
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;padding:.625rem 1rem;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;">'
-    +'<div style="position:relative;" id="perf-range-anchor">'
+    +'<div style="position:relative;display:flex;align-items:center;" id="perf-range-anchor">'
     +'<div onclick="openPerfRangePicker()" style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;padding:4px 12px;border-radius:8px;border:0.5px solid #444441;background:transparent;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
     +'<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="2" width="11" height="10" rx="2" stroke="#888780" stroke-width="1.2"/><line x1="4" y1="1" x2="4" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="9" y1="1" x2="9" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="1" y1="6" x2="12" y2="6" stroke="#888780" stroke-width="1.2"/></svg>'
     +'<span style="font-size:13px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+range.label+' &#x25BE;</span>'
-    +'</div></div>'
+    +'</div>'
+    +(range.label!==getDefaultPerfRange().label?'<button onclick="goToDefaultPerfRange()" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;margin-left:8px;">Jump to year to date</button>':'')
+    +'</div>'
     +'<div style="font-size:11px;color:#5f5e5a;">Comparing to same period in '+compYearLabel+'</div>'
     +'</div>'
     +'<div class="metrics" style="margin-bottom:16px;">'+metricsHTML+'</div>'
