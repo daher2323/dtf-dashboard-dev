@@ -400,10 +400,11 @@ var CSV_WEEKLY_TARGETS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqu
 var CSV_MATERIALS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=0&single=true&output=csv';
 // On-hand inventory (current stock by DTF Part #). One row per lot/batch; we sum
 // "Current Stock" across lots per part #. Joined to the consumption view by Part #.
-// Slim 4-column QUERY tab (Part #, Lot #, Material Name, Current Stock; archived rows
-// excluded server-side) — ~3x smaller than the full 21-column tab, for faster loads.
-// Headers match the full feed, so parseInventory is unchanged.
-var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTvPNQOXPE-cFbbJ9RFNRI9CSBsdXkq4PsvL0CcAOPkVmv90mFBytKymE8j3VEva606qR6Fk3Cfpjg1/pub?gid=641775374&single=true&output=csv';
+// Slim 4-column inventory feed (Part #, Lot #, Material Name, Current Stock; archived
+// rows excluded server-side) published from a SEPARATE lightweight spreadsheet that
+// IMPORTRANGEs the raw data. Isolating it from the heavy source doc cuts the cold
+// regeneration from ~50-150s to ~0.2-15s. Headers match, so parseInventory is unchanged.
+var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1449767280&single=true&output=csv';
 // Forthcoming (committed/forecasted) ingredient demand. NON-TABULAR: a wide sheet
 // of repeating [Part #, Ingredient Name, KG] blocks starting at row 12. We scan
 // every cell from row 12 down for a Part #, take the value two columns over as the
