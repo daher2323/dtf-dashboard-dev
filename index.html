@@ -409,7 +409,10 @@ var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZP
 // of repeating [Part #, Ingredient Name, KG] blocks starting at row 12. We scan
 // every cell from row 12 down for a Part #, take the value two columns over as the
 // KG, and sum by Part #. Joined to inventory/consumption by Part #.
-var CSV_DEMAND = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0RbxQFw87S9yCUIENC5Y8XIptzLrXD3PNP37FjqYR1VsCe0AqQgMV9InGYROVjHYDDWj039vuoKzY/pub?gid=600965521&single=true&output=csv';
+// Published from a separate lightweight spreadsheet that IMPORTRANGEs the raw demand
+// sheet — isolating it from the heavy planning doc drops the cold fetch from ~6-10s+
+// to ~0.3-5s. Same non-tabular block layout, so parseDemand is unchanged.
+var CSV_DEMAND = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=249860558&single=true&output=csv';
 var CSV_OPEN_ORDERS_POWDER  = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0RbxQFw87S9yCUIENC5Y8XIptzLrXD3PNP37FjqYR1VsCe0AqQgMV9InGYROVjHYDDWj039vuoKzY/pub?gid=1505899317&single=true&output=csv';
 var CSV_OPEN_ORDERS_CAPSULE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0RbxQFw87S9yCUIENC5Y8XIptzLrXD3PNP37FjqYR1VsCe0AqQgMV9InGYROVjHYDDWj039vuoKzY/pub?gid=1877513131&single=true&output=csv';
 var materialsData = [];
@@ -1348,7 +1351,11 @@ function parseCSVGrid(text) {
 }
 
 var DEMAND_PART_RE = /^\d{2}-\d{3,4}$/;       // DTF part # shape, e.g. 20-089, 20-1116, 10-095
-var DEMAND_FIRST_DATA_ROW = 11;               // real data starts at sheet row 12 (0-based 11)
+// Scan every row: the part-number regex is strict enough that the indicator/filter/
+// header rows (no "NN-NNN" cells) never match, so there's no need to skip a fixed
+// number of top rows — and not skipping keeps the scan correct regardless of how the
+// feed is offset (e.g. an IMPORTRANGE'd copy whose rows start higher).
+var DEMAND_FIRST_DATA_ROW = 0;
 
 // Scan the demand grid for part #s and accumulate KG (the cell two columns to the
 // right of each part #) into { part # -> total KG }. Validated to reproduce the
