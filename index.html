@@ -93,10 +93,21 @@
   .inv-skel { display:inline-block;height:9px;border-radius:3px;background:#444441;animation:invShimmer 1.1s ease-in-out infinite;vertical-align:middle; }
   /* Seam marking the boundary between the Stock-position and Consumption-history clusters in the Materials table. */
   .mat-seam { border-right:1.5px solid #2c2c2a; }
+  .mat-table { border-collapse: collapse; }
   /* Mobile: pin the rank (#) and Material columns so the name stays visible while the
      metric columns scroll horizontally. Desktop is wide enough that the table doesn't
-     scroll, so these rules have no visible effect there and the view is unchanged. */
+     scroll, so these rules have no visible effect there and the view is unchanged.
+     border-collapse:separate is required for sticky table cells to paint correctly in
+     Safari/WebKit (under collapse, scrolling cells paint over the pinned ones). We
+     restore the per-row divider via a cell border since row borders don't paint in
+     separate mode. */
   @media (max-width: 900px) {
+    .mat-table { border-collapse: separate; border-spacing: 0; }
+    .mat-table tbody td { border-bottom: 0.5px solid #2c2c2a; }
+    /* table-layout:fixed ignores min-width on <col>, so when the table overflows on
+       mobile the flex Material column collapses to ~0 (WebKit). Pin it to a real
+       width here so the name has room; desktop keeps its min-width flex behavior. */
+    col.matcol-name { width: 200px; }
     th.mat-pin-rank, td.mat-pin-rank { position: sticky; left: 0; z-index: 3; background: #1e2124; }
     th.mat-pin-name, td.mat-pin-name { position: sticky; left: 28px; z-index: 3; background: #1e2124; box-shadow: 6px 0 6px -4px rgba(0,0,0,.45); }
   }
@@ -7180,10 +7191,10 @@ function renderMaterials() {
 
   content.innerHTML = pickerHTML
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
-    +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-family:system-ui;table-layout:fixed;">'
+    +'<div style="overflow-x:auto;"><table class="mat-table" style="width:100%;font-family:system-ui;table-layout:fixed;">'
     +'<colgroup>'
     +'<col style="width:28px;">'      // # (rank)
-    +'<col style="min-width:170px;">' // Material
+    +'<col class="matcol-name" style="min-width:170px;">' // Material
     +'<col style="width:96px;">'      // On hand
     +'<col style="width:100px;">'     // Committed
     +'<col style="width:104px;">'     // Available
