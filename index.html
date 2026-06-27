@@ -6934,10 +6934,11 @@ function renderMaterials() {
       var completedKeys2 = monthKeys.slice(0, monthKeys.length - 1);
       var lastMoKey2 = completedKeys2.length ? completedKeys2[completedKeys2.length-1] : monthKeys[monthKeys.length-1];
       pb.lastMonth = Math.round(pb.byMonth[lastMoKey2]||0);
+      // ÷ actual completed-month count in each slice (see material-level avg above).
       var mo3b = completedKeys2.slice(-3).map(function(k){ return pb.byMonth[k]||0; });
-      pb.avg3 = Math.round(mo3b.reduce(function(a,b){return a+b;},0)/3);
+      pb.avg3 = mo3b.length > 0 ? Math.round(mo3b.reduce(function(a,b){return a+b;},0)/mo3b.length) : 0;
       var mo6b = completedKeys2.slice(-6).map(function(k){ return pb.byMonth[k]||0; });
-      pb.avg6 = Math.round(mo6b.reduce(function(a,b){return a+b;},0)/6);
+      pb.avg6 = mo6b.length > 0 ? Math.round(mo6b.reduce(function(a,b){return a+b;},0)/mo6b.length) : 0;
       pb.stock = inventoryByPart[pb.partNum] ? inventoryByPart[pb.partNum].stock : null;
       pb.demand = demandByPart[pb.partNum] || 0;
     });
@@ -6948,12 +6949,14 @@ function renderMaterials() {
     // Last COMPLETED month
     var lastMoKey = completedKeys.length ? completedKeys[completedKeys.length-1] : monthKeys[monthKeys.length-1];
     m.lastMonth = Math.round(m.byMonth[lastMoKey]||0);
-    // 3-month rolling avg — last 3 completed months
+    // 3-month rolling avg — last 3 completed months. Divide by the number of
+    // completed months actually in the slice (not the period), so a window with
+    // fewer than 3 completed months isn't averaged against phantom zero months.
     var mo3 = completedKeys.slice(-3).map(function(k){ return m.byMonth[k]||0; });
-    m.avg3 = Math.round(mo3.reduce(function(a,b){return a+b;},0)/3);
-    // 6-month rolling avg — last 6 completed months
+    m.avg3 = mo3.length > 0 ? Math.round(mo3.reduce(function(a,b){return a+b;},0)/mo3.length) : 0;
+    // 6-month rolling avg — last 6 completed months (÷ actual completed-month count).
     var mo6 = completedKeys.slice(-6).map(function(k){ return m.byMonth[k]||0; });
-    m.avg6 = Math.round(mo6.reduce(function(a,b){return a+b;},0)/6);
+    m.avg6 = mo6.length > 0 ? Math.round(mo6.reduce(function(a,b){return a+b;},0)/mo6.length) : 0;
     // vs 6-mo avg: compare 3-mo avg to 6-mo avg (is recent pace higher or lower than baseline?)
     m.vsPct = m.avg6 ? ((m.avg3 - m.avg6) / m.avg6 * 100) : 0;
     // Trend direction — consistent with vsPct badge (3mo avg vs 6mo avg)
@@ -7206,7 +7209,7 @@ function renderMaterials() {
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">3-mo avg</th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">6-mo avg</th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">3&#8596;6 mo</th>'
-      +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;line-height:1.4;">'+(matWindow===0?('All time total'+(allTimeLabel?'<br><span style="font-size:9px;font-weight:400;color:#5f5e5a;">('+allTimeLabel+')</span>':'')):matWindow+' mo total')+'</th>'
+      +'<th title="Total usage across the whole window, including the current in-progress month — so it won\'t equal the monthly average times the number of months." style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;line-height:1.4;cursor:help;">'+(matWindow===0?('All time total'+(allTimeLabel?'<br><span style="font-size:9px;font-weight:400;color:#5f5e5a;">('+allTimeLabel+')</span>':'')):matWindow+' mo total')+'</th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;">Lots</th>'
     +'</tr>'
     +'</thead><tbody>'+tableRows+'</tbody></table></div></div>';
