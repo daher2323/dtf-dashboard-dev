@@ -506,6 +506,7 @@ var matYear = new Date().getFullYear(); // kept for renderMatInline compat
 var matWindow = 6; // lookback months: 6 | 12 | 0=all
 var matSearch = '';
 var matShowZeroUsage = false; // when true, also show on-hand ingredients with zero usage in the current window (mirrors showZeroDes on Jars/Bottles/etc.)
+var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
 var ordersView = 'summary'; // 'summary' (more sub-views TBD)
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
 var openOrdersCapsule = null;
@@ -6492,6 +6493,188 @@ function filterMaterials() {
   });
 }
 
+// Aggregate this material's window consumption by customer. Resolves each
+// material lot to a Customer via the same lookup chain renderMatMonthDrill uses
+// (production CSV product → Lot # reference sheet → "Unknown"), restricted to
+// the months in `monthKeys` so totals match the quarterly summary's window.
+function buildMatCustomerData(m, monthKeys) {
+  var monthSet = {};
+  monthKeys.forEach(function(k){ monthSet[k] = true; });
+
+  // kg per lot for this material within the window
+  var matchingLots = {};
+  materialsData.forEach(function(r) {
+    if (!r.date) return;
+    var mk = r.date.getFullYear()+'-'+String(r.date.getMonth()+1).padStart(2,'0');
+    if (!monthSet[mk]) return;
+    var groupName = r.partNum && SKU_GROUPS[r.partNum] ? SKU_GROUPS[r.partNum] : r.material;
+    if (groupName !== m.name && r.material !== m.name) return;
+    var lot = r.lot; if (!lot) return;
+    matchingLots[lot] = (matchingLots[lot]||0) + r.qty;
+  });
+
+  // Lot → product from production CSV (current + prior year), same as the month drill.
+  var productByLot = {};
+  allRows.concat(allRows25).forEach(function(r) {
+    var lot = (r['Lot Number']||'').trim(); if (!lot) return;
+    if (!productByLot[lot] && r['Product']) productByLot[lot] = (r['Product']||'').trim();
+  });
+
+  var byCust = {};
+  Object.keys(matchingLots).forEach(function(lot) {
+    var kg = matchingLots[lot];
+    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
+    var lotIdxEntry = lotIndex[lot];
+    var product = productionProd
+               || (lotIdxEntry && lotIdxEntry.combined)
+               || ('Unknown (lot '+lot+')');
+    var customer = product.split('-')[0].trim() || 'Unknown';
+    if (!byCust[customer]) byCust[customer] = { customer: customer, kg: 0, lots: new Set(), products: new Set() };
+    byCust[customer].kg += kg;
+    byCust[customer].lots.add(lot);
+    byCust[customer].products.add(product);
+  });
+
+  return Object.values(byCust).sort(function(a,b){ return b.kg - a.kg; });
+}
+
+// Builds the inner HTML of the consumption-summary section (the toggle header +
+// either the quarterly table or the by-customer table). Lives in its own
+// function so setMatSummaryView can swap views without re-rendering the chart.
+function matSummaryInner(m, idx, monthKeys, unit) {
+  var toggle = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px;flex-wrap:wrap;">'
+    + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">'
+      + (matSummaryView === 'customer' ? 'By customer' : 'Quarterly summary') + '</div>'
+    + '<div style="display:flex;gap:4px;">'
+      + '<button onclick="setMatSummaryView(\'quarter\')" style="'+navBtnStyle(matSummaryView==='quarter')+'padding:3px 10px;font-size:11px;">By quarter</button>'
+      + '<button onclick="setMatSummaryView(\'customer\')" style="'+navBtnStyle(matSummaryView==='customer')+'padding:3px 10px;font-size:11px;">By customer</button>'
+    + '</div>'
+  + '</div>';
+
+  var tableHTML;
+  if (matSummaryView === 'customer') {
+    var custData = buildMatCustomerData(m, monthKeys);
+    var totalKg = custData.reduce(function(s,c){ return s+c.kg; }, 0);
+    if (!custData.length) {
+      tableHTML = '<div style="font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;padding:6px 0 2px;">No customer attribution available for this window.</div>';
+    } else {
+      var maxCustKg = Math.max.apply(null, custData.map(function(c){ return c.kg; })) || 1;
+      var custRows = custData.map(function(c) {
+        var kg = Math.round(c.kg);
+        var pct = totalKg ? ((c.kg/totalKg)*100).toFixed(1) : '0';
+        var bw = kg ? Math.round((c.kg/maxCustKg)*88) : 0;
+        var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
+        return '<tr>'
+          + '<td style="'+tdB+'padding-left:14px;color:#e8e6e0;font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;">'+esc(c.customer)+'</td>'
+          + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
+          + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.products.size+'</td>'
+          + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.lots.size+'</td>'
+          + '<td style="'+tdB+'padding-right:14px;width:120px;">'
+            + '<div style="display:flex;align-items:center;gap:6px;">'
+              + '<div style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+                + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
+              + '</div>'
+              + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
+            + '</div>'
+          + '</td>'
+          + '</tr>';
+      }).join('');
+      tableHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+        + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+          + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Customer</th>'
+          + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
+          + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Products</th>'
+          + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Lots</th>'
+          + '<th style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
+        + '</tr></thead>'
+        + '<tbody>'+custRows+'</tbody>'
+        + '</table></div>';
+    }
+  } else {
+    // Build quarterly rollup from byMonth
+    var curQk = getQuarterKey(new Date());
+    var qtrMap = {};
+    Object.keys(m.byMonth).forEach(function(mk) {
+      var parts = mk.split('-');
+      var dt = new Date(parseInt(parts[0]), parseInt(parts[1])-1, 1);
+      var qk = getQuarterKey(dt);
+      if (!qtrMap[qk]) qtrMap[qk] = 0;
+      qtrMap[qk] += m.byMonth[mk];
+    });
+    var allQks = Object.keys(qtrMap).sort();
+    if (!allQks.length) allQks = [curQk];
+    var firstQk = allQks[0];
+    var displayQks = [];
+    var dq = new Date(parseInt(firstQk.split('-')[0]), (parseInt(firstQk.split('Q')[1])-1)*3, 1);
+    while (getQuarterKey(dq) <= curQk) {
+      displayQks.push(getQuarterKey(dq));
+      dq.setMonth(dq.getMonth() + 3);
+    }
+    var maxQtrKg = Math.max.apply(null, displayQks.map(function(qk){ return qtrMap[qk]||0; })) || 1;
+
+    var qtrRows = displayQks.map(function(qk, qi) {
+      var kg = Math.round(qtrMap[qk]||0);
+      var isCur = qk === curQk;
+      var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
+      var rBg = isCur ? 'background:#1a2030;' : '';
+      var prevKg = null;
+      for (var pi=qi-1; pi>=0; pi--) {
+        var pv = Math.round(qtrMap[displayQks[pi]]||0);
+        if (pv > 0) { prevKg = pv; break; }
+      }
+      var delta = '';
+      if (kg > 0 && isCur) {
+        delta = '<span style="font-size:10px;color:#5f5e5a;">In progress</span>';
+      } else if (kg > 0 && prevKg !== null) {
+        var p = (kg-prevKg)/prevKg*100, pos = p>=0;
+        delta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:'+(pos?'#085041':'#791F1F')+';color:'+(pos?'#9FE1CB':'#F09595')+'">'+(pos?'+':'')+p.toFixed(1)+'%</span>';
+      } else if (kg > 0) {
+        delta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
+      }
+      var bw = kg ? Math.round((kg/maxQtrKg)*88) : 0;
+      var bCol = isCur ? '#378ADD' : '#4A6580';
+      return '<tr>'
+        + '<td style="'+tdB+rBg+'padding-left:14px;color:'+(isCur?'#378ADD':'#888780')+';font-weight:'+(isCur?'500':'400')+';">'
+          + (isCur?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')
+          + quarterLabel(qk)+(isCur?' <span style="font-size:10px;color:#5f5e5a;font-weight:400;">partial</span>':'')
+        + '</td>'
+        + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
+        + '<td style="'+tdB+rBg+'text-align:right;">'+delta+'</td>'
+        + '<td style="'+tdB+rBg+'padding-right:14px;width:120px;">'
+          + '<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+            + '<div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:2px;"></div>'
+          + '</div>'
+        + '</td>'
+        + '</tr>';
+    }).join('');
+
+    tableHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+        + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Quarter</th>'
+        + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
+        + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">vs prev</th>'
+        + '<th style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Volume</th>'
+      + '</tr></thead>'
+      + '<tbody>'+qtrRows+'</tbody>'
+      + '</table></div>';
+  }
+
+  return '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
+    + toggle + tableHTML + '</div>';
+}
+
+// Toggle the expanded-view consumption summary between quarter and customer
+// breakdowns. Rebuilds only the summary container, leaving the chart intact.
+function setMatSummaryView(view) {
+  if (matSummaryView === view) return;
+  matSummaryView = view;
+  trackEvent('materials_summary_toggle', { view: view });
+  var ctx = window._matInlineCtx;
+  if (!ctx) return;
+  var el = document.getElementById('mat-summary-'+ctx.idx);
+  if (el) el.innerHTML = matSummaryInner(ctx.m, ctx.idx, ctx.monthKeys, ctx.unit);
+}
+
 function renderMatInline(m, idx) {
   var panel = document.getElementById('mat-inline-'+idx);
   if (!panel) return;
@@ -6551,75 +6734,8 @@ function renderMatInline(m, idx) {
   var monthLabels = window._matMonthLabels || [];
   var chartData = monthKeys.map(function(k){ return Math.round(m.byMonth[k]||0); });
 
-  // Build quarterly rollup from byMonth
-  var now = new Date();
-  var curQk = getQuarterKey(now);
-  var qtrMap = {};
-  Object.keys(m.byMonth).forEach(function(mk) {
-    var parts = mk.split('-');
-    var dt = new Date(parseInt(parts[0]), parseInt(parts[1])-1, 1);
-    var qk = getQuarterKey(dt);
-    if (!qtrMap[qk]) qtrMap[qk] = 0;
-    qtrMap[qk] += m.byMonth[mk];
-  });
-  var allQks = Object.keys(qtrMap).sort();
-  if (!allQks.length) allQks = [curQk];
-  var firstQk = allQks[0];
-  var displayQks = [];
-  var dq = new Date(parseInt(firstQk.split('-')[0]), (parseInt(firstQk.split('Q')[1])-1)*3, 1);
-  while (getQuarterKey(dq) <= curQk) {
-    displayQks.push(getQuarterKey(dq));
-    dq.setMonth(dq.getMonth() + 3);
-  }
-  var maxQtrKg = Math.max.apply(null, displayQks.map(function(qk){ return qtrMap[qk]||0; })) || 1;
-
-  var qtrRows = displayQks.map(function(qk, qi) {
-    var kg = Math.round(qtrMap[qk]||0);
-    var isCur = qk === curQk;
-    var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
-    var rBg = isCur ? 'background:#1a2030;' : '';
-    var prevKg = null;
-    for (var pi=qi-1; pi>=0; pi--) {
-      var pv = Math.round(qtrMap[displayQks[pi]]||0);
-      if (pv > 0) { prevKg = pv; break; }
-    }
-    var delta = '';
-    if (kg > 0 && isCur) {
-      delta = '<span style="font-size:10px;color:#5f5e5a;">In progress</span>';
-    } else if (kg > 0 && prevKg !== null) {
-      var p = (kg-prevKg)/prevKg*100, pos = p>=0;
-      delta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:'+(pos?'#085041':'#791F1F')+';color:'+(pos?'#9FE1CB':'#F09595')+'">'+(pos?'+':'')+p.toFixed(1)+'%</span>';
-    } else if (kg > 0) {
-      delta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
-    }
-    var bw = kg ? Math.round((kg/maxQtrKg)*88) : 0;
-    var bCol = isCur ? '#378ADD' : '#4A6580';
-    return '<tr>'
-      + '<td style="'+tdB+rBg+'padding-left:14px;color:'+(isCur?'#378ADD':'#888780')+';font-weight:'+(isCur?'500':'400')+';">'
-        + (isCur?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')
-        + quarterLabel(qk)+(isCur?' <span style="font-size:10px;color:#5f5e5a;font-weight:400;">partial</span>':'')
-      + '</td>'
-      + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'\u2014')+'</td>'
-      + '<td style="'+tdB+rBg+'text-align:right;">'+delta+'</td>'
-      + '<td style="'+tdB+rBg+'padding-right:14px;width:120px;">'
-        + '<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
-          + '<div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:2px;"></div>'
-        + '</div>'
-      + '</td>'
-      + '</tr>';
-  }).join('');
-
-  var qtrTableHTML = '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
-    + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Quarterly summary</div>'
-    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
-    + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
-      + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Quarter</th>'
-      + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
-      + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">vs prev</th>'
-      + '<th style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Volume</th>'
-    + '</tr></thead>'
-    + '<tbody>'+qtrRows+'</tbody>'
-    + '</table></div></div>';
+  // Quarterly / by-customer consumption summary (toggle lives in the section header)
+  var summaryHTML = '<div id="mat-summary-'+idx+'">'+matSummaryInner(m, idx, monthKeys, unit)+'</div>';
 
   // Per-part breakdown table (grouped SKUs only)
   var breakdownHTML = '';
@@ -6698,9 +6814,13 @@ function renderMatInline(m, idx) {
       + '</div>'
       + '<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+esc(unit)+' for '+esc(m.name)+'">Trend.</canvas></div>'
       + '<div id="mat-month-drill-'+idx+'" style="margin-top:0;"></div>'
-      + qtrTableHTML
+      + summaryHTML
       + breakdownHTML
     + '</div>';
+
+  // Stash context so the By quarter / By customer toggle can rebuild just the
+  // summary section without tearing down the chart or month drill.
+  window._matInlineCtx = { m: m, idx: idx, monthKeys: monthKeys, unit: unit };
 
   // Restore drill state if it was open before refresh
   if (window._matDrillState && window._matDrillState[idx]) {
