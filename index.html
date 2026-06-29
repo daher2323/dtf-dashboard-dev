@@ -6542,12 +6542,12 @@ function buildMatCustomerData(m, monthKeys) {
 // either the quarterly table or the by-customer table). Lives in its own
 // function so setMatSummaryView can swap views without re-rendering the chart.
 function matSummaryInner(m, idx, monthKeys, unit) {
-  var toggle = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px;flex-wrap:wrap;">'
-    + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">'
-      + (matSummaryView === 'customer' ? 'By customer' : 'Quarterly summary') + '</div>'
-    + '<div style="display:flex;gap:4px;">'
-      + '<button onclick="setMatSummaryView(\'quarter\')" style="'+navBtnStyle(matSummaryView==='quarter')+'padding:3px 10px;font-size:11px;">By quarter</button>'
-      + '<button onclick="setMatSummaryView(\'customer\')" style="'+navBtnStyle(matSummaryView==='customer')+'padding:3px 10px;font-size:11px;">By customer</button>'
+  // Left-aligned segmented control, matching the By quarter / By customer toggle
+  // on the Jars/Bottles/Lids cards. Replaces the old section label.
+  var toggle = '<div style="display:flex;align-items:center;margin-bottom:10px;">'
+    + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      + '<button onclick="setMatSummaryView(\'quarter\')" style="'+navBtnStyle(matSummaryView==='quarter')+'">By quarter</button>'
+      + '<button onclick="setMatSummaryView(\'customer\')" style="'+navBtnStyle(matSummaryView==='customer')+'">By customer</button>'
     + '</div>'
   + '</div>';
 
