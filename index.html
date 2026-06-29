@@ -1941,6 +1941,39 @@ function navBtnStyle(isActive) {
   return 'padding:4px 14px;border-radius:6px;border:'+(isActive?'1.5px solid #378ADD':'1.5px solid transparent')+';background:'+(isActive?'#0C447C':'transparent')+';color:'+(isActive?'#85B7EB':'#888780')+';font-weight:'+(isActive?'500':'400')+';font-size:12px;cursor:pointer;font-family:system-ui;transition:all .15s;';
 }
 
+// Lightweight hover tooltip rendered at the body level so it is never clipped by
+// an overflow:auto scroll container (which is what makes native title= tooltips
+// unreliable inside the data tables). Reads the text from the element's data-tip
+// attribute. Wire up with onmouseenter="showColTip(this)" onmouseleave="hideColTip()".
+function showColTip(el) {
+  var text = el && el.getAttribute('data-tip');
+  if (!text) return;
+  var tip = document.getElementById('col-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'col-tip';
+    tip.style.cssText = 'position:fixed;z-index:99999;max-width:300px;background:#0b0c0e;border:0.5px solid #444441;border-radius:8px;padding:8px 11px;font-size:11px;line-height:1.5;color:#cfcdc7;font-weight:400;text-transform:none;letter-spacing:normal;text-align:left;font-family:system-ui;box-shadow:0 6px 24px rgba(0,0,0,.55);pointer-events:none;opacity:0;transition:opacity .1s;';
+    document.body.appendChild(tip);
+  }
+  tip.textContent = text;
+  tip.style.display = 'block';
+  // Measure, then center under the header and clamp inside the viewport.
+  var r = el.getBoundingClientRect();
+  var tw = tip.offsetWidth, th = tip.offsetHeight;
+  var left = r.left + r.width / 2 - tw / 2;
+  if (left < 6) left = 6;
+  if (left + tw > window.innerWidth - 6) left = window.innerWidth - 6 - tw;
+  var top = r.bottom + 6;
+  if (top + th > window.innerHeight - 6) top = r.top - th - 6; // flip above if no room below
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+  requestAnimationFrame(function(){ var t = document.getElementById('col-tip'); if (t) t.style.opacity = '1'; });
+}
+function hideColTip() {
+  var tip = document.getElementById('col-tip');
+  if (tip) { tip.style.opacity = '0'; tip.style.display = 'none'; }
+}
+
 // ── Main section switcher ─────────────────────────────────────────────────
 
 function setMainSection(s) {
@@ -7013,6 +7046,7 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
 function renderMaterials() {
   var content = document.getElementById('content');
   if (!content) return;
+  hideColTip(); // drop any open header tooltip before the table is rebuilt
   var rows = materialsData;
   if (!rows.length) {
     content.innerHTML = '<div style="padding:2rem;text-align:center;font-family:system-ui;">'
@@ -7336,16 +7370,16 @@ function renderMaterials() {
     +'</tr>'
     // Column row.
     +'<tr>'
-      +'<th title="Current inventory on hand across all lots for this material, joined by Part #." style="text-align:right;padding:8px 10px;font-size:10px;color:#85B7EB;font-weight:500;white-space:nowrap;cursor:help;">On hand</th>'
-      +'<th title="Forthcoming demand already on the books — quantity committed or forecast against this material, joined by Part #." style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;cursor:help;">Committed</th>'
-      +'<th title="Net position after demand: on hand minus committed. Surplus (green) when at or above zero, Short (red) when negative. This is the demand-aware number." style="text-align:center;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;cursor:help;">Available</th>'
-      +'<th title="Months of stock at the recent burn rate: on hand divided by the 3-month average monthly consumption. Based on PAST usage only — it does NOT subtract committed or forthcoming demand, so check Available for the demand-aware position. Under 1 mo = red, 1–2 mo = amber, 2 mo or more = green." class="mat-seam" style="text-align:center;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;cursor:help;"><span style="text-decoration:underline dotted #5f5e5a;text-underline-offset:2px;">Cover</span></th>'
+      +'<th data-tip="Current inventory on hand across all lots for this material, joined by Part #." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" style="text-align:right;padding:8px 10px;font-size:10px;color:#85B7EB;font-weight:500;white-space:nowrap;cursor:help;">On hand</th>'
+      +'<th data-tip="Forthcoming demand already on the books — quantity committed or forecast against this material, joined by Part #." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;cursor:help;">Committed</th>'
+      +'<th data-tip="Net position after demand: on hand minus committed. Surplus (green) when at or above zero, Short (red) when negative. This is the demand-aware number." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" style="text-align:center;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;cursor:help;">Available</th>'
+      +'<th data-tip="Months of stock at the recent burn rate: on hand divided by the 3-month average monthly consumption. Based on PAST usage only — it does NOT subtract committed or forthcoming demand, so check Available for the demand-aware position. Under 1 mo = red, 1–2 mo = amber, 2 mo or more = green." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" class="mat-seam" style="text-align:center;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;cursor:help;"><span style="text-decoration:underline dotted #5f5e5a;text-underline-offset:2px;">Cover</span></th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">Last month</th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">3-mo avg</th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">6-mo avg</th>'
       +'<th style="text-align:center;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;">6-mo trend</th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">3&#8596;6 mo</th>'
-      +'<th title="Total usage across the whole window, including the current in-progress month — so it won\'t equal the monthly average times the number of months." style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;line-height:1.4;cursor:help;">'+(matWindow===0?('All time total'+(allTimeLabel?'<br><span style="font-size:9px;font-weight:400;color:#5f5e5a;">('+allTimeLabel+')</span>':'')):matWindow+' mo total')+'</th>'
+      +'<th data-tip="Total usage across the whole window, including the current in-progress month — so it won\'t equal the monthly average times the number of months." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;line-height:1.4;cursor:help;">'+(matWindow===0?('All time total'+(allTimeLabel?'<br><span style="font-size:9px;font-weight:400;color:#5f5e5a;">('+allTimeLabel+')</span>':'')):matWindow+' mo total')+'</th>'
     +'</tr>'
     +'</thead><tbody>'+tableRows+'</tbody></table></div></div>';
 
