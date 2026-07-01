@@ -3893,6 +3893,14 @@ function computeMedianLotSize(sizes) {
   return sorted[mid];
 }
 
+// Format a stock-position quantity (On hand / Committed / Available) to the
+// hundredth, trimming trailing zeros so exact figures show precisely:
+// 64.8 -> "64.8", 64.85 -> "64.85", 65 -> "65". Consumption columns stay
+// integer-rounded (see the local `fmt` helpers) — only stock position is exact.
+function fmtStockQty(v) {
+  return Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
 function computeMonthsOfCover(onHand, threeMonthAvg) {
   // Returns months of supply at recent (3-mo avg) burn rate, or null when
   // there is no usable burn rate (no usage history). Null is rendered as an
@@ -6713,13 +6721,13 @@ function renderMatInline(m, idx) {
   if (!panel) return;
   var unit = matUnit(m.name);
   function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unit:'\u2014'; }
-  function fmtStockI(v){ return v==null ? '\u2014' : (v>0 ? Math.round(v).toLocaleString()+' '+unit : '0 '+unit); }
+  function fmtStockI(v){ return v==null ? '\u2014' : (v>0 ? fmtStockQty(v)+' '+unit : '0 '+unit); }
 
   // No-usage-history rows are pure on-hand inventory \u2014 no consumption series to
   // chart. Show a stock summary + per-part on-hand breakdown and return.
   if (m.noConsumption) {
     var aftN = m.afterDemand;
-    var aftNTxt = aftN == null ? '—' : ((aftN > 0 ? '+' : '') + Math.round(aftN).toLocaleString() + ' ' + unit);
+    var aftNTxt = aftN == null ? '—' : ((aftN > 0 ? '+' : '') + fmtStockQty(aftN) + ' ' + unit);
     var aftNCol = aftN == null ? '#5f5e5a' : (aftN < 0 ? '#F09595' : '#9FE1CB'); // binary green/red, matching the table's Available pill
     var invParts = Object.values(m.partBreakdown).sort(function(a,b){ return b.stock - a.stock; });
     var invRows = invParts.map(function(pb){
@@ -6728,7 +6736,7 @@ function renderMatInline(m, idx) {
         + '<td style="padding:5px 10px;font-size:11px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+esc(pb.partNum)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;color:#888780;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(invMat)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#85B7EB;white-space:nowrap;">'+fmtStockI(pb.stock)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?Math.round(pb.demand).toLocaleString()+' '+unit:'—')+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?fmtStockQty(pb.demand)+' '+unit:'—')+'</td>'
         + '<td style="padding:5px 14px;font-size:11px;text-align:right;color:#888780;">'+pb.lotCount+'</td>'
         + '</tr>';
     }).join('');
@@ -6739,7 +6747,7 @@ function renderMatInline(m, idx) {
             + '<div style="font-size:15px;font-weight:500;color:#85B7EB;font-family:system-ui;">'+fmtStockI(m.stock)+'</div></div>'
           + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
           + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Committed</div>'
-            + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?Math.round(m.demand).toLocaleString()+' '+unit:'—')+'</div></div>'
+            + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?fmtStockQty(m.demand)+' '+unit:'—')+'</div></div>'
           + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
           + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Available</div>'
             + '<div style="font-size:15px;font-weight:500;color:'+aftNCol+';font-family:system-ui;">'+aftNTxt+'</div></div>'
@@ -6782,7 +6790,7 @@ function renderMatInline(m, idx) {
         + '<td style="padding:5px 10px;font-size:11px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+esc(pb.partNum)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(matLabel)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#85B7EB;white-space:nowrap;">'+fmtStockI(pb.stock)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?Math.round(pb.demand).toLocaleString()+' '+unit:'—')+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?fmtStockQty(pb.demand)+' '+unit:'—')+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+fmt(pb.lastMonth)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.avg3)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.totalKg)+'</td>'
@@ -6816,7 +6824,7 @@ function renderMatInline(m, idx) {
   }
 
   var aft = m.afterDemand;
-  var aftTxt = aft == null ? '—' : ((aft > 0 ? '+' : '') + Math.round(aft).toLocaleString() + ' ' + unit);
+  var aftTxt = aft == null ? '—' : ((aft > 0 ? '+' : '') + fmtStockQty(aft) + ' ' + unit);
   var aftCol = aft == null ? '#5f5e5a' : (aft < 0 ? '#F09595' : '#9FE1CB'); // binary green/red, matching the table's Available pill
   panel.innerHTML =
     '<div style="padding:12px 14px 14px 56px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
@@ -6825,7 +6833,7 @@ function renderMatInline(m, idx) {
           + '<div style="font-size:15px;font-weight:500;color:#85B7EB;font-family:system-ui;">'+fmtStockI(m.stock)+'</div></div>'
         + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
         + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Committed</div>'
-          + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?Math.round(m.demand).toLocaleString()+' '+unit:'—')+'</div></div>'
+          + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?fmtStockQty(m.demand)+' '+unit:'—')+'</div></div>'
         + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
         + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Available</div>'
           + '<div style="font-size:15px;font-weight:500;color:'+aftCol+';font-family:system-ui;">'+aftTxt+'</div></div>'
@@ -7224,11 +7232,11 @@ function renderMaterials() {
   // stock (amber), else the rounded quantity in the material's unit.
   function fmtStock(v, u){
     if (v == null) return '<span style="color:#5f5e5a;">—</span>';
-    return v > 0 ? Math.round(v).toLocaleString()+' '+u : '<span style="color:#E0894A;">0 '+u+'</span>';
+    return v > 0 ? fmtStockQty(v)+' '+u : '<span style="color:#E0894A;">0 '+u+'</span>';
   }
-  // Forthcoming demand cell: 0 = nothing on the books ("—"), else the rounded qty.
+  // Forthcoming demand cell: 0 = nothing on the books ("—"), else the exact qty.
   function fmtDemand(v, u){
-    return v > 0 ? Math.round(v).toLocaleString()+' '+u : '<span style="color:#5f5e5a;">—</span>';
+    return v > 0 ? fmtStockQty(v)+' '+u : '<span style="color:#5f5e5a;">—</span>';
   }
   // Available badge: net = on-hand − committed. "Surplus" (green) when >= 0,
   // "Short" (red) when negative — the word carries the sign, so the value is shown
@@ -7243,7 +7251,7 @@ function renderMaterials() {
     // Cover label/bar line up with the word/quantity in the adjacent column.
     return '<span style="display:inline-flex;flex-direction:column;align-items:center;justify-content:center;min-width:86px;box-sizing:border-box;padding:4px 8px;border-radius:5px;background:'+bg+';color:'+txt+';font-family:system-ui;white-space:nowrap;">'
       +'<span style="font-size:9px;font-weight:500;letter-spacing:.03em;line-height:14px;">'+word+'</span>'
-      +'<span style="font-size:11px;font-weight:500;line-height:15px;">'+Math.round(val).toLocaleString()+' '+u+'</span>'
+      +'<span style="font-size:11px;font-weight:500;line-height:15px;">'+fmtStockQty(val)+' '+u+'</span>'
       +'</span>';
   }
 
@@ -8818,9 +8826,9 @@ function exportMaterials() {
       m.name,
       (m.partNums||[]).join(', '),
       matUnit(m.name),
-      m.stock == null ? '' : Math.round(m.stock),
-      m.demand > 0 ? Math.round(m.demand) : 0,
-      m.afterDemand == null ? '' : Math.round(m.afterDemand),
+      m.stock == null ? '' : Math.round(m.stock * 100) / 100,
+      m.demand > 0 ? Math.round(m.demand * 100) / 100 : 0,
+      m.afterDemand == null ? '' : Math.round(m.afterDemand * 100) / 100,
       Math.round(m.lastMonth || 0),
       Math.round(m.avg3 || 0),
       Math.round(m.avg6 || 0),
