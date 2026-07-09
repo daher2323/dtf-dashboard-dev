@@ -540,6 +540,15 @@ Object.keys(SKU_GROUPS).forEach(function(p){
   var g = SKU_GROUPS[p];
   (GROUP_PARTS[g] = GROUP_PARTS[g] || []).push(p);
 });
+// Standardize a component/SKU name so operator casing variants collapse into a
+// single aggregated row. Operators enter the "mm" size unit inconsistently
+// ("89MM" vs "89mm" vs "89 mm"); we canonicalize any mm unit that follows a
+// digit to lowercase with no leading space, and collapse stray whitespace. This
+// merges e.g. "89MM Black Smooth" into "89mm Black Smooth". A genuine typo like
+// "89mmm" (three m's) has no word boundary after the pair and is left untouched.
+function normMatName(s) {
+  return (s || '').replace(/(\d)\s*mm\b/gi, '$1mm').replace(/\s+/g, ' ').trim();
+}
 var showZeroDes = false;
 var lastRefreshTime = 0;
 // True while a CSV fetch is in flight — drives the "refreshing…" suffix on
@@ -3072,7 +3081,7 @@ function buildDailyCompletedGrid(completedToday, isLive) {
           var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
           var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
           function cleanLid(v){ return v&&!/^(n\/a|none|n\/a n\/a|n\/a n\/a n\/a)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; }
-          var lidStr=[l.lidSize,l.lidColor,l.lidProfile].map(cleanLid).filter(Boolean).join(' ');
+          var lidStr=normMatName([l.lidSize,l.lidColor,l.lidProfile].map(cleanLid).filter(Boolean).join(' '));
           var containerStr=[l.bottleSize||l.jarSize,lidStr].filter(Boolean).join(' / ');
           var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
             +'<div>'
@@ -3154,7 +3163,7 @@ function buildWeekLotsGrid(lots) {
           +'</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+esc(brand)+'</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+esc(product)+'</div>'
-          +(function(){ function cL(v){ return v&&!/^(n\/a|none)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; } var ls=[l.lidSize,l.lidColor,l.lidProfile].map(cL).filter(Boolean).join(' '); var cs=[l.bottleSize||l.jarSize,ls].filter(Boolean).join(' / '); return cs?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+esc(cs)+'</div>':''; })()
+          +(function(){ function cL(v){ return v&&!/^(n\/a|none)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; } var ls=normMatName([l.lidSize,l.lidColor,l.lidProfile].map(cL).filter(Boolean).join(' ')); var cs=[l.bottleSize||l.jarSize,ls].filter(Boolean).join(' / '); return cs?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+esc(cs)+'</div>':''; })()
           +'</div>'
           +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
           +'</div>'
@@ -6339,10 +6348,10 @@ function exportProcurement() {
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
 
   function getSku(r) {
-    if (procView === 'lids') return [r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' ');
+    if (procView === 'lids') return normMatName([r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' '));
     if (isDes)  { var dv=(r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv)?'':dv; }
     if (isNeck) { var nv=(r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv)?'':nv; }
-    return (r[procView==='jars'?'Jar Size':'Bottle Size']||'').trim();
+    return normMatName((r[procView==='jars'?'Jar Size':'Bottle Size']||'').trim());
   }
   function getUnits(r) { return isDes ? num(r['Number of Desiccants Used']) : num(r['Final Units']); }
 
@@ -8307,11 +8316,11 @@ function renderProcurement() {
   function getSku(r) {
     if (procView === 'lids') {
       var parts = [r['Lid Size'], r['Lid Color'], r['Lid Profile']].map(function(v){ return (v||'').trim(); }).filter(Boolean);
-      return parts.join(' ');
+      return normMatName(parts.join(' '));
     }
     if (isDes)  { var dv = (r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv) ? '' : dv; }
     if (isNeck) { var nv = (r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv) ? '' : nv; }
-    return (r[procView === 'jars' ? 'Jar Size' : 'Bottle Size']||'').trim();
+    return normMatName((r[procView === 'jars' ? 'Jar Size' : 'Bottle Size']||'').trim());
   }
 
   function getUnits(r) {
@@ -8689,10 +8698,10 @@ function toggleProcExportPopover(e) {
   var ytdStart = new Date(now.getFullYear(),0,1);
   var allRowsCombined = allRows.concat(allRows25);
   function getSku2(r) {
-    if (procView==='lids') return [r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' ');
+    if (procView==='lids') return normMatName([r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' '));
     if (isDes)  { var dv=(r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv)?'':dv; }
     if (procView==='neckbands') { var nv=(r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv)?'':nv; }
-    return (r[procView==='jars'?'Jar Size':'Bottle Size']||'').trim();
+    return normMatName((r[procView==='jars'?'Jar Size':'Bottle Size']||'').trim());
   }
   function getUnits2(r) { return isDes ? num(r['Number of Desiccants Used']) : num(r['Final Units']); }
   var skuYtd = {};
