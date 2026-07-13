@@ -247,18 +247,27 @@
 
   .agf-grid { display:grid; gap:10px 10px; align-items:center; margin-bottom:20px; } /* grid-template-columns set inline; margin clears the bucket tiles below */
   .agf-glabel { grid-column:1; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase;
-    color:#55606e; white-space:nowrap; }
-  .agf-glabel.att { color:#cf8f91; }
+    white-space:nowrap; font-weight:600; }
+  .agf-glabel.att { color:#d98a8d; }
+  .agf-glabel.mot { color:#8fa0b8; }
 
-  .agf-chip { display:flex; align-items:center; justify-content:space-between; gap:16px; width:100%;
-    padding:7px 12px; border-radius:8px; border:1px solid transparent; cursor:pointer; user-select:none;
-    font-size:12.5px; font-weight:500; }
-  .agf-chip.att { background:rgba(224,104,107,.12); border-color:rgba(224,104,107,.30); color:#f0a9ab; }
-  .agf-chip.mot { background:rgba(122,136,155,.09); border-color:rgba(122,136,155,.22); color:#aeb8c6; }
-  .agf-chip:hover { border-color:rgba(255,255,255,.22); }
-  .agf-chip .agf-n { font-size:11px; color:#7c8698; font-variant-numeric:tabular-nums; }
-  .agf-chip.off { opacity:.32; }
+  .agf-chip { display:flex; align-items:center; gap:9px; width:100%; padding:7px 12px;
+    border-radius:8px; border:1px solid; cursor:pointer; user-select:none; font-size:12.5px; font-weight:500; }
+  .agf-chip .agf-n { margin-left:auto; font-size:11px; font-variant-numeric:tabular-nums; color:#7c8698; }
+  .agf-mark { width:15px; height:15px; border-radius:4px; flex:0 0 auto;
+    display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; }
+
+  /* ON (any chip without .off) */
+  .agf-chip.att:not(.off) { background:rgba(224,104,107,.13); border-color:rgba(224,104,107,.38); color:#f2b0b2; }
+  .agf-chip.mot:not(.off) { background:rgba(143,160,184,.13); border-color:rgba(143,160,184,.38); color:#c6d0de; }
+  .agf-chip.att:not(.off) .agf-mark { background:#e0686b; color:#1a0d0e; }
+  .agf-chip.mot:not(.off) .agf-mark { background:#8fa0b8; color:#12161d; }
+
+  /* OFF */
+  .agf-chip.off { background:transparent; border-color:rgba(148,163,184,.16); color:#6b7688; }
   .agf-chip.off .agf-lbl { text-decoration:line-through; }
+  .agf-chip.off .agf-n { color:#6b7688; }
+  .agf-chip.off .agf-mark { background:transparent; border:1.5px solid rgba(148,163,184,.30); }
 </style>
 <!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
      Production-only: the gtag('config') call is gated on the URL not
@@ -605,6 +614,7 @@ function renderAgingStatusBar(agingOrders) {
   function chipHTML(m, cls) {
     var on = activeStatuses[m.key] === true;
     return '<span class="agf-chip ' + cls + (on ? '' : ' off') + '" onclick="toggleStatus(' + jsStr(m.key) + ')">'
+      + '<span class="agf-mark">' + (on ? '&#10003;' : '') + '</span>'
       + '<span class="agf-lbl">' + esc(m.label) + '</span>'
       + '<span class="agf-n">' + m.count.toLocaleString() + '</span>'
       + '</span>';
@@ -620,7 +630,7 @@ function renderAgingStatusBar(agingOrders) {
   h += '<div class="agf-grid" style="grid-template-columns:120px repeat(' + maxCols + ',max-content);">';
   h +=   '<span class="agf-glabel att">Needs attention</span>';
   for (i = 0; i < attention.length; i++) h += chipHTML(attention[i], 'att');
-  h +=   '<span class="agf-glabel">In motion</span>';
+  h +=   '<span class="agf-glabel mot">In motion</span>';
   for (i = 0; i < motion.length; i++) h += chipHTML(motion[i], 'mot');
   h += '</div>';
   return h;
