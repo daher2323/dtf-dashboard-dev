@@ -245,7 +245,7 @@
   .agf-seg button:hover { color:#e8edf5; }
   .agf-seg button.on { background:rgba(55,138,221,.20); color:#9cc7f3; }
 
-  .agf-grid { display:grid; gap:10px 10px; align-items:center; } /* grid-template-columns set inline */
+  .agf-grid { display:grid; gap:10px 10px; align-items:center; margin-bottom:20px; } /* grid-template-columns set inline; margin clears the bucket tiles below */
   .agf-glabel { grid-column:1; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase;
     color:#55606e; white-space:nowrap; }
   .agf-glabel.att { color:#cf8f91; }
@@ -8360,7 +8360,8 @@ function renderOrdersSummary() {
   // Buckets every open order by `# of Weeks on the Books`, independent of
   // Planning Status. The Labels Blocker only covers one status; a lot of
   // stuck work hides in Customer Driven / Ready to Plan / Scheduled, etc.
-  // Shows only 4+ weeks (anything younger is routine).
+  // Spans all ages: the 0–4 week tile catches recent orders so a status whose
+  // orders are all sub-4-week (e.g. Customer Driven) isn't invisible in tiles.
   var agingRowsAll = [];
   Object.keys(stats.rowsByStatus || {}).forEach(function(st){
     var rb = stats.rowsByStatus[st] || {};
@@ -8372,18 +8373,21 @@ function renderOrdersSummary() {
   initStatusFilter(agingRowsAll);
   var agingRowsActive = activeAgingOrders(agingRowsAll);
   var agingBuckets = {
+    '0-4':  { rows:[], units:0, label:'0–4 weeks',  color:'#9aa7b8', bg:'#1c2128', accent:'#64748b' },
     '4-8':  { rows:[], units:0, label:'4–8 weeks',  color:'#FAC775', bg:'#2a2310', accent:'#FAC775' },
     '8-12': { rows:[], units:0, label:'8–12 weeks', color:'#EF9F27', bg:'#2a1e0a', accent:'#EF9F27' },
     '12+':  { rows:[], units:0, label:'12+ weeks',      color:'#F09595', bg:'#2a1414', accent:'#E24B4A' }
   };
   agingRowsActive.forEach(function(x){
     var w = num(x.row['# of Weeks on the Books']);
-    var key = w >= 12 ? '12+' : w >= 8 ? '8-12' : w >= 4 ? '4-8' : null;
+    // 4+ branches are unchanged (byte-for-byte membership); the 0–4 branch is
+    // purely additive — it catches rows the old code dropped to null.
+    var key = w >= 12 ? '12+' : w >= 8 ? '8-12' : w >= 4 ? '4-8' : (w >= 0 ? '0-4' : null);
     if (!key) return;
     agingBuckets[key].rows.push(x);
     agingBuckets[key].units += num(x.row['Order Amount']);
   });
-  var agingOrder = ['12+','8-12','4-8'];  // most urgent on the left
+  var agingOrder = ['12+','8-12','4-8','0-4'];  // oldest -> newest, left to right
   // Collapse an orphan drilldown if the bucket is now empty (e.g. after refresh).
   if (agingDrilldown && (!agingBuckets[agingDrilldown] || agingBuckets[agingDrilldown].rows.length === 0)) {
     agingDrilldown = null;
@@ -8460,8 +8464,8 @@ function renderOrdersSummary() {
   }
 
   var agingSummary = agingTotalCount === 0
-    ? 'No orders have been on the books 4+ weeks.'
-    : agingTotalCount + ' order' + (agingTotalCount===1?'':'s') + ' · ' + agingTotalUnits.toLocaleString() + ' units on the books 4+ weeks';
+    ? 'No orders on the books.'
+    : agingTotalCount + ' order' + (agingTotalCount===1?'':'s') + ' · ' + agingTotalUnits.toLocaleString() + ' units on the books';
 
   var _afState = agingFilterState(agingRowsAll);
   var agingHeaderSuffix = _afState === 'all' ? 'All Statuses' : _afState === 'actionable' ? 'Actionable Only' : _afState === 'noaction' ? 'No Action Needed' : 'Filtered';
