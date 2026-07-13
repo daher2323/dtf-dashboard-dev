@@ -236,6 +236,29 @@
     transform-origin: center;
     animation: pctTargetPulse 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
+
+  /* Order Aging status filter bar (Open Orders → Order Aging only) */
+  .agf-seg { display:inline-flex; border:1px solid #1f2937; border-radius:8px; overflow:hidden; margin-bottom:16px; }
+  .agf-seg button { font-size:13px; font-weight:550; padding:8px 16px; border:none; background:transparent;
+    color:#7c8698; cursor:pointer; border-right:1px solid #1f2937; }
+  .agf-seg button:last-child { border-right:none; }
+  .agf-seg button:hover { color:#e8edf5; }
+  .agf-seg button.on { background:rgba(55,138,221,.20); color:#9cc7f3; }
+
+  .agf-grid { display:grid; gap:10px 10px; align-items:center; } /* grid-template-columns set inline */
+  .agf-glabel { grid-column:1; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase;
+    color:#55606e; white-space:nowrap; }
+  .agf-glabel.att { color:#cf8f91; }
+
+  .agf-chip { display:flex; align-items:center; justify-content:space-between; gap:16px; width:100%;
+    padding:7px 12px; border-radius:8px; border:1px solid transparent; cursor:pointer; user-select:none;
+    font-size:12.5px; font-weight:500; }
+  .agf-chip.att { background:rgba(224,104,107,.12); border-color:rgba(224,104,107,.30); color:#f0a9ab; }
+  .agf-chip.mot { background:rgba(122,136,155,.09); border-color:rgba(122,136,155,.22); color:#aeb8c6; }
+  .agf-chip:hover { border-color:rgba(255,255,255,.22); }
+  .agf-chip .agf-n { font-size:11px; color:#7c8698; font-variant-numeric:tabular-nums; }
+  .agf-chip.off { opacity:.32; }
+  .agf-chip.off .agf-lbl { text-decoration:line-through; }
 </style>
 <!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
      Production-only: the gtag('config') call is gated on the URL not
@@ -529,29 +552,35 @@ function activeAgingOrders(agingOrders) {
   return agingOrders.filter(statusIsActive);
 }
 // State across the statuses actually present in the aging set: 'all' (every
-// present status active), 'actionable' (exactly attention + unknown active),
-// or 'filtered' (any other combination). Drives the header suffix.
+// present status active), 'actionable' (exactly the attention group — incl.
+// unknowns, which default to attention), 'noaction' (exactly the motion group),
+// or 'filtered' (any other combination). Drives the header suffix + segmented
+// control active state.
 function agingFilterState(agingOrders) {
   var seen = {}, keys = [], i, k;
   for (i = 0; i < agingOrders.length; i++) {
     k = normStatus(agingOrders[i][STATUS_FIELD]);
     if (!seen[k]) { seen[k] = true; keys.push(k); }
   }
-  var allOn = true, actionableMatch = true;
+  var allOn = true, actionableMatch = true, noActionMatch = true;
   for (i = 0; i < keys.length; i++) {
     k = keys[i];
     var on = activeStatuses[k] === true;
-    var shouldBeActionable = (STATUS_GROUP[k] === 'attention') || (STATUS_GROUP[k] === undefined);
+    var g = groupForStatus(k); // unknown -> 'attention'
     if (!on) allOn = false;
-    if (on !== shouldBeActionable) actionableMatch = false;
+    if (on !== (g === 'attention')) actionableMatch = false;
+    if (on !== (g === 'motion'))    noActionMatch = false;
   }
   if (allOn) return 'all';
   if (actionableMatch) return 'actionable';
+  if (noActionMatch) return 'noaction';
   return 'filtered';
 }
-// Builds the status filter bar: chips grouped "Needs attention" then "In
-// motion", plus the two presets. Chip counts reflect the full aging population
-// (independent of the active toggles); active chips reuse the status pill color.
+// Builds the status filter bar: a segmented control (All statuses / Actionable
+// only / No action needed) over a two-row aligned grid — Needs attention on top,
+// In motion below — sharing chip columns so counts line up on a clean right edge.
+// Chip counts reflect the full aging population (independent of active toggles).
+// Purely presentational; filtering logic lives in the helpers above.
 function renderAgingStatusBar(agingOrders) {
   if (!agingOrders || agingOrders.length === 0) return '';
   var seen = {}, attention = [], motion = [], i, raw, key, meta;
@@ -565,43 +594,36 @@ function renderAgingStatusBar(agingOrders) {
     seen[key] = meta;
     (meta.group === 'attention' ? attention : motion).push(meta);
   }
-  function chip(m) {
+  var mode = agingFilterState(agingOrders); // 'all' | 'actionable' | 'noaction' | 'filtered'
+  // Shared column count so both rows align; groups may be uneven (e.g. Hold
+  // now sits in motion), so the shorter row leaves trailing empty cells.
+  var maxCols = Math.max(attention.length, motion.length);
+
+  function segBtn(m, label, fn) {
+    return '<button type="button" class="' + (mode === m ? 'on' : '') + '" onclick="' + fn + '()">' + label + '</button>';
+  }
+  function chipHTML(m, cls) {
     var on = activeStatuses[m.key] === true;
-    var pill = ORDERS_STATUS_PILL[m.label] || { bg:'#1a1d20', color:'#5f5e5a' };
-    var bg = on ? pill.bg : '#141618';
-    var col = on ? pill.color : '#5f5e5a';
-    var border = on ? pill.color : '#2c2c2a';
-    return '<button type="button" onclick="toggleStatus(' + jsStr(m.key) + ')" '
-      + 'style="display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:6px;'
-      + 'border:0.5px solid ' + border + ';background:' + bg + ';color:' + col + ';font-size:11px;'
-      + 'font-weight:500;font-family:system-ui;cursor:pointer;opacity:' + (on ? '1' : '.5')
-      + ';transition:opacity .12s,background .12s;">'
-      + esc(m.label)
-      + '<span style="font-variant-numeric:tabular-nums;opacity:.75;">' + m.count.toLocaleString() + '</span>'
-      + '</button>';
+    return '<span class="agf-chip ' + cls + (on ? '' : ' off') + '" onclick="toggleStatus(' + jsStr(m.key) + ')">'
+      + '<span class="agf-lbl">' + esc(m.label) + '</span>'
+      + '<span class="agf-n">' + m.count.toLocaleString() + '</span>'
+      + '</span>';
   }
-  function chipRow(labelTxt, metas) {
-    if (metas.length === 0) return '';
-    var chips = '', j;
-    for (j = 0; j < metas.length; j++) chips += chip(metas[j]);
-    return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
-      + '<span style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;min-width:82px;">' + labelTxt + '</span>'
-      + chips
-      + '</div>';
-  }
-  var presetBtn = 'font-size:10px;font-weight:500;font-family:system-ui;padding:4px 10px;border-radius:6px;cursor:pointer;border:0.5px solid #2c2c2a;background:#1a1d20;color:#85B7EB;';
-  var presets = '<div style="display:flex;gap:8px;align-items:center;margin-left:auto;">'
-    + '<button type="button" onclick="setActionableOnly()" style="' + presetBtn + '">Actionable only</button>'
-    + '<button type="button" onclick="showAllStatuses()" style="' + presetBtn + '">Show all</button>'
-    + '</div>';
-  return '<div style="background:#0f1012;border:0.5px solid #2c2c2a;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column;gap:8px;">'
-    + '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;">'
-    +   '<span style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Filter by status</span>'
-    +   presets
-    + '</div>'
-    + chipRow('Needs attention', attention)
-    + chipRow('In motion', motion)
-    + '</div>';
+
+  var h = '';
+  h += '<div class="agf-seg">';
+  h +=   segBtn('all', 'All statuses', 'showAllStatuses');
+  h +=   segBtn('actionable', 'Actionable only', 'setActionableOnly');
+  h +=   segBtn('noaction', 'No action needed', 'setNoActionOnly');
+  h += '</div>';
+
+  h += '<div class="agf-grid" style="grid-template-columns:120px repeat(' + maxCols + ',max-content);">';
+  h +=   '<span class="agf-glabel att">Needs attention</span>';
+  for (i = 0; i < attention.length; i++) h += chipHTML(attention[i], 'att');
+  h +=   '<span class="agf-glabel">In motion</span>';
+  for (i = 0; i < motion.length; i++) h += chipHTML(motion[i], 'mot');
+  h += '</div>';
+  return h;
 }
 
 var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets = {};
@@ -2278,6 +2300,16 @@ function showAllStatuses() {
   var k;
   for (k in activeStatuses) {
     if (activeStatuses.hasOwnProperty(k)) { activeStatuses[k] = true; }
+  }
+  render();
+}
+function setNoActionOnly() {
+  var k;
+  for (k in activeStatuses) {
+    if (activeStatuses.hasOwnProperty(k)) {
+      // motion group only; unknowns (attention by default) are deactivated
+      activeStatuses[k] = (STATUS_GROUP[k] === 'motion');
+    }
   }
   render();
 }
@@ -8432,7 +8464,7 @@ function renderOrdersSummary() {
     : agingTotalCount + ' order' + (agingTotalCount===1?'':'s') + ' · ' + agingTotalUnits.toLocaleString() + ' units on the books 4+ weeks';
 
   var _afState = agingFilterState(agingRowsAll);
-  var agingHeaderSuffix = _afState === 'all' ? 'All Statuses' : _afState === 'actionable' ? 'Actionable Only' : 'Filtered';
+  var agingHeaderSuffix = _afState === 'all' ? 'All Statuses' : _afState === 'actionable' ? 'Actionable Only' : _afState === 'noaction' ? 'No Action Needed' : 'Filtered';
   var agingStatusBar = renderAgingStatusBar(agingRowsAll);
 
   var agingHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
