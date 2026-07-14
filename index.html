@@ -623,8 +623,8 @@ function renderAgingStatusBar(agingOrders) {
   var h = '';
   h += '<div class="agf-seg">';
   h +=   segBtn('all', 'All statuses', 'showAllStatuses');
-  h +=   segBtn('actionable', 'Actionable only', 'setActionableOnly');
-  h +=   segBtn('noaction', 'No action needed', 'setNoActionOnly');
+  h +=   segBtn('actionable', 'Needs attention', 'setActionableOnly');
+  h +=   segBtn('noaction', 'In motion', 'setNoActionOnly');
   h += '</div>';
 
   h += '<div class="agf-grid" style="grid-template-columns:120px repeat(' + maxCols + ',max-content);">';
@@ -8478,7 +8478,7 @@ function renderOrdersSummary() {
     : agingTotalCount + ' order' + (agingTotalCount===1?'':'s') + ' · ' + agingTotalUnits.toLocaleString() + ' units on the books';
 
   var _afState = agingFilterState(agingRowsAll);
-  var agingHeaderSuffix = _afState === 'all' ? 'All Statuses' : _afState === 'actionable' ? 'Actionable Only' : _afState === 'noaction' ? 'No Action Needed' : 'Filtered';
+  var agingHeaderSuffix = _afState === 'all' ? 'All Statuses' : _afState === 'actionable' ? 'Needs Attention' : _afState === 'noaction' ? 'In Motion' : 'Filtered';
   var agingStatusBar = renderAgingStatusBar(agingRowsAll);
 
   var agingHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
