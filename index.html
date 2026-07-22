@@ -660,6 +660,7 @@ var matSearch = '';
 var matShowZeroUsage = false; // when true, also show on-hand ingredients with zero usage in the current window (mirrors showZeroDes on Jars/Bottles/etc.)
 var materialsShortOnly = false; // Materials toolbar "Short only" toggle: hide rows whose Available is not Short (afterDemand >= 0). Persists across re-renders and sub-tab switches.
 var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
+var drillCustomer = null; // Materials "By customer" → product drill: selected customer name, or null while showing the customer list. Reset when a different material is opened; cleared by the Back button.
 var ordersView = 'summary'; // 'summary' (more sub-views TBD)
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
 var openOrdersCapsule = null;
@@ -6704,6 +6705,7 @@ function selectMaterial(idx) {
   });
   if (wasSelected) { window._selectedMaterial = null; return; }
   window._selectedMaterial = m.name;
+  drillCustomer = null; // opening a different material must not land inside a stale customer drill
   var row = document.getElementById('mat-row-'+idx);
   if (row) {
     row.style.background = '#1a2535';
@@ -6830,10 +6832,76 @@ function buildMatCustomerData(m, monthKeys) {
   return Object.values(byCust).sort(function(a,b){ return b.kg - a.kg; });
 }
 
+// Product-level breakdown for ONE customer within this material + window. Mirrors
+// buildMatCustomerData's exact lot→product→customer chain — same matchingLots kg,
+// same productByLot resolution, same product.split('-')[0].trim() customer test,
+// same distinct-lot Set — restricted to the target customer and re-grouped by the
+// full Product string. Because it partitions the identical data the customer table
+// already partitions, product kg/lots/count sum back to the customer row by
+// construction. Adds a per-product last-run date (max material-record date).
+function buildMatProductData(m, monthKeys, customerName) {
+  var monthSet = {};
+  monthKeys.forEach(function(k){ monthSet[k] = true; });
+
+  // kg per lot + latest material-record date per lot, for this material within the window
+  var matchingLots = {};
+  var lastDateByLot = {};
+  materialsData.forEach(function(r) {
+    if (!r.date) return;
+    var mk = r.date.getFullYear()+'-'+String(r.date.getMonth()+1).padStart(2,'0');
+    if (!monthSet[mk]) return;
+    var groupName = r.partNum && SKU_GROUPS[r.partNum] ? SKU_GROUPS[r.partNum] : r.material;
+    if (groupName !== m.name && r.material !== m.name) return;
+    var lot = r.lot; if (!lot) return;
+    matchingLots[lot] = (matchingLots[lot]||0) + r.qty;
+    if (!lastDateByLot[lot] || r.date > lastDateByLot[lot]) lastDateByLot[lot] = r.date;
+  });
+
+  // Lot → product from production CSV (current + prior year), same as buildMatCustomerData.
+  var productByLot = {};
+  allRows.concat(allRows25).forEach(function(r) {
+    var lot = (r['Lot Number']||'').trim(); if (!lot) return;
+    if (!productByLot[lot] && r['Product']) productByLot[lot] = (r['Product']||'').trim();
+  });
+
+  var byProd = {};
+  Object.keys(matchingLots).forEach(function(lot) {
+    var kg = matchingLots[lot];
+    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
+    var lotIdxEntry = lotIndex[lot];
+    var product = productionProd
+               || (lotIdxEntry && lotIdxEntry.combined)
+               || ('Unknown (lot '+lot+')');
+    var customer = product.split('-')[0].trim() || 'Unknown';
+    if (customer !== customerName) return; // only this customer's lots
+    if (!byProd[product]) byProd[product] = { product: product, kg: 0, lots: new Set(), last: null };
+    byProd[product].kg += kg;
+    byProd[product].lots.add(lot);
+    var ld = lastDateByLot[lot];
+    if (ld && (byProd[product].last === null || ld > byProd[product].last)) byProd[product].last = ld;
+  });
+
+  return Object.values(byProd).sort(function(a,b){ return b.kg - a.kg; });
+}
+
+// Product display name: strip the "{Customer} - " prefix (the breadcrumb already
+// shows the customer). Any string that doesn't start with the expected prefix is
+// shown in full rather than silently altered.
+function displayProduct(fullProduct, customerName) {
+  var prefix = customerName + ' - ';
+  if (fullProduct.indexOf(prefix) === 0) return fullProduct.substring(prefix.length);
+  return fullProduct;
+}
+
 // Builds the inner HTML of the consumption-summary section (the toggle header +
 // either the quarterly table or the by-customer table). Lives in its own
 // function so setMatSummaryView can swap views without re-rendering the chart.
 function matSummaryInner(m, idx, monthKeys, unit) {
+  // Product drill: when a customer row is clicked (By customer only), the toggle +
+  // customer table are replaced by a breadcrumb + that customer's product breakdown.
+  if (matSummaryView === 'customer' && drillCustomer) {
+    return matProductDrillHTML(m, idx, monthKeys, unit);
+  }
   // Left-aligned segmented control, matching the By quarter / By customer toggle
   // on the Jars/Bottles/Lids cards. Replaces the old section label.
   var toggle = '<div style="display:flex;align-items:center;margin-bottom:10px;">'
@@ -6856,8 +6924,13 @@ function matSummaryInner(m, idx, monthKeys, unit) {
         var pct = totalKg ? ((c.kg/totalKg)*100).toFixed(1) : '0';
         var bw = kg ? Math.round((c.kg/maxCustKg)*88) : 0;
         var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
-        return '<tr>'
-          + '<td style="'+tdB+'padding-left:14px;color:#e8e6e0;font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;">'+esc(c.customer)+'</td>'
+        return '<tr onclick="matDrillInto('+jsStr(c.customer)+')" style="cursor:pointer;" onmouseover="this.style.background=\'#1a1d20\'" onmouseout="this.style.background=\'transparent\'">'
+          + '<td style="'+tdB+'padding-left:14px;color:#e8e6e0;font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;">'
+            + '<span style="display:inline-flex;align-items:center;gap:6px;max-width:100%;">'
+              + '<span style="overflow:hidden;text-overflow:ellipsis;">'+esc(c.customer)+'</span>'
+              + '<svg width="6" height="10" viewBox="0 0 6 10" fill="none" style="flex-shrink:0;"><path d="M1 1l4 4-4 4" stroke="#378ADD" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+            + '</span>'
+          + '</td>'
           + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.products.size+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.lots.size+'</td>'
@@ -6953,6 +7026,99 @@ function matSummaryInner(m, idx, monthKeys, unit) {
 
   return '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
     + toggle + tableHTML + '</div>';
+}
+
+// Product breakdown that replaces the customer table when a customer row is
+// clicked. Breadcrumb ({material} ▸ {customer}) + Back button instead of the
+// By quarter / By customer toggle; product rows reuse the parent's share-bar
+// markup and #378ADD accent so the two levels read identically.
+function matProductDrillHTML(m, idx, monthKeys, unit) {
+  var prodData = buildMatProductData(m, monthKeys, drillCustomer);
+  var totalKg = prodData.reduce(function(s,p){ return s+p.kg; }, 0);
+  // Last-run column ships only if the records carry a date (they do — r.date).
+  var hasDate = prodData.some(function(p){ return p.last != null; });
+
+  var crumb = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">'
+    + '<button onclick="matDrillBack()" style="'+navBtnStyle(false)+'display:inline-flex;align-items:center;gap:5px;">'
+      + '<span style="font-size:14px;line-height:1;">‹</span>Back'
+    + '</button>'
+    + '<span style="font-size:12px;color:#5f5e5a;font-family:system-ui;overflow:hidden;text-overflow:ellipsis;">'
+      + '<span onclick="matDrillBack()" style="cursor:pointer;color:#85B7EB;">'+esc(m.name)+'</span>'
+      + ' <span style="color:#5f5e5a;">▸</span> '
+      + '<span style="color:#e8e6e0;font-weight:500;">'+esc(drillCustomer)+'</span>'
+    + '</span>'
+  + '</div>';
+
+  var tableHTML;
+  if (!prodData.length) {
+    // The parent By-customer row counted this customer, so an empty drill is a data
+    // mismatch worth surfacing rather than a blank table.
+    tableHTML = '<div style="font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;padding:6px 0 2px;">No products found for this customer.</div>';
+  } else {
+    var maxProdKg = Math.max.apply(null, prodData.map(function(p){ return p.kg; })) || 1;
+    var prodRows = prodData.map(function(p) {
+      var kg = Math.round(p.kg);
+      var pct = totalKg ? ((p.kg/totalKg)*100).toFixed(1) : '0';
+      var bw = kg ? Math.round((p.kg/maxProdKg)*88) : 0;
+      var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
+      var lastCell = hasDate
+        ? '<td style="'+tdB+'text-align:right;color:#888780;">'+(p.last?esc(p.last.toLocaleDateString('en-US',{month:'short',year:'numeric'})):'—')+'</td>'
+        : '';
+      return '<tr>'
+        + '<td style="'+tdB+'padding-left:14px;color:#e8e6e0;font-weight:500;max-width:260px;overflow:hidden;text-overflow:ellipsis;">'+esc(displayProduct(p.product, drillCustomer))+'</td>'
+        + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
+        + '<td style="'+tdB+'text-align:right;color:#888780;">'+p.lots.size+'</td>'
+        + lastCell
+        + '<td style="'+tdB+'padding-right:14px;width:120px;">'
+          + '<div style="display:flex;align-items:center;gap:6px;">'
+            + '<div style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+              + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
+            + '</div>'
+            + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
+          + '</div>'
+        + '</td>'
+        + '</tr>';
+    }).join('');
+    var lastHeader = hasDate
+      ? '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Last run</th>'
+      : '';
+    tableHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+        + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Product</th>'
+        + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
+        + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Lots</th>'
+        + lastHeader
+        + '<th style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
+      + '</tr></thead>'
+      + '<tbody>'+prodRows+'</tbody>'
+      + '</table></div>';
+  }
+
+  return '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
+    + crumb + tableHTML + '</div>';
+}
+
+// Rebuild just the summary container (chart untouched) — shared by the drill
+// handlers, same mechanism setMatSummaryView uses.
+function matRerenderSummary() {
+  var ctx = window._matInlineCtx;
+  if (!ctx) return;
+  var el = document.getElementById('mat-summary-'+ctx.idx);
+  if (el) el.innerHTML = matSummaryInner(ctx.m, ctx.idx, ctx.monthKeys, ctx.unit);
+}
+
+// Enter the product drill for a clicked customer row (By customer only).
+function matDrillInto(customer) {
+  drillCustomer = customer;
+  var ctx = window._matInlineCtx;
+  trackEvent('material_customer_product_drilldown', { material: (ctx && ctx.m ? ctx.m.name : ''), customer: customer });
+  matRerenderSummary();
+}
+
+// Back → restore the customer list (By quarter / By customer selection intact).
+function matDrillBack() {
+  drillCustomer = null;
+  matRerenderSummary();
 }
 
 // Toggle the expanded-view consumption summary between quarter and customer
