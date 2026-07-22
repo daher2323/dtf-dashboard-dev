@@ -658,6 +658,7 @@ var matYear = new Date().getFullYear(); // kept for renderMatInline compat
 var matWindow = 6; // lookback months: 6 | 12 | 0=all
 var matSearch = '';
 var matShowZeroUsage = false; // when true, also show on-hand ingredients with zero usage in the current window (mirrors showZeroDes on Jars/Bottles/etc.)
+var materialsShortOnly = false; // Materials toolbar "Short only" toggle: hide rows whose Available is not Short (afterDemand >= 0). Persists across re-renders and sub-tab switches.
 var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
 var ordersView = 'summary'; // 'summary' (more sub-views TBD)
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
@@ -6715,18 +6716,73 @@ function selectMaterial(idx) {
   if (inlineRow) { inlineRow.style.display = ''; renderMatInline(m, idx); }
 }
 
+// Short = Available (net = on-hand − committed) is negative. Same value the
+// Available pill uses (afterBadge(m.afterDemand)), so the "Short only" filter and
+// the red "Short" pill can never disagree. Null on-hand → not short.
+function matIsShort(m) {
+  return !!(m && m.afterDemand != null && m.afterDemand < 0);
+}
+
+// Segmented "All / Short only" button styling, matching navBtnStyle's geometry.
+// Active "All" uses the standard blue accent; active "Short only" reuses the red
+// Short treatment from the Available pill (#791F1F / #F09595).
+function shortBtnStyle(active, isShortBtn) {
+  var base = 'padding:4px 12px;border-radius:6px;font-weight:'+(active?'500':'400')+';font-size:12px;cursor:pointer;font-family:system-ui;transition:all .15s;display:inline-flex;align-items:center;gap:5px;';
+  if (!active) return base + 'border:1.5px solid transparent;background:transparent;color:#888780;';
+  if (isShortBtn) return base + 'border:1.5px solid #791F1F;background:#791F1F;color:#F09595;';
+  return base + 'border:1.5px solid #378ADD;background:#0C447C;color:#85B7EB;';
+}
+
+// Repaint the two segment buttons to reflect materialsShortOnly. Called at the end
+// of every Materials render (via filterMaterials) so the highlight survives re-render.
+function paintShortToggle() {
+  var wrap = document.getElementById('materialsShortToggle');
+  if (!wrap) return;
+  var btns = wrap.getElementsByClassName('seg-btn');
+  var i, isShortBtn, active;
+  for (i = 0; i < btns.length; i++) {
+    isShortBtn = btns[i].getAttribute('data-short') === '1';
+    active = isShortBtn === materialsShortOnly;
+    btns[i].style.cssText = shortBtnStyle(active, isShortBtn);
+  }
+}
+
+// Toolbar handler for the All / Short only segments (inline onclick, matching the
+// time-window buttons). Persists across sub-tab switches — never reset elsewhere.
+function setMaterialsShortOnly(v) {
+  materialsShortOnly = !!v;
+  trackEvent('materials_filter_change', { filter: 'short_only', value: materialsShortOnly ? 'short' : 'all' });
+  window._selectedMaterial = null;
+  renderMaterials();
+}
+
 function filterMaterials() {
   matSearch = (document.getElementById('matSearchInput')||{}).value || '';
   var matList = window._matList || [];
   var q = matSearch.toLowerCase();
+  // Segment badges reflect every OTHER filter (time window + zero-usage already
+  // baked into matList, plus search) but never the short toggle itself, so toggling
+  // it changes what's shown, not the counts.
+  var countAll = 0, countShort = 0;
   matList.forEach(function(m, i) {
     var row = document.getElementById('mat-row-'+i);
     var ir = document.getElementById('mat-inline-row-'+i);
-    var match = !q || m.name.toLowerCase().indexOf(q) !== -1
+    var searchMatch = !q || m.name.toLowerCase().indexOf(q) !== -1
       || m.partNums.some(function(p){ return p.toLowerCase().indexOf(q) !== -1; });
-    if (row) row.style.display = match ? '' : 'none';
-    if (ir) ir.style.display = (match && window._selectedMaterial===m.name) ? '' : 'none';
+    var shortRow = matIsShort(m);
+    if (searchMatch) { countAll++; if (shortRow) countShort++; }
+    // Short gate stacks AFTER search: visible only if it passes search AND (short
+    // filter off OR the row is short). Rows stay in the DOM (just hidden), so the
+    // rank numbers baked into each row are preserved.
+    var visible = searchMatch && (!materialsShortOnly || shortRow);
+    if (row) row.style.display = visible ? '' : 'none';
+    if (ir) ir.style.display = (visible && window._selectedMaterial===m.name) ? '' : 'none';
   });
+  var elAll = document.getElementById('shortCountAll');
+  var elShort = document.getElementById('shortCountShort');
+  if (elAll) elAll.innerHTML = countAll;
+  if (elShort) elShort.innerHTML = countShort;
+  paintShortToggle();
 }
 
 // Aggregate this material's window consumption by customer. Resolves each
@@ -7526,6 +7582,14 @@ function renderMaterials() {
         +'<button onclick="matWindow=0;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===0)+'">All time</button>'
         +'</div>'
         +allTimeHint
+        // 0.5px divider, then the All / Short only segmented control. Counts are
+        // filled in by filterMaterials() (called at the end of render); highlight
+        // is painted by paintShortToggle().
+        +'<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+        +'<div id="materialsShortToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          +'<button type="button" class="seg-btn" data-short="0" onclick="setMaterialsShortOnly(false)" style="'+shortBtnStyle(!materialsShortOnly,false)+'">All <span class="seg-count" id="shortCountAll" style="font-size:10px;opacity:.75;">0</span></button>'
+          +'<button type="button" class="seg-btn" data-short="1" onclick="setMaterialsShortOnly(true)" style="'+shortBtnStyle(materialsShortOnly,true)+'">Short only <span class="seg-count" id="shortCountShort" style="font-size:10px;opacity:.75;">0</span></button>'
+        +'</div>'
       +'</div>'
       +zeroUsageCheckbox
     +'</div>'
@@ -7590,8 +7654,9 @@ function renderMaterials() {
     var selIdx=matList.findIndex(function(m){return m.name===window._selectedMaterial;});
     if (selIdx>=0) renderMatInline(matList[selIdx],selIdx);
   }
-  // Re-apply search filter if one was active (e.g. after auto-refresh rebuilds the DOM)
-  if (matSearch) filterMaterials();
+  // Always run the visibility gate: it re-applies any active search, enforces the
+  // "Short only" toggle, fills the segment counts, and paints the active segment.
+  filterMaterials();
 }
 
 
