@@ -6866,10 +6866,13 @@ function buildMatProductData(m, monthKeys, customerName) {
   // lot → total units), looked up ONCE per distinct lot below — never per kg row.
   var productByLot = {};
   var unitsByLot = {};
+  var prodDateByLot = {}; // production RUN date per lot (max, i.e. when it ran) — not the material-pull date
   allRows.concat(allRows25).forEach(function(r) {
     var lot = (r['Lot Number']||'').trim(); if (!lot) return;
     if (!productByLot[lot] && r['Product']) productByLot[lot] = (r['Product']||'').trim();
     unitsByLot[lot] = (unitsByLot[lot]||0) + num(r['Final Units']);
+    var pd = parseLocalDate(r['Date']);
+    if (pd && (!prodDateByLot[lot] || pd > prodDateByLot[lot])) prodDateByLot[lot] = pd;
   });
 
   var byProd = {};
@@ -6893,7 +6896,7 @@ function buildMatProductData(m, monthKeys, customerName) {
     byProd[product].lotRows.push({
       lot: lot,
       kg: kg,
-      date: ld || null,
+      date: prodDateByLot[lot] || ld || null, // production run date; fall back to pull date only if the lot has none
       units: unitsByLot.hasOwnProperty(lot) ? unitsByLot[lot] : null
     });
   });
