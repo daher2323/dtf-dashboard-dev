@@ -661,6 +661,7 @@ var matShowZeroUsage = false; // when true, also show on-hand ingredients with z
 var materialsShortOnly = false; // Materials toolbar "Short only" toggle: hide rows whose Available is not Short (afterDemand >= 0). Persists across re-renders and sub-tab switches.
 var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
 var drillCustomer = null; // Materials "By customer" → product drill: selected customer name, or null while showing the customer list. Reset when a different material is opened; cleared by the Back button.
+var drillOpenLots = {}; // Product → lot accordion (L4): set of open product strings, so an expanded lot list survives a re-render. Cleared when the customer drill changes / on back / on a new material.
 var ordersView = 'summary'; // 'summary' (more sub-views TBD)
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
 var openOrdersCapsule = null;
@@ -6706,6 +6707,7 @@ function selectMaterial(idx) {
   if (wasSelected) { window._selectedMaterial = null; return; }
   window._selectedMaterial = m.name;
   drillCustomer = null; // opening a different material must not land inside a stale customer drill
+  drillOpenLots = {}; // ...nor inside a stale lot accordion
   var row = document.getElementById('mat-row-'+idx);
   if (row) {
     row.style.background = '#1a2535';
@@ -6857,11 +6859,17 @@ function buildMatProductData(m, monthKeys, customerName) {
     if (!lastDateByLot[lot] || r.date > lastDateByLot[lot]) lastDateByLot[lot] = r.date;
   });
 
-  // Lot → product from production CSV (current + prior year), same as buildMatCustomerData.
+  // Lot → product AND lot → units, from the production CSVs (current + prior year),
+  // built in one pass over the SAME dataset productByLot uses so units and product
+  // resolution share one universe. Units-produced is not on the consumption records;
+  // it's joined by Lot #. Summed per lot (defensive: multiple production rows for a
+  // lot → total units), looked up ONCE per distinct lot below — never per kg row.
   var productByLot = {};
+  var unitsByLot = {};
   allRows.concat(allRows25).forEach(function(r) {
     var lot = (r['Lot Number']||'').trim(); if (!lot) return;
     if (!productByLot[lot] && r['Product']) productByLot[lot] = (r['Product']||'').trim();
+    unitsByLot[lot] = (unitsByLot[lot]||0) + num(r['Final Units']);
   });
 
   var byProd = {};
@@ -6874,14 +6882,25 @@ function buildMatProductData(m, monthKeys, customerName) {
                || ('Unknown (lot '+lot+')');
     var customer = product.split('-')[0].trim() || 'Unknown';
     if (customer !== customerName) return; // only this customer's lots
-    if (!byProd[product]) byProd[product] = { product: product, kg: 0, lots: new Set(), last: null };
+    if (!byProd[product]) byProd[product] = { product: product, kg: 0, lots: new Set(), last: null, lotRows: [] };
     byProd[product].kg += kg;
     byProd[product].lots.add(lot);
     var ld = lastDateByLot[lot];
     if (ld && (byProd[product].last === null || ld > byProd[product].last)) byProd[product].last = ld;
+    // Leaf (L4) per-lot row. kg is already the per-lot sum (matchingLots); units are
+    // joined once from production. Absent lot in production → null (rendered as "—",
+    // never 0). Each lot appears once in matchingLots, so one row per distinct lot.
+    byProd[product].lotRows.push({
+      lot: lot,
+      kg: kg,
+      date: ld || null,
+      units: unitsByLot.hasOwnProperty(lot) ? unitsByLot[lot] : null
+    });
   });
 
-  return Object.values(byProd).sort(function(a,b){ return b.kg - a.kg; });
+  var list = Object.values(byProd);
+  list.forEach(function(p){ p.lotRows.sort(function(a,b){ return b.kg - a.kg; }); }); // lots kg desc, matching the parent's order
+  return list.sort(function(a,b){ return b.kg - a.kg; });
 }
 
 // Product display name: strip the "{Customer} - " prefix (the breadcrumb already
@@ -7056,16 +7075,25 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
     tableHTML = '<div style="font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;padding:6px 0 2px;">No products found for this customer.</div>';
   } else {
     var maxProdKg = Math.max.apply(null, prodData.map(function(p){ return p.kg; })) || 1;
-    var prodRows = prodData.map(function(p) {
+    var colSpan = hasDate ? 5 : 4;
+    var prodRows = prodData.map(function(p, pi) {
       var kg = Math.round(p.kg);
       var pct = totalKg ? ((p.kg/totalKg)*100).toFixed(1) : '0';
       var bw = kg ? Math.round((p.kg/maxProdKg)*88) : 0;
       var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
+      var isOpen = !!drillOpenLots[p.product];
       var lastCell = hasDate
         ? '<td style="'+tdB+'text-align:right;color:#888780;">'+(p.last?esc(p.last.toLocaleDateString('en-US',{month:'short',year:'numeric'})):'—')+'</td>'
         : '';
-      return '<tr>'
-        + '<td style="'+tdB+'padding-left:14px;color:#e8e6e0;font-weight:500;max-width:260px;overflow:hidden;text-overflow:ellipsis;">'+esc(displayProduct(p.product, drillCustomer))+'</td>'
+      // Chevron rotates 0→90° on open (leaf accordion affordance).
+      var chev = '<svg id="matlotchev-'+idx+'-'+pi+'" width="6" height="10" viewBox="0 0 6 10" fill="none" style="flex-shrink:0;transition:transform .15s;transform:rotate('+(isOpen?'90':'0')+'deg);"><path d="M1 1l4 4-4 4" stroke="#378ADD" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      var row = '<tr onclick="matToggleLot('+idx+','+pi+','+jsStr(p.product)+')" style="cursor:pointer;" onmouseover="if(this.style.background!==\'rgb(23, 25, 28)\')this.style.background=\'#1a1d20\'" onmouseout="this.style.background=\'transparent\'">'
+        + '<td style="'+tdB+'padding-left:14px;color:#e8e6e0;font-weight:500;max-width:260px;overflow:hidden;text-overflow:ellipsis;">'
+          + '<span style="display:inline-flex;align-items:center;gap:6px;max-width:100%;">'
+            + chev
+            + '<span style="overflow:hidden;text-overflow:ellipsis;">'+esc(displayProduct(p.product, drillCustomer))+'</span>'
+          + '</span>'
+        + '</td>'
         + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
         + '<td style="'+tdB+'text-align:right;color:#888780;">'+p.lots.size+'</td>'
         + lastCell
@@ -7078,6 +7106,10 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
           + '</div>'
         + '</td>'
         + '</tr>';
+      var detail = '<tr id="matlot-'+idx+'-'+pi+'" style="display:'+(isOpen?'':'none')+';">'
+        + '<td colspan="'+colSpan+'" style="padding:0;background:#151719;">'+matLotSubTable(p, unit)+'</td>'
+        + '</tr>';
+      return row + detail;
     }).join('');
     var lastHeader = hasDate
       ? '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Last run</th>'
@@ -7098,6 +7130,52 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
     + crumb + tableHTML + '</div>';
 }
 
+// The nested lot table shown when a product row is expanded (L4 leaf). Inset with a
+// single left accent border (no rounded corners) and a muted sub-header. Units are
+// joined from production by Lot #; a missing join shows "—" (unknown), never 0, and
+// the lot row still appears with its kg/date intact.
+function matLotSubTable(p, unit) {
+  var mono = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+  var rows = p.lotRows.map(function(l) {
+    var tdB = 'padding:5px 10px;border-bottom:0.5px solid #232326;white-space:nowrap;font-size:11px;';
+    return '<tr>'
+      + '<td style="'+tdB+'font-family:'+mono+';color:#c9c7c1;">'+esc(l.lot)+'</td>'
+      + '<td style="'+tdB+'text-align:right;color:#888780;">'+(l.date?esc(l.date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})):'—')+'</td>'
+      + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(l.units==null?'—':Math.round(l.units).toLocaleString())+'</td>'
+      + '<td style="'+tdB+'text-align:right;color:#888780;">'+(l.kg?Math.round(l.kg).toLocaleString()+' '+unit:'—')+'</td>'
+      + '</tr>';
+  }).join('');
+  var th = 'padding:4px 10px;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+  return '<div style="margin:0 0 4px 14px;border-left:2px solid #378ADD;border-radius:0;background:#151719;">'
+    + '<table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr>'
+      + '<th style="'+th+'text-align:left;">Lot</th>'
+      + '<th style="'+th+'text-align:right;">Date run</th>'
+      + '<th style="'+th+'text-align:right;">Units</th>'
+      + '<th style="'+th+'text-align:right;">'+esc(unit)+'</th>'
+    + '</tr></thead>'
+    + '<tbody>'+rows+'</tbody>'
+    + '</table></div>';
+}
+
+// Toggle a product's lot accordion. Flips the detail row + rotates the chevron, and
+// records the open state (survives re-render). Fires GA4 on open only.
+function matToggleLot(idx, pi, productKey) {
+  var row = document.getElementById('matlot-'+idx+'-'+pi);
+  var chev = document.getElementById('matlotchev-'+idx+'-'+pi);
+  if (!row) return;
+  var willOpen = row.style.display === 'none';
+  row.style.display = willOpen ? '' : 'none';
+  if (chev) chev.style.transform = willOpen ? 'rotate(90deg)' : 'rotate(0deg)';
+  if (willOpen) {
+    drillOpenLots[productKey] = true;
+    var ctx = window._matInlineCtx;
+    trackEvent('material_product_lot_drilldown', { material: (ctx && ctx.m ? ctx.m.name : ''), customer: drillCustomer, product: productKey });
+  } else {
+    delete drillOpenLots[productKey];
+  }
+}
+
 // Rebuild just the summary container (chart untouched) — shared by the drill
 // handlers, same mechanism setMatSummaryView uses.
 function matRerenderSummary() {
@@ -7110,6 +7188,7 @@ function matRerenderSummary() {
 // Enter the product drill for a clicked customer row (By customer only).
 function matDrillInto(customer) {
   drillCustomer = customer;
+  drillOpenLots = {}; // fresh customer → no stale lot accordions
   var ctx = window._matInlineCtx;
   trackEvent('material_customer_product_drilldown', { material: (ctx && ctx.m ? ctx.m.name : ''), customer: customer });
   matRerenderSummary();
@@ -7118,6 +7197,7 @@ function matDrillInto(customer) {
 // Back → restore the customer list (By quarter / By customer selection intact).
 function matDrillBack() {
   drillCustomer = null;
+  drillOpenLots = {}; // leaving the product view clears any open lot accordions
   matRerenderSummary();
 }
 
