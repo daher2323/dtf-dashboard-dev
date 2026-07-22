@@ -9021,11 +9021,15 @@ function closeProcExportPopover() {
 
 // ── Materials export (parallel to proc export above) ─────────────────
 // Applies the active search filter so the export matches what's on screen.
+// The rows the export should include: matList narrowed by the same filters the
+// table shows — search AND the "Short only" toggle. Keeps Export honest with the
+// visible list (e.g. "Short only" exports just the short materials, not all 845).
 function _filteredMatList() {
   var list = window._matList || [];
   var q = (matSearch||'').toLowerCase().trim();
-  if (!q) return list;
   return list.filter(function(m){
+    if (materialsShortOnly && !matIsShort(m)) return false;
+    if (!q) return true;
     return (m.name||'').toLowerCase().indexOf(q) !== -1
         || (m.partNums||[]).some(function(p){ return (p||'').toLowerCase().indexOf(q) !== -1; });
   });
@@ -9042,8 +9046,11 @@ function toggleMatExportPopover(e) {
   var lotCount  = filtered.reduce(function(s,m){ return s + (m.lotCount||0); }, 0);
   var windowLabel  = matWindow === 0 ? 'All time' : 'Past ' + matWindow + ' months';
   var sheetsLabel  = '2 sheets: Summary + Monthly Detail';
-  var filterLabel  = (matSearch && filtered.length < allList.length)
-    ? ' &middot; <span style="color:#85B7EB;">filtered "'+esc(matSearch)+'"</span>'
+  var filterBits = [];
+  if (materialsShortOnly) filterBits.push('Short only');
+  if (matSearch) filterBits.push('"'+esc(matSearch)+'"');
+  var filterLabel = (filterBits.length && filtered.length < allList.length)
+    ? ' &middot; <span style="color:#85B7EB;">filtered &middot; '+filterBits.join(' &middot; ')+'</span>'
     : '';
   var pop = document.createElement('div');
   pop.id = 'mat-export-pop';
@@ -9083,6 +9090,10 @@ function exportMaterials() {
   var now = new Date();
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
   var windowLabel = matWindow === 0 ? 'All time' : 'Past ' + matWindow + ' months';
+  // Note any active filters in the export header so an opened workbook makes clear
+  // it's a subset (e.g. "Short only") and not the full material list.
+  if (materialsShortOnly) windowLabel += ' · Short only';
+  if (matSearch) windowLabel += ' · Search "' + matSearch + '"';
 
   var wb = XLSX.utils.book_new();
 
