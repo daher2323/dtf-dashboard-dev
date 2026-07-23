@@ -9615,11 +9615,14 @@ function renderRecall() {
   var loading = pickRows.length === 0;
   var q = esc(recallQuery);
 
-  var html = '<div style="max-width:1400px;margin:0 auto;width:100%;padding:1.5rem;">';
+  // Render straight into #content — the .shell wrapper already supplies the
+  // shared max-width:1400 + 1.5rem gutter every view aligns to. Do NOT re-wrap
+  // (that double-pads and nudges the recall column off the header's left edge).
+  var html = '';
 
   // Intro / search card
   html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
-    + '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a raw-material T#</div>'
+    + '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a T#</div>'
     + '<div style="font-size:12px;color:#888780;margin-bottom:14px;">Enter a receipt T# to trace every production run that consumed it — the affected lots, products, customers and units produced.</div>'
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
     +   '<input id="recall-input" type="text" value="'+q+'" placeholder="e.g. T30693" autocomplete="off" spellcheck="false" '
@@ -9641,7 +9644,6 @@ function renderRecall() {
       + '</div>';
   }
 
-  html += '</div>';
   document.getElementById('content').innerHTML = html;
 }
 
