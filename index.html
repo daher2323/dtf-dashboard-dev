@@ -9643,7 +9643,10 @@ function renderRecall() {
   // middle. Halves own their padding (card padding:0) so the divider runs edge to
   // edge with no dead gap.
   html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:0;overflow:hidden;margin-bottom:1.25rem;">'
-    + '<div style="display:flex;flex-wrap:wrap;align-items:stretch;">'
+    // min-height reserves the filled-state height so the card doesn't grow when the
+    // result bubble renders — which would otherwise re-center the left island and
+    // make its content visibly drop a few pixels on trace.
+    + '<div style="display:flex;flex-wrap:wrap;align-items:stretch;min-height:184px;">'
     // LEFT half — search, centered as a balanced island (block centered both axes;
     // text stays left-aligned inside).
     +   '<div style="flex:1 1 340px;padding:22px 24px;border-right:0.5px solid #2c3036;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">'
@@ -9657,8 +9660,9 @@ function renderRecall() {
     +       (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
     +     '</div>'
     +   '</div>'
-    // RIGHT half — result bubble fills the half; placeholder centered before trace.
-    +   '<div style="flex:1 1 340px;padding:22px 24px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">'
+    // RIGHT half — result bubble as a centered island (capped width + extra padding
+    // so it doesn't span the whole pane edge-to-edge).
+    +   '<div style="flex:1 1 340px;padding:24px 32px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">'
     +     (hasResult ? recallSummaryHTML(recallResult)
                      : '<div style="color:#5f5e5a;font-size:12px;text-align:center;">Enter a T# and trace to see affected lots here.</div>')
     +   '</div>'
@@ -9687,7 +9691,7 @@ function recallMetricCell(v, l) {
 function recallSummaryHTML(res) {
   var tNum = esc(res.tNum || '');
   var triangle = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>';
-  var wellStyle = 'width:100%;box-sizing:border-box;background:#0e1114;border:2px solid rgba(245,166,35,0.6);border-radius:12px;padding:18px 24px;text-align:center;box-shadow:0 0 26px rgba(245,166,35,0.07);';
+  var wellStyle = 'width:100%;max-width:500px;box-sizing:border-box;background:#0e1114;border:2px solid rgba(245,166,35,0.6);border-radius:12px;padding:18px 24px;text-align:center;box-shadow:0 0 26px rgba(245,166,35,0.07);';
 
   if (res.rows.length === 0) {
     return '<div style="'+wellStyle+'">'
@@ -9725,7 +9729,7 @@ function recallSummaryHTML(res) {
       + '</div>'
     : '';
 
-  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;">' + bubble + flag + '</div>';
+  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:500px;">' + bubble + flag + '</div>';
 }
 
 // Export bar + customer-grouped results table (rendered below the card).
