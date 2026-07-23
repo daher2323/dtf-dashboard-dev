@@ -1897,21 +1897,21 @@ function buildRecallResult(hits) {
   var maps = buildLotResolution();
   // Group hits by lot FIRST — join-free, straight off the pick sheet — so a lot
   // that appears on multiple pick lines (or fans out in the production join)
-  // collapses to ONE row: kg summed from the matched slots, units looked up ONCE.
-  // This is the double-count fix (same discipline as the L4 units-multiply trap):
-  // never sum units per hit, only per distinct lot.
+  // collapses to ONE row: units looked up ONCE per lot (never per hit — that was
+  // the double-count, same discipline as the L4 units-multiply trap). KG is NOT
+  // aggregated: pull data (QTY Picked) double-counts pulled-then-returned material
+  // and there is no returns field to net against, so no correct kg total exists.
   var byLot = {}, lotOrder = [], matSet = {}, partSet = {};
   var i, key;
   for (i = 0; i < hits.length; i++) {
     key = String(hits[i].orderLot == null ? '' : hits[i].orderLot).trim();
-    if (!byLot[key]) { byLot[key] = { lot: key, kg: 0, pickDate: hits[i].date }; lotOrder.push(key); }
-    byLot[key].kg += hits[i].qty;                                  // sum kg per lot (join-free)
+    if (!byLot[key]) { byLot[key] = { lot: key, pickDate: hits[i].date }; lotOrder.push(key); }
     if (hits[i].date > byLot[key].pickDate) byLot[key].pickDate = hits[i].date;
     if (hits[i].material) matSet[hits[i].material] = 1;
     if (hits[i].part) partSet[hits[i].part] = 1;
   }
 
-  var rows = [], totKg = 0, totUnits = 0, custSet = {};
+  var rows = [], totUnits = 0, custSet = {};
   var j, lot, agg, productionProd, lotIdxEntry, product, customer, units, runDate;
   for (j = 0; j < lotOrder.length; j++) {
     agg = byLot[lotOrder[j]];
@@ -1930,18 +1930,20 @@ function buildRecallResult(hits) {
       customer: customer != null ? customer : '—',
       lot: lot,
       runDate: runDate,
-      runTs: runDate ? runDate.getTime() : -Infinity, // sort key; undated lots sink to the bottom
-      kg: agg.kg,
+      runTs: runDate ? runDate.getTime() : -Infinity,
       units: units
     });
-    totKg += agg.kg;
     totUnits += (units || 0);                                       // safe: rows are lot-unique
     if (customer != null) custSet[customer] = 1;
   }
-  // Run date descending (most recent first); tie-break by kg desc.
-  rows.sort(function(a, b) { return (b.runTs - a.runTs) || (b.kg - a.kg); });
-  return { rows: rows, totKg: totKg, totUnits: totUnits,
-           lots: rows.length, customers: countKeys(custSet),   // "lots" replaces "runs"; no "products"
+  // Unknown-unit lots first (they need manual verification), then units descending.
+  rows.sort(function(a, b) {
+    var an = (a.units == null), bn = (b.units == null);
+    if (an !== bn) return an ? -1 : 1;
+    return (b.units || 0) - (a.units || 0);
+  });
+  return { rows: rows, totUnits: totUnits,
+           lots: rows.length, customers: countKeys(custSet),
            material: Object.keys(matSet).join(', '), part: Object.keys(partSet).join(', ') };
 }
 
@@ -3005,10 +3007,12 @@ function renderImpl() {
     var _subOuter  = document.getElementById('sub-bar-outer');
     if (mainSection === 'customers') {
       if (_concOuter) _concOuter.style.display = 'block';
-      if (_subOuter)  _subOuter.style.top = '120px';  // 68 (app-bar) + 52 (conc bar)
+      if (_subOuter)  { _subOuter.style.display = ''; _subOuter.style.top = '120px'; }  // 68 (app-bar) + 52 (conc bar)
     } else {
       if (_concOuter) _concOuter.style.display = 'none';
-      if (_subOuter)  _subOuter.style.top = '';       // revert to CSS default 68
+      // Recall has no sub-bar content — hide the empty bar so no ghost band sits
+      // between the nav and the card. Every other section shows it.
+      if (_subOuter)  { _subOuter.style.top = ''; _subOuter.style.display = (mainSection === 'recall') ? 'none' : ''; }
     }
     if (mainSection === 'customers') {
       renderCustomers();
@@ -9600,10 +9604,6 @@ function exportMaterials() {
 
 // ── Recall Tracking view ──────────────────────────────────────────────────
 
-function recallFmtKg(n) {
-  return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
-}
-
 function recallFmtDate(d) {
   // Accepts a Date object (row.runDate) or a date string; '—' when absent.
   if (!d) return '—';
@@ -9640,7 +9640,7 @@ function renderRecall() {
   // Trace card: two columns — search on the left, the result summary on the right
   // (a muted placeholder until a trace runs, then T# + material + the metric row).
   html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
-    + '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:stretch;">'
+    + '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">'
     // LEFT — search (fixed ~330px with a right divider)
     +   '<div style="flex:0 1 330px;min-width:260px;border-right:0.5px solid #2c2c2a;padding-right:24px;box-sizing:border-box;">'
     +     '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a T#</div>'
@@ -9651,10 +9651,11 @@ function renderRecall() {
     +     '</div>'
     +     (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
     +   '</div>'
-    // RIGHT — summary (placeholder before trace, metrics after)
-    +   '<div style="flex:1 1 360px;min-width:260px;display:flex;align-items:center;">'
+    // RIGHT — summary (placeholder before trace, metrics after); top-aligned so the
+    // T#/material line sits level with the left "Trace a T#" title.
+    +   '<div style="flex:1 1 360px;min-width:260px;">'
     +     (hasResult ? recallSummaryHTML(recallResult)
-                     : '<div style="color:#5f5e5a;font-size:12px;">Enter a T# and trace to see affected lots here.</div>')
+                     : '<div style="color:#5f5e5a;font-size:12px;padding-top:2px;">Enter a T# and trace to see affected lots here.</div>')
     +   '</div>'
     + '</div>'
     + '</div>';
@@ -9689,16 +9690,18 @@ function recallSummaryHTML(res) {
   var partLabel = res.part ? ' <span style="color:#9a8560;">('+esc(res.part)+')</span>' : '';
 
   return '<div style="width:100%;">'
-    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'+triangle
-    +   '<span style="font-size:15px;font-weight:700;color:#D08A1E;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+tNum+'</span>'
-    +   '<span style="font-size:13px;color:#e8e6e0;font-weight:500;">'+matLabel+'</span>'+partLabel
-    + '</div>'
-    // Metric row — four only, with a thin amber left accent (condensed from the banner).
-    + '<div style="border-left:2px solid rgba(224,158,74,0.5);padding-left:14px;display:flex;gap:28px;flex-wrap:wrap;">'
-    +   recallStat(res.lots.toLocaleString(), 'Affected lots')
-    +   recallStat(res.customers.toLocaleString(), 'Customers')
-    +   recallStat(recallFmtKg(res.totKg) + ' kg', 'Total consumed')
-    +   recallStat(Math.round(res.totUnits).toLocaleString(), 'Total units')
+    // Amber accent spans the WHOLE summary — T#/material line through the metrics.
+    + '<div style="border-left:2px solid rgba(224,158,74,0.55);padding-left:16px;">'
+    +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;">'+triangle
+    +     '<span style="font-size:15px;font-weight:700;color:#D08A1E;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+tNum+'</span>'
+    +     '<span style="font-size:13px;color:#e8e6e0;font-weight:500;">'+matLabel+'</span>'+partLabel
+    +   '</div>'
+    // Three metrics — Affected lots · Customers · Total units (kg removed).
+    +   '<div style="display:flex;gap:36px;flex-wrap:wrap;">'
+    +     recallStat(res.lots.toLocaleString(), 'Affected lots')
+    +     recallStat(res.customers.toLocaleString(), 'Customers')
+    +     recallStat(Math.round(res.totUnits).toLocaleString(), 'Total units')
+    +   '</div>'
     + '</div>'
     + (unresolved > 0
         ? '<div style="margin-top:12px;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;">'
@@ -9712,32 +9715,42 @@ function recallSummaryHTML(res) {
 // Export bar + customer-grouped results table (rendered below the card).
 function renderRecallTableHTML(res) {
   var out = '';
-  var tNum = esc(res.tNum || '');
   var i;
 
-  // Export bar
-  out += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
+  // Count lots with no matched unit count — drives the header legend and the
+  // per-row amber flag. These need manual exposure verification.
+  var unknownCount = 0;
+  for (i = 0; i < res.rows.length; i++) { if (res.rows[i].units == null) unknownCount++; }
+  var legend = unknownCount > 0
+    ? '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#B8863E;white-space:nowrap;">'
+      + '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#B8863E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#B8863E"/></svg>'
+      + 'Highlighted rows have no matched unit count — verify exposure manually</span>'
+    : '';
+
+  // Export bar — "Affected lots" label left; legend + blue Export button right.
+  out += '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap;">'
     + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Affected lots</div>'
-    + '<button onclick="exportRecall()" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
-    +   '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
-    +   'Export recall list</button>'
+    + '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:flex-end;">'
+    +   legend
+    +   '<button onclick="exportRecall()" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
+    +     '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
+    +     'Export recall list</button>'
+    + '</div>'
     + '</div>';
 
-  // Group rows by customer. Rows arrive sorted run-date desc, so within each
-  // customer the runs stay newest-first; customers themselves are ordered
-  // alphabetically (case-insensitive) below, with the unresolved ('—') bucket
-  // forced to the end.
+  // Group rows by customer; customers ordered alphabetically (case-insensitive),
+  // unresolved ('—') bucket last. Within a customer: unknown-unit lots first, then
+  // units descending (rows already arrive in that order from the builder).
   var groups = [], gIndex = {}, gi, ri;
   for (i = 0; i < res.rows.length; i++) {
     var rr = res.rows[i];
     var key = rr.customer;
     if (!gIndex.hasOwnProperty(key)) {
       gIndex[key] = groups.length;
-      groups.push({ customer: key, rows: [], units: 0, kg: 0, hasUnits: false });
+      groups.push({ customer: key, rows: [], units: 0, hasUnits: false });
     }
     var g = groups[gIndex[key]];
     g.rows.push(rr);
-    g.kg += rr.kg;
     if (rr.units != null) { g.units += rr.units; g.hasUnits = true; }
   }
   groups.sort(function(a, b) {
@@ -9746,46 +9759,57 @@ function renderRecallTableHTML(res) {
     return a.customer.toLowerCase().localeCompare(b.customer.toLowerCase());  // A→Z by brand
   });
 
-  // Results table — customer-grouped. The CUSTOMER column is dropped (it's now the
-  // group header); products indent beneath their customer.
+  // Results table — four columns (kg removed), fixed layout so long product names
+  // ellipsis-truncate instead of sprawling and LOT#/DATE pull left. CUSTOMER is the
+  // group header, not a column.
   out += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     + '<div style="overflow-x:auto;">'
-    + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+    + '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;">'
+    + '<colgroup><col style="width:46%;"/><col style="width:16%;"/><col style="width:18%;"/><col style="width:20%;"/></colgroup>'
     + '<thead><tr style="background:#141618;">'
     +   recallTh('PRODUCT', 'left')
     +   recallTh('LOT #', 'left')
     +   recallTh('RUN DATE', 'left')
-    +   recallTh('KG FROM ' + tNum, 'right')
     +   recallTh('UNITS', 'right')
     + '</tr></thead><tbody>';
 
   for (gi = 0; gi < groups.length; gi++) {
     var grp = groups[gi];
+    // Within-group order (defensive; builder already sorts this way): unknown-unit
+    // lots first, then units desc.
+    grp.rows.sort(function(a, b) {
+      var an = (a.units == null), bn = (b.units == null);
+      if (an !== bn) return an ? -1 : 1;
+      return (b.units || 0) - (a.units || 0);
+    });
     var isUnres = grp.customer === '—';
     var custName = isUnres ? 'Unresolved lots' : grp.customer;
     var meta = grp.rows.length + ' lot' + (grp.rows.length === 1 ? '' : 's')
-      + ' &middot; ' + recallFmtKg(grp.kg) + ' kg'
       + (grp.hasUnits ? ' &middot; ' + Math.round(grp.units).toLocaleString() + ' units' : '');
-    // Customer group header (spans all columns)
-    out += '<tr style="background:#191c1f;border-top:0.5px solid #2c2c2a;">'
-      + '<td colspan="5" style="padding:9px 14px;">'
+    // Customer group header — lighter fill + heavier top rule so groups read as
+    // distinct bands on scroll.
+    out += '<tr style="background:#20242a;border-top:1.5px solid #333940;">'
+      + '<td colspan="4" style="padding:9px 14px;">'
       +   '<span style="font-size:12px;font-weight:600;color:'+(isUnres?'#F09595':'#e8e6e0')+';">'+esc(custName)+'</span>'
       +   '<span style="font-size:11px;color:#888780;margin-left:8px;">'+meta+'</span>'
       + '</td></tr>';
     for (ri = 0; ri < grp.rows.length; ri++) {
       var r = grp.rows[ri];
+      var noUnit = (r.units == null);
       var prodName = r.resolved ? displayProduct(r.product, r.customer) : r.product;
       var prodCell = r.resolved
         ? '<span style="color:#e8e6e0;">'+esc(prodName)+'</span>'
         : '<span style="color:#F09595;font-style:italic;">'+esc(prodName)+'</span>';
-      var unitsCell = (r.units == null)
-        ? '<span style="color:#5f5e5a;">—</span>'
+      var unitsCell = noUnit
+        ? '<span style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end;color:#E09E4A;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#E09E4A" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#E09E4A"/></svg>no unit data</span>'
         : '<span style="color:#e8e6e0;">'+Math.round(r.units).toLocaleString()+'</span>';
-      out += '<tr style="border-top:0.5px solid #232629;">'
-        + '<td style="padding:8px 14px 8px 28px;">'+prodCell+'</td>'
-        + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#85B7EB;">'+esc(r.lot)+'</td>'
+      // Amber wash + left marker on unknown-unit rows.
+      var rowStyle = 'border-top:0.5px solid #232629;'
+        + (noUnit ? 'background:rgba(224,158,74,0.07);box-shadow:inset 2px 0 0 rgba(224,158,74,0.7);' : '');
+      out += '<tr style="'+rowStyle+'">'
+        + '<td title="'+esc(prodName)+'" style="padding:8px 14px 8px 28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+prodCell+'</td>'
+        + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c7cbcf;overflow:hidden;text-overflow:ellipsis;">'+esc(r.lot)+'</td>'
         + '<td style="padding:8px 14px;color:#888780;">'+recallFmtDate(r.runDate)+'</td>'
-        + '<td style="padding:8px 14px;text-align:right;font-weight:600;color:#D08A1E;">'+recallFmtKg(r.kg)+'</td>'
         + '<td style="padding:8px 14px;text-align:right;">'+unitsCell+'</td>'
         + '</tr>';
     }
@@ -9842,19 +9866,21 @@ function exportRecall() {
     ['DTF Recall List — T#: ' + tNum],
     ['Material: ' + (res.material || '(unavailable)') + (res.part ? ' (' + res.part + ')' : '')],
     ['Affected lots: ' + res.lots + ' · Customers: ' + res.customers
-      + ' · Total kg: ' + recallFmtKg(res.totKg) + ' · Total units: ' + Math.round(res.totUnits)],
+      + ' · Total units: ' + Math.round(res.totUnits)],
     ['Exported: ' + dateStr],
     [],
-    ['Customer', 'Product', 'Lot #', 'Run Date', 'KG from ' + tNum, 'Units Produced', 'Resolved']
+    ['Customer', 'Product', 'Lot #', 'Run Date', 'Units Produced', 'Resolved']
   ];
-  // Group export rows by customer (matching the on-screen view): sort by customer,
-  // unresolved last, then run date desc within each customer.
+  // Group export rows by customer (matching the on-screen view): sort by customer
+  // (unresolved last), then unknown-unit lots first, then units descending.
   var exportRows = res.rows.slice().sort(function(a, b) {
     var au = a.customer === '—' ? 1 : 0, bu = b.customer === '—' ? 1 : 0;
     if (au !== bu) return au - bu;
     var byCust = a.customer.toLowerCase().localeCompare(b.customer.toLowerCase());
     if (byCust !== 0) return byCust;
-    return (b.runTs - a.runTs) || (b.kg - a.kg);
+    var an = (a.units == null), bn = (b.units == null);
+    if (an !== bn) return an ? -1 : 1;
+    return (b.units || 0) - (a.units || 0);
   });
   exportRows.forEach(function(r) {
     rows.push([
@@ -9862,8 +9888,7 @@ function exportRecall() {
       r.product,   // keep the "(lot not found…)" text so the flag survives export
       r.lot,
       recallFmtDate(r.runDate),
-      Math.round(r.kg * 100) / 100,
-      r.units == null ? '' : Math.round(r.units),
+      r.units == null ? 'no unit data' : Math.round(r.units),
       r.resolved ? 'Yes' : 'NOT FOUND'
     ]);
   });
