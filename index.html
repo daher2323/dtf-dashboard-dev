@@ -28,6 +28,10 @@
   .main-tab-name { font-size: 13px; font-weight: 500; }
   .main-tab.on .main-tab-name { color: #e8e6e0; }
   .main-tab:not(.on) .main-tab-name { color: #5f5e5a; }
+  /* Recall Tracking — incident-response accent (amber), set apart from browse tabs */
+  .recall-tab.on { background: #3A2708; border-color: #BA7517; }
+  .recall-tab.on .main-tab-icon { background: #5A3B0C; border: 0.5px solid #D08A1E; }
+  .recall-tab:not(.on):hover .main-tab-name { color: #D08A1E; }
   .app-bar-right { display: flex; align-items: center; gap: 8px; padding-left: 16px; border-left: 0.5px solid #2c2c2a; margin-left: auto; flex-shrink: 0; }
   .sub-bar-outer { background: #0d1118; border-bottom: 0.5px solid #1a2030; position: sticky; top: 68px; z-index: 99; }
   .cust-concentration-outer { background: #1e2124; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 68px; z-index: 99; display: none; }
@@ -356,6 +360,12 @@
         <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="5" r="2.2"/><path d="M1 14c0-2.2 2.2-3.8 5-3.8"/><path d="M15 14c0-2.2-1.8-3.8-4-3.8"/><path d="M6 10.2c2.5-.5 5 .5 5 3.8"/></svg></div>
         <span class="main-tab-name">Customers</span>
       </div>
+      <!-- Recall Tracking: set apart from the browse tabs (incident response). -->
+      <div id="recall-divider" style="width:1px;height:26px;background:#2c2c2a;margin:0 4px;flex-shrink:0;"></div>
+      <div class="main-tab recall-tab" id="mtab-recall" onclick="setMainSection('recall')">
+        <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg></div>
+        <span class="main-tab-name">Recall Tracking</span>
+      </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
       <div class="app-bar-right" id="app-bar-right"></div>
@@ -466,6 +476,11 @@ var CSV_DEMAND = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M
 var CSV_OPEN_ORDERS_POWDER  = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0RbxQFw87S9yCUIENC5Y8XIptzLrXD3PNP37FjqYR1VsCe0AqQgMV9InGYROVjHYDDWj039vuoKzY/pub?gid=1505899317&single=true&output=csv';
 var CSV_OPEN_ORDERS_CAPSULE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0RbxQFw87S9yCUIENC5Y8XIptzLrXD3PNP37FjqYR1VsCe0AqQgMV9InGYROVjHYDDWj039vuoKzY/pub?gid=1877513131&single=true&output=csv';
 var materialsData = [];
+// Recall Tracking source. Same raw CSV_MATERIALS text parseMaterials() reads, but
+// parsed POSITIONALLY (by column index) so the four T#/QTY-Picked slots survive.
+// parseMaterials() keys by header and only keeps 5 fields — it would drop the T#
+// columns entirely. Built once from the same fetch (fetchMaterialsIfNeeded).
+var pickRows = [];           // [{ date, orderLot, part, material, slots:[{t, qty}] }]
 var inventoryByPart = {};    // DTF Part # -> { partNum, stock, material, lots } summed across lot rows (on-hand inventory)
 var inventoryLoaded = false; // true once a successful inventory fetch has populated inventoryByPart
 var demandByPart = {};       // DTF Part # -> forthcoming demand in KG, summed across the demand sheet
@@ -637,8 +652,14 @@ function renderAgingStatusBar(agingOrders) {
 }
 
 var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets = {};
-var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders'
+var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders' | 'recall'
 var topView = 'summary', subView = 'today';
+// Recall Tracking (transient view state). recallResult persists across re-renders
+// so a background data refresh doesn't wipe an active trace; it only changes when
+// the user runs a new trace (top-up, not reset).
+var recallQuery = '';
+var recallResult = null;  // null = no search yet; {} with rows:[] = searched, none found
+var recallPending = '';   // a T# traced before pickRows finished loading; runs on arrival
 var selectedCustomer = null;
 var sortCol = 'date', sortDir = -1, page = 1, PAGE_SIZE = 50;
 var custLimit = 10;
@@ -1141,11 +1162,15 @@ function applyRole() {
   var ct = document.getElementById('mtab-customers');
   var pt = document.getElementById('mtab-procurement');
   var ot = document.getElementById('mtab-orders');
+  var rt = document.getElementById('mtab-recall');
   if (ct) ct.style.display = isAdmin ? '' : 'none';
   if (pt) pt.style.display = isAdmin ? '' : 'none';
   if (ot) ot.style.display = isAdmin ? '' : 'none';
+  if (rt) rt.style.display = isAdmin ? '' : 'none';
+  var rd = document.getElementById('recall-divider');
+  if (rd) rd.style.display = isAdmin ? '' : 'none';
   // If viewer lands on a restricted section, redirect to production/today
-  if (!isAdmin && (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders')) {
+  if (!isAdmin && (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'recall')) {
     mainSection = 'production';
     topView = 'summary';
     subView = 'today';
@@ -1435,7 +1460,10 @@ function fetchMaterialsIfNeeded() {
     var parsed = parseMaterials(t);
     if (parsed.length > 0) {
       materialsData = parsed;
+      // Same raw text, parsed positionally for Recall Tracking (see parsePickRows).
+      pickRows = parsePickRows(t);
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+      if (mainSection === 'recall') renderRecall();
     }
   });
 }
@@ -1752,6 +1780,150 @@ function parseMaterials(text) {
       };
     }).filter(function(r){ return r.date && r.date >= MATERIALS_TRACKING_START; });
   } catch(e) { return []; }
+}
+
+// ── Recall Tracking: positional pick-sheet parse ──────────────────────────
+// The pick sheet is CSV_MATERIALS (a Google Form). It carries FOUR T#/QTY-Picked
+// slot pairs per row. parseCSV/parseMaterials key by header name, which is unsafe
+// for this sheet: if the four "QTY Picked" headers ever collide (Forms currently
+// suffixes them (2)/(3)/(4), but that is not guaranteed), a header-keyed parse
+// silently collapses all four quantities to last-wins. So recall reads by COLUMN
+// INDEX — position is the reliable contract. Confirmed layout (0-indexed):
+//   0 Date  1 Email  2 Order Lot #  3 Part #  4 Material Name  5 Qty Needed
+//   6 T#1(Check)  7 T#  8 QTY  9 T#(2)  10 QTY  11 T#(3)  12 QTY  13 T#(4)  14 QTY
+// QTY is in KG (same unit as the rest of the dashboard). No date filter here — a
+// recall must not silently drop older runs the way the materials view does.
+var PICK_SLOT_IDX = [[7, 8], [9, 10], [11, 12], [13, 14]]; // [T# col, QTY col]
+
+// Quote-aware split of one CSV line into a positional array of trimmed cells.
+// Mirrors the inner loop of parseCSV, but returns the array instead of an object
+// keyed by header (which is what would collapse the duplicate columns).
+function splitCsvLine(line) {
+  var vals = [], cur = '', inQ = false, i, c;
+  for (i = 0; i < line.length; i++) {
+    c = line[i];
+    if (c === '"') inQ = !inQ;
+    else if (c === ',' && !inQ) { vals.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  vals.push(cur.trim());
+  return vals;
+}
+
+function cell(arr, idx) {
+  var v = arr[idx];
+  return (v == null ? '' : String(v)).replace(/^"|"$/g, '').trim();
+}
+
+// Normalize a T# for comparison: trim + upper-case. Leaves internal format alone.
+function normT(v) {
+  if (v == null) return '';
+  return String(v).replace(/^\s+|\s+$/g, '').toUpperCase();
+}
+
+// Build the positional pick-row array from the raw CSV text (same text
+// parseMaterials receives). One entry per pick line that has >=1 T# slot.
+function parsePickRows(text) {
+  if (!text) return [];
+  try {
+    var clean = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+    var lines = clean.trim().split('\n');
+    var out = [], i, s, r, slots, tval, qval;
+    for (i = 1; i < lines.length; i++) { // skip header row
+      if (!lines[i]) continue;
+      r = splitCsvLine(lines[i]);
+      slots = [];
+      for (s = 0; s < PICK_SLOT_IDX.length; s++) {
+        tval = normT(cell(r, PICK_SLOT_IDX[s][0]));
+        qval = Number(cell(r, PICK_SLOT_IDX[s][1])) || 0;
+        if (tval !== '') slots.push({ t: tval, qty: qval });
+      }
+      if (slots.length === 0) continue;
+      out.push({
+        date: cell(r, 0),
+        orderLot: cell(r, 2),
+        part: cell(r, 3),
+        material: cell(r, 4),
+        slots: slots
+      });
+    }
+    return out;
+  } catch(e) { return []; }
+}
+
+// Find every pick line that drew from a given T#, across all four slots. Each hit
+// is one material line, with the qty pulled FROM the matched slot (not the line
+// total) and its Order Lot #.
+function traceTNumber(rows, query) {
+  var q = normT(query);
+  if (q === '') return [];
+  var hits = [], i, j, matched, matchedQty, row;
+  for (i = 0; i < rows.length; i++) {
+    row = rows[i];
+    matched = false; matchedQty = 0;
+    for (j = 0; j < row.slots.length; j++) {
+      if (row.slots[j].t === q) {
+        matched = true;
+        matchedQty += row.slots[j].qty; // defensive: same T# in >1 slot on one line -> sum
+      }
+    }
+    if (!matched) continue;
+    hits.push({ orderLot: row.orderLot, qty: matchedQty, material: row.material, part: row.part, date: row.date });
+  }
+  return hits;
+}
+
+// Lot -> Product / units maps, built over the SAME dataset the L3/L4 drills use
+// (allRows + prior-year rows) so recall resolution can't disagree with the drill
+// views. Mirrors the inline pass in renderMaterials' product drill.
+function buildLotResolution() {
+  var productByLot = {}, unitsByLot = {}, prodDateByLot = {};
+  allRows.concat(allRows25).forEach(function(r) {
+    var lot = (r['Lot Number']||'').trim(); if (!lot) return;
+    if (!productByLot[lot] && r['Product']) productByLot[lot] = (r['Product']||'').trim();
+    unitsByLot[lot] = (unitsByLot[lot]||0) + num(r['Final Units']);
+    var pd = parseLocalDate(r['Date']);
+    if (pd && (!prodDateByLot[lot] || pd > prodDateByLot[lot])) prodDateByLot[lot] = pd;
+  });
+  return { productByLot: productByLot, unitsByLot: unitsByLot, prodDateByLot: prodDateByLot };
+}
+
+function countKeys(o) { var n = 0, k; for (k in o) { if (o.hasOwnProperty(k)) n++; } return n; }
+
+// Resolve each hit to product/customer/units and aggregate. UNRESOLVED lots are
+// surfaced, never dropped: a missing production join in a recall is a red flag the
+// user must see. Product resolution chain matches the L4 drill exactly.
+function buildRecallResult(hits) {
+  var maps = buildLotResolution();
+  var rows = [], totKg = 0, totUnits = 0, custSet = {}, prodSet = {}, matSet = {}, partSet = {};
+  var i, lot, productionProd, lotIdxEntry, product, customer, units;
+  for (i = 0; i < hits.length; i++) {
+    lot = String(hits[i].orderLot == null ? '' : hits[i].orderLot).trim();
+    productionProd = maps.productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
+    lotIdxEntry = lotIndex[lot];
+    product = productionProd || (lotIdxEntry && lotIdxEntry.combined) || null;
+    customer = product ? (product.split('-')[0].trim() || null) : null;
+    units = maps.unitsByLot.hasOwnProperty(lot) ? maps.unitsByLot[lot] : null;
+    rows.push({
+      product: product != null ? product : '(lot not found in production data)',
+      resolved: product != null,
+      customer: customer != null ? customer : '—',
+      lot: lot,
+      date: hits[i].date,
+      qty: hits[i].qty,
+      units: units
+    });
+    totKg += hits[i].qty;
+    totUnits += (units || 0);
+    if (customer != null) custSet[customer] = 1;
+    if (product != null) prodSet[product] = 1;
+    if (hits[i].material) matSet[hits[i].material] = 1;
+    if (hits[i].part) partSet[hits[i].part] = 1;
+  }
+  rows.sort(function(a, b) { return b.qty - a.qty; }); // kg desc (see spec note: swap to date desc if team reads by recency)
+  return { rows: rows, totKg: totKg, totUnits: totUnits,
+           runs: rows.length, products: countKeys(prodSet), customers: countKeys(custSet),
+           material: Object.keys(matSet).join(', '), part: Object.keys(partSet).join(', ') };
 }
 
 function applyFreshData(res) {
@@ -2147,18 +2319,22 @@ function setMainSection(s) {
   // Hide customer col header when not on customers
   var hdrOuter = document.getElementById('cust-col-header-outer');
   if(hdrOuter && s !== 'customers') hdrOuter.style.display = 'none';
-  ['production','customers','procurement','orders'].forEach(function(k) {
+  ['production','customers','procurement','orders','recall'].forEach(function(k) {
     var t = document.getElementById('mtab-' + k);
     if (!t) return;
     var isOn = k === s;
-    t.className = 'main-tab' + (isOn ? ' on' : '');
+    var isRecall = k === 'recall';
+    t.className = 'main-tab' + (isRecall ? ' recall-tab' : '') + (isOn ? ' on' : '');
     var ico = t.querySelector('.main-tab-icon');
     if (ico) {
+      // Recall keeps its amber accent when active; the browse tabs use blue.
+      var onColor = isRecall ? '#D08A1E' : '#85B7EB';
       var svgs = {
-        production:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?'#85B7EB':'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="3" height="8" rx="1"/><rect x="6" y="6" width="3" height="6" rx="1"/><rect x="11" y="2" width="3" height="10" rx="1"/><line x1="1" y1="14" x2="15" y2="14"/></svg>',
-        customers:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?'#85B7EB':'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="5" r="2.2"/><path d="M1 14c0-2.2 2.2-3.8 5-3.8"/><path d="M15 14c0-2.2-1.8-3.8-4-3.8"/><path d="M6 10.2c2.5-.5 5 .5 5 3.8"/></svg>',
-        procurement:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?'#85B7EB':'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><line x1="8" y1="8" x2="8" y2="15"/></svg>',
-        orders:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?'#85B7EB':'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5"/><line x1="5.5" y1="8" x2="10.5" y2="8"/><line x1="5.5" y1="11" x2="9" y2="11"/></svg>'
+        production:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="3" height="8" rx="1"/><rect x="6" y="6" width="3" height="6" rx="1"/><rect x="11" y="2" width="3" height="10" rx="1"/><line x1="1" y1="14" x2="15" y2="14"/></svg>',
+        customers:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="5" r="2.2"/><path d="M1 14c0-2.2 2.2-3.8 5-3.8"/><path d="M15 14c0-2.2-1.8-3.8-4-3.8"/><path d="M6 10.2c2.5-.5 5 .5 5 3.8"/></svg>',
+        procurement:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><line x1="8" y1="8" x2="8" y2="15"/></svg>',
+        orders:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5"/><line x1="5.5" y1="8" x2="10.5" y2="8"/><line x1="5.5" y1="11" x2="9" y2="11"/></svg>',
+        recall:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="'+(isOn?onColor:'#444441')+'"/></svg>'
       };
       ico.innerHTML = svgs[k] || '';
     }
@@ -2230,6 +2406,16 @@ function renderSubBar() {
       + '<button onclick="setOrdersView(\'labels\')"   style="'+navBtnStyle(ordersView==='labels')+'">Labels</button>'
       + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'
       + '</div>';
+  } else if (mainSection === 'recall') {
+    // The search UI lives in #content; the sub-bar just carries the incident label.
+    sb.innerHTML =
+      '<div style="display:inline-flex;align-items:center;gap:8px;padding:4px 12px;border-radius:8px;background:#3A2708;border:0.5px solid #BA7517;">'
+      + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg>'
+      + '<span style="font-size:12px;font-weight:500;color:#D08A1E;">Recall Tracking</span>'
+      + '<span style="font-size:11px;color:#9a8560;">Trace a T# to every affected lot, product &amp; customer</span>'
+      + '</div>';
+  } else {
+    sb.innerHTML = '';
   }
 }
 
@@ -2793,7 +2979,7 @@ function renderImpl() {
   try {
     // Enforce viewer restrictions
     if (userRole !== 'admin') {
-      if (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders') { mainSection = 'production'; }
+      if (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'recall') { mainSection = 'production'; }
       if (topView === 'detail') { topView = 'summary'; }
       if (subView === 'performance') { subView = 'today'; }
     }
@@ -2819,6 +3005,10 @@ function renderImpl() {
     }
     if (mainSection === 'orders') {
       renderOrders();
+      return;
+    }
+    if (mainSection === 'recall') {
+      renderRecall();
       return;
     }
     if (topView==='detail') renderDetail();
@@ -9390,6 +9580,221 @@ function exportMaterials() {
 
   var fileName = 'DTF_Materials_'+now.toISOString().split('T')[0]+'.xlsx';
   XLSX.writeFile(wb, fileName);
+}
+
+
+// ── Recall Tracking view ──────────────────────────────────────────────────
+
+function recallFmtKg(n) {
+  return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+function recallFmtDate(d) {
+  // date is the pick-row Date cell (string) or a production Date; keep it simple.
+  if (!d) return '—';
+  var dt = parseLocalDate(d);
+  if (!dt) return esc(String(d));
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function renderRecall() {
+  closeMsPanel();
+  fetchMaterialsIfNeeded();   // idempotent; builds pickRows from the same fetch
+  fetchLotIndexIfNeeded();    // so unresolved lots can still resolve via the Lot # index
+
+  // A trace fired before the pick sheet loaded runs now that data is present.
+  if (recallPending && pickRows.length > 0) {
+    var pq = recallPending;
+    recallPending = '';
+    trackEvent('recall_search', { t_number: pq });
+    var pres = buildRecallResult(traceTNumber(pickRows, pq));
+    pres.tNum = pq;
+    recallResult = pres;
+  }
+
+  var loading = pickRows.length === 0;
+  var q = esc(recallQuery);
+
+  var html = '<div style="max-width:1400px;margin:0 auto;width:100%;padding:1.5rem;">';
+
+  // Intro / search card
+  html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
+    + '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a raw-material T#</div>'
+    + '<div style="font-size:12px;color:#888780;margin-bottom:14px;">Enter a receipt T# to trace every production run that consumed it — across all four pick slots — to the affected lots, products, customers and units produced.</div>'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+    +   '<input id="recall-input" type="text" value="'+q+'" placeholder="e.g. T30693" autocomplete="off" spellcheck="false" '
+    +     'onkeydown="onRecallKey(event)" '
+    +     'style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:9px 12px;min-width:220px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;" />'
+    +   '<button onclick="runRecallTrace()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;border:1.5px solid #BA7517;background:#3A2708;color:#D08A1E;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;">'
+    +     '<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#D08A1E" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round"/></svg>'
+    +     'Trace</button>'
+    + '</div>'
+    + (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
+    + '</div>';
+
+  if (recallResult) {
+    html += renderRecallResultHTML(recallResult);
+  } else {
+    html += '<div style="text-align:center;padding:3rem 1rem;color:#5f5e5a;font-size:13px;">'
+      + '<svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="#2c2c2a" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:12px;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#2c2c2a"/></svg>'
+      + '<div>Enter a T# above to build the recall list.</div>'
+      + '</div>';
+  }
+
+  html += '</div>';
+  document.getElementById('content').innerHTML = html;
+}
+
+function renderRecallResultHTML(res) {
+  var out = '';
+  var tNum = esc(res.tNum || '');
+  var unresolved = 0, i;
+  for (i = 0; i < res.rows.length; i++) { if (!res.rows[i].resolved) unresolved++; }
+
+  if (res.rows.length === 0) {
+    return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:2.5rem 1.5rem;text-align:center;">'
+      + '<div style="font-size:14px;font-weight:600;color:#e8e6e0;margin-bottom:6px;">No production runs found for '+tNum+'</div>'
+      + '<div style="font-size:12px;color:#888780;">No pick line drew from this T# in any of the four slots. Check the T# and try again.</div>'
+      + '</div>';
+  }
+
+  // Summary banner (incident treatment). Amber by default; if any lot failed to
+  // resolve to a production run, add a red flag line — a missing join in a recall
+  // must be visible, never silently absent.
+  var matLabel = res.material ? esc(res.material) : '(material name unavailable)';
+  var partLabel = res.part ? ' <span style="color:#9a8560;">('+esc(res.part)+')</span>' : '';
+  out += '<div style="background:#3A2708;border:1px solid #BA7517;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">'
+    +   '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg>'
+    +   '<span style="font-size:15px;font-weight:700;color:#D08A1E;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+tNum+'</span>'
+    +   '<span style="font-size:13px;color:#e8e6e0;font-weight:500;">'+matLabel+'</span>'+partLabel
+    + '</div>'
+    + '<div style="display:flex;gap:28px;flex-wrap:wrap;">'
+    +   recallStat(res.runs.toLocaleString(), 'Affected runs')
+    +   recallStat(res.products.toLocaleString(), 'Products')
+    +   recallStat(res.customers.toLocaleString(), 'Customers')
+    +   recallStat(recallFmtKg(res.totKg) + ' kg', 'Total consumed')
+    +   recallStat(Math.round(res.totUnits).toLocaleString(), 'Total units produced')
+    + '</div>'
+    + (unresolved > 0
+        ? '<div style="margin-top:12px;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;">'
+          + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#F09595" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="10.8" r="0.4" fill="#F09595"/></svg>'
+          + '<span>'+unresolved.toLocaleString()+' pick line'+(unresolved===1?'':'s')+' could not be matched to a production run — listed below with product/units flagged. Verify these lots manually.</span>'
+          + '</div>'
+        : '')
+    + '</div>';
+
+  // Export bar
+  out += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
+    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Affected runs</div>'
+    + '<button onclick="exportRecall()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;border:0.5px solid #1D9E75;background:#085041;color:#9FE1CB;font-size:12px;font-weight:500;cursor:pointer;font-family:system-ui;">'
+    +   '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#9FE1CB" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1v8"/><polyline points="4,6 7,9 10,6"/><path d="M2 11v1.5h10V11"/></svg>'
+    +   'Export recall list</button>'
+    + '</div>';
+
+  // Results table
+  out += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
+    + '<div style="overflow-x:auto;">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+    + '<thead><tr style="background:#141618;">'
+    +   recallTh('PRODUCT', 'left')
+    +   recallTh('CUSTOMER', 'left')
+    +   recallTh('LOT #', 'left')
+    +   recallTh('RUN DATE', 'left')
+    +   recallTh('KG FROM ' + tNum, 'right')
+    +   recallTh('UNITS', 'right')
+    + '</tr></thead><tbody>';
+
+  for (i = 0; i < res.rows.length; i++) {
+    var r = res.rows[i];
+    var prodCell = r.resolved
+      ? '<span style="color:#e8e6e0;">'+esc(r.product)+'</span>'
+      : '<span style="color:#F09595;font-style:italic;">'+esc(r.product)+'</span>';
+    var unitsCell = (r.units == null)
+      ? '<span style="color:#5f5e5a;">—</span>'
+      : '<span style="color:#e8e6e0;">'+Math.round(r.units).toLocaleString()+'</span>';
+    out += '<tr style="border-top:0.5px solid #2c2c2a;">'
+      + '<td style="padding:9px 14px;">'+prodCell+'</td>'
+      + '<td style="padding:9px 14px;color:#b8b6b0;">'+esc(r.customer)+'</td>'
+      + '<td style="padding:9px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#85B7EB;">'+esc(r.lot)+'</td>'
+      + '<td style="padding:9px 14px;color:#888780;">'+recallFmtDate(r.date)+'</td>'
+      + '<td style="padding:9px 14px;text-align:right;font-weight:600;color:#D08A1E;">'+recallFmtKg(r.qty)+'</td>'
+      + '<td style="padding:9px 14px;text-align:right;">'+unitsCell+'</td>'
+      + '</tr>';
+  }
+  out += '</tbody></table></div></div>';
+  return out;
+}
+
+function recallStat(value, label) {
+  return '<div><div style="font-size:20px;font-weight:700;color:#e8e6e0;line-height:1.1;">'+value+'</div>'
+    + '<div style="font-size:11px;color:#9a8560;margin-top:2px;">'+esc(label)+'</div></div>';
+}
+
+function recallTh(label, align) {
+  return '<th style="text-align:'+align+';padding:9px 14px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">'+esc(label)+'</th>';
+}
+
+function onRecallKey(e) {
+  if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); runRecallTrace(); }
+}
+
+function runRecallTrace() {
+  var inp = document.getElementById('recall-input');
+  var raw = inp ? inp.value : recallQuery;
+  recallQuery = raw;                 // preserve exactly what the user typed
+  var qn = normT(raw);
+  if (qn === '') { recallResult = null; recallPending = ''; render(); return; }
+  if (pickRows.length === 0) {
+    // Pick sheet not loaded yet — remember the query and run it on arrival.
+    recallPending = qn;
+    recallResult = null;
+    fetchMaterialsIfNeeded();
+    render();
+    return;
+  }
+  trackEvent('recall_search', { t_number: qn });
+  var res = buildRecallResult(traceTNumber(pickRows, qn));
+  res.tNum = qn;
+  recallResult = res;
+  recallPending = '';
+  render();
+}
+
+function exportRecall() {
+  if (typeof XLSX === 'undefined') { alert('Export library not loaded yet, please try again.'); return; }
+  if (!recallResult || !recallResult.rows.length) { alert('Nothing to export — run a trace first.'); return; }
+  var res = recallResult;
+  var tNum = res.tNum || '';
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  var wb = XLSX.utils.book_new();
+
+  var rows = [
+    ['DTF Recall List — T#: ' + tNum],
+    ['Material: ' + (res.material || '(unavailable)') + (res.part ? ' (' + res.part + ')' : '')],
+    ['Affected runs: ' + res.runs + ' · Products: ' + res.products + ' · Customers: ' + res.customers
+      + ' · Total kg: ' + recallFmtKg(res.totKg) + ' · Total units: ' + Math.round(res.totUnits)],
+    ['Exported: ' + dateStr],
+    [],
+    ['Product', 'Customer', 'Lot #', 'Run Date', 'KG from ' + tNum, 'Units Produced', 'Resolved']
+  ];
+  res.rows.forEach(function(r) {
+    rows.push([
+      r.resolved ? r.product : r.product,   // keep the "(lot not found…)" text so the flag survives export
+      r.customer,
+      r.lot,
+      recallFmtDate(r.date),
+      Math.round(r.qty * 100) / 100,
+      r.units == null ? '' : Math.round(r.units),
+      r.resolved ? 'Yes' : 'NOT FOUND'
+    ]);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Recall List');
+
+  // Sanitize T# for a filename (drop anything that isn't alphanumeric).
+  var safeT = String(tNum).replace(/[^A-Za-z0-9]/g, '') || 'unknown';
+  XLSX.writeFile(wb, 'recall_' + safeT + '.xlsx');
 }
 
 
