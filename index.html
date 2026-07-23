@@ -9639,20 +9639,23 @@ function renderRecall() {
 
   // Trace card: two columns — search on the left, the result summary on the right
   // (a muted placeholder until a trace runs, then T# + material + the metric row).
-  html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
-    + '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:stretch;">'
-    // LEFT — search (fixed ~330px with a right divider)
-    +   '<div style="flex:0 1 330px;min-width:260px;border-right:0.5px solid #2c2c2a;padding-right:24px;box-sizing:border-box;">'
+  // Trace card: two EQUAL halves — search left, result right, divider down the
+  // middle. Halves own their padding (card padding:0) so the divider runs edge to
+  // edge with no dead gap.
+  html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:0;overflow:hidden;margin-bottom:1.25rem;">'
+    + '<div style="display:flex;flex-wrap:wrap;align-items:stretch;">'
+    // LEFT half — search, vertically centered.
+    +   '<div style="flex:1 1 340px;padding:22px 24px;border-right:0.5px solid #2c3036;display:flex;flex-direction:column;justify-content:center;box-sizing:border-box;">'
     +     '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a T#</div>'
-    +     '<div style="font-size:12px;color:#888780;margin-bottom:14px;">Enter a T# to trace every production run that consumed it — the affected lots, customers and units produced.</div>'
-    +     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
-    +       '<input id="recall-input" type="text" value="'+q+'" placeholder="e.g. T30693" autocomplete="off" spellcheck="false" onkeydown="onRecallKey(event)" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:9px 12px;min-width:160px;flex:1 1 160px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;box-sizing:border-box;" />'
-    +       '<button onclick="runRecallTrace()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;border:1.5px solid #BA7517;background:#3A2708;color:#D08A1E;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#D08A1E" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round"/></svg>Trace</button>'
+    +     '<div style="font-size:12px;color:#888780;margin-bottom:14px;max-width:400px;">Enter a T# to trace every production run that consumed it — the affected lots, customers and units produced.</div>'
+    +     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:460px;">'
+    +       '<input id="recall-input" type="text" value="'+q+'" placeholder="e.g. T30693" autocomplete="off" spellcheck="false" onkeydown="onRecallKey(event)" onfocus="this.style.borderColor=\'rgba(245,166,35,0.55)\'" onblur="this.style.borderColor=\'#444441\'" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:9px 12px;min-width:160px;flex:1 1 160px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;box-sizing:border-box;" />'
+    +       '<button onclick="runRecallTrace()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;border:0.5px solid rgba(245,166,35,0.55);background:rgba(245,166,35,0.15);color:#F5A623;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#F5A623" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#F5A623" stroke-width="1.3" stroke-linecap="round"/></svg>Trace</button>'
     +     '</div>'
     +     (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
     +   '</div>'
-    // RIGHT — summary, centered both axes (placeholder before trace, bubble after).
-    +   '<div style="flex:1 1 360px;min-width:260px;display:flex;align-items:center;justify-content:center;padding:18px 24px;box-sizing:border-box;">'
+    // RIGHT half — result bubble fills the half; placeholder centered before trace.
+    +   '<div style="flex:1 1 340px;padding:22px 24px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">'
     +     (hasResult ? recallSummaryHTML(recallResult)
                      : '<div style="color:#5f5e5a;font-size:12px;text-align:center;">Enter a T# and trace to see affected lots here.</div>')
     +   '</div>'
@@ -9669,23 +9672,24 @@ function renderRecall() {
 
 // One metric column inside the summary bubble (centered number + muted label).
 function recallMetricCell(v, l) {
-  return '<div style="flex:1;"><div style="font-size:22px;font-weight:600;line-height:1;color:#e8e6e0;">' + v
-    + '</div><div style="font-size:11px;color:#9a8f74;margin-top:5px;">' + l + '</div></div>';
+  return '<div style="flex:1;"><div style="font-size:24px;font-weight:700;line-height:1;color:#f2f4f6;">' + v
+    + '</div><div style="font-size:11px;color:#8b9096;margin-top:6px;">' + l + '</div></div>';
 }
 
-// Right-pane summary of a completed trace: a single centered amber bubble —
-// header (⚠ T# · material (part#)), a hairline, then three centered metrics.
-// Handles the zero-lots case inline. Show/hide vs the placeholder is the ternary
-// in renderRecall; this only builds the filled markup.
+// Right-pane result: a single amber bubble (Amber Treatment 1) — dark inset well,
+// 2px amber border + soft glow, centered header (⚠ T# · material (part#)), a
+// hairline, then three metrics with white numbers and amber dividers. Handles the
+// zero-lots case inline. Show/hide vs the placeholder is the ternary in
+// renderRecall; this only builds the filled markup.
 function recallSummaryHTML(res) {
   var tNum = esc(res.tNum || '');
-  // Amber triangle in the bubble palette (#E09E4A).
-  var triangle = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#E09E4A" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#E09E4A"/></svg>';
+  var triangle = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>';
+  var wellStyle = 'width:100%;box-sizing:border-box;background:#0e1114;border:2px solid rgba(245,166,35,0.6);border-radius:12px;padding:18px 24px;text-align:center;box-shadow:0 0 26px rgba(245,166,35,0.07);';
 
   if (res.rows.length === 0) {
-    return '<div style="max-width:560px;width:100%;background:rgba(224,158,74,0.09);border:0.5px solid rgba(224,158,74,0.45);border-radius:12px;padding:16px 22px;text-align:center;">'
+    return '<div style="'+wellStyle+'">'
       + '<div style="display:inline-flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px;">'+triangle
-      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#E09E4A;font-weight:600;">'+tNum+'</span></div>'
+      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#F5A623;font-weight:700;">'+tNum+'</span></div>'
       + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No production runs found</div>'
       + '<div style="font-size:12px;color:#888780;">No pick line drew from this T# in any of the four slots. Check the T# and try again.</div>'
       + '</div>';
@@ -9694,25 +9698,25 @@ function recallSummaryHTML(res) {
   var unresolved = 0, i;
   for (i = 0; i < res.rows.length; i++) { if (!res.rows[i].resolved) unresolved++; }
   var matText = res.material ? esc(res.material) : '(material name unavailable)';
-  var partText = res.part ? ' <span style="color:#8f8467;">('+esc(res.part)+')</span>' : '';
-  var divider = '<div style="width:0.5px;align-self:stretch;background:rgba(224,158,74,0.22);"></div>';
+  var partText = res.part ? ' <span style="color:#7d8288;">('+esc(res.part)+')</span>' : '';
+  var divider = '<div style="width:0.5px;align-self:stretch;background:rgba(245,166,35,0.2);"></div>';
 
   var bubble =
-    '<div style="max-width:560px;width:100%;background:rgba(224,158,74,0.09);border:0.5px solid rgba(224,158,74,0.45);border-radius:12px;padding:16px 22px;text-align:center;">'
-    + '<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:14px;">'+triangle
-    +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#E09E4A;font-weight:600;">'+tNum+'</span>'
-    +   '<span style="color:#c7cbcf;font-size:13px;">'+matText+partText+'</span>'
+    '<div style="'+wellStyle+'">'
+    + '<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:15px;">'+triangle
+    +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#F5A623;font-weight:700;">'+tNum+'</span>'
+    +   '<span style="color:#d4d7db;font-size:13px;">'+matText+partText+'</span>'
     + '</div>'
-    + '<div style="display:flex;align-items:center;justify-content:center;border-top:0.5px solid rgba(224,158,74,0.22);padding-top:14px;">'
+    + '<div style="display:flex;align-items:center;justify-content:center;border-top:0.5px solid rgba(245,166,35,0.2);padding-top:15px;">'
     +   recallMetricCell(res.lots.toLocaleString(), 'Affected lots') + divider
     +   recallMetricCell(res.customers.toLocaleString(), 'Customers') + divider
     +   recallMetricCell(Math.round(res.totUnits).toLocaleString(), 'Total units')
     + '</div>'
     + '</div>';
 
-  // Preserve the unmatched-lots flag (stacked under the bubble, still centered).
+  // Preserve the unmatched-lots flag (stacked under the bubble, full width).
   var flag = unresolved > 0
-    ? '<div style="max-width:560px;width:100%;box-sizing:border-box;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;text-align:left;">'
+    ? '<div style="width:100%;box-sizing:border-box;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;text-align:left;">'
       + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#F09595" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="10.8" r="0.4" fill="#F09595"/></svg>'
       + '<span>'+unresolved.toLocaleString()+' lot'+(unresolved===1?'':'s')+' could not be matched to a production run — listed below with product/units flagged. Verify these lots manually.</span>'
       + '</div>'
@@ -9731,8 +9735,8 @@ function renderRecallTableHTML(res) {
   var unknownCount = 0;
   for (i = 0; i < res.rows.length; i++) { if (res.rows[i].units == null) unknownCount++; }
   var legend = unknownCount > 0
-    ? '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#B8863E;white-space:nowrap;">'
-      + '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#B8863E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#B8863E"/></svg>'
+    ? '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#C79A4E;white-space:nowrap;">'
+      + '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>'
       + 'Highlighted rows have no matched unit count — verify exposure manually</span>'
     : '';
 
@@ -9810,11 +9814,11 @@ function renderRecallTableHTML(res) {
         ? '<span style="color:#e8e6e0;">'+esc(prodName)+'</span>'
         : '<span style="color:#F09595;font-style:italic;">'+esc(prodName)+'</span>';
       var unitsCell = noUnit
-        ? '<span style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end;color:#E09E4A;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#E09E4A" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#E09E4A"/></svg>no unit data</span>'
+        ? '<span style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end;color:#F5A623;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>no unit data</span>'
         : '<span style="color:#e8e6e0;">'+Math.round(r.units).toLocaleString()+'</span>';
       // Amber wash + left marker on unknown-unit rows.
       var rowStyle = 'border-top:0.5px solid #232629;'
-        + (noUnit ? 'background:rgba(224,158,74,0.07);box-shadow:inset 2px 0 0 rgba(224,158,74,0.7);' : '');
+        + (noUnit ? 'background:rgba(245,166,35,0.07);box-shadow:inset 2px 0 0 rgba(245,166,35,0.7);' : '');
       out += '<tr style="'+rowStyle+'">'
         + '<td title="'+esc(prodName)+'" style="padding:8px 14px 8px 28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+prodCell+'</td>'
         + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c7cbcf;overflow:hidden;text-overflow:ellipsis;">'+esc(r.lot)+'</td>'
@@ -9867,6 +9871,14 @@ function exportRecall() {
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
   var wb = XLSX.utils.book_new();
 
+  // Only include the "Resolved" column when at least one lot did NOT resolve — it's
+  // the flag for lots needing manual verification. When everything resolves it's a
+  // column of "Yes" that carries no information, so drop it.
+  var hasUnresolved = false, ui;
+  for (ui = 0; ui < res.rows.length; ui++) { if (!res.rows[ui].resolved) { hasUnresolved = true; break; } }
+
+  var header = ['Customer', 'Product', 'Lot #', 'Run Date', 'Units Produced'];
+  if (hasUnresolved) header.push('Resolved');
   var rows = [
     ['DTF Recall List — T#: ' + tNum],
     ['Material: ' + (res.material || '(unavailable)') + (res.part ? ' (' + res.part + ')' : '')],
@@ -9874,7 +9886,7 @@ function exportRecall() {
       + ' · Total units: ' + Math.round(res.totUnits)],
     ['Exported: ' + dateStr],
     [],
-    ['Customer', 'Product', 'Lot #', 'Run Date', 'Units Produced', 'Resolved']
+    header
   ];
   // Group export rows by customer (matching the on-screen view): sort by customer
   // (unresolved last), then unknown-unit lots first, then units descending.
@@ -9888,14 +9900,15 @@ function exportRecall() {
     return (b.units || 0) - (a.units || 0);
   });
   exportRows.forEach(function(r) {
-    rows.push([
+    var row = [
       r.customer,
       r.product,   // keep the "(lot not found…)" text so the flag survives export
       r.lot,
       recallFmtDate(r.runDate),
-      r.units == null ? 'no unit data' : Math.round(r.units),
-      r.resolved ? 'Yes' : 'NOT FOUND'
-    ]);
+      r.units == null ? 'no unit data' : Math.round(r.units)
+    ];
+    if (hasUnresolved) row.push(r.resolved ? 'Yes' : 'NOT FOUND');
+    rows.push(row);
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Recall List');
 
