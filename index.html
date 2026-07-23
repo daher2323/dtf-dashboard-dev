@@ -1895,18 +1895,35 @@ function countKeys(o) { var n = 0, k; for (k in o) { if (o.hasOwnProperty(k)) n+
 // user must see. Product resolution chain matches the L4 drill exactly.
 function buildRecallResult(hits) {
   var maps = buildLotResolution();
-  var rows = [], totKg = 0, totUnits = 0, custSet = {}, prodSet = {}, matSet = {}, partSet = {};
-  var i, lot, productionProd, lotIdxEntry, product, customer, units;
+  // Group hits by lot FIRST — join-free, straight off the pick sheet — so a lot
+  // that appears on multiple pick lines (or fans out in the production join)
+  // collapses to ONE row: kg summed from the matched slots, units looked up ONCE.
+  // This is the double-count fix (same discipline as the L4 units-multiply trap):
+  // never sum units per hit, only per distinct lot.
+  var byLot = {}, lotOrder = [], matSet = {}, partSet = {};
+  var i, key;
   for (i = 0; i < hits.length; i++) {
-    lot = String(hits[i].orderLot == null ? '' : hits[i].orderLot).trim();
+    key = String(hits[i].orderLot == null ? '' : hits[i].orderLot).trim();
+    if (!byLot[key]) { byLot[key] = { lot: key, kg: 0, pickDate: hits[i].date }; lotOrder.push(key); }
+    byLot[key].kg += hits[i].qty;                                  // sum kg per lot (join-free)
+    if (hits[i].date > byLot[key].pickDate) byLot[key].pickDate = hits[i].date;
+    if (hits[i].material) matSet[hits[i].material] = 1;
+    if (hits[i].part) partSet[hits[i].part] = 1;
+  }
+
+  var rows = [], totKg = 0, totUnits = 0, custSet = {};
+  var j, lot, agg, productionProd, lotIdxEntry, product, customer, units, runDate;
+  for (j = 0; j < lotOrder.length; j++) {
+    agg = byLot[lotOrder[j]];
+    lot = agg.lot;
     productionProd = maps.productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
     lotIdxEntry = lotIndex[lot];
     product = productionProd || (lotIdxEntry && lotIdxEntry.combined) || null;
     customer = product ? (product.split('-')[0].trim() || null) : null;
-    units = maps.unitsByLot.hasOwnProperty(lot) ? maps.unitsByLot[lot] : null;
-    // RUN DATE = the production run date (matches L4), not the material-pull date
-    // on the pick row. Fall back to the pick date only if the lot never ran.
-    var runDate = maps.prodDateByLot[lot] || parseLocalDate(hits[i].date) || null;
+    units = maps.unitsByLot.hasOwnProperty(lot) ? maps.unitsByLot[lot] : null;  // ONCE per lot
+    // RUN DATE = the production run date (matches L4), not the material-pull date;
+    // fall back to the latest pick date only if the lot never ran.
+    runDate = maps.prodDateByLot[lot] || parseLocalDate(agg.pickDate) || null;
     rows.push({
       product: product != null ? product : '(lot not found in production data)',
       resolved: product != null,
@@ -1914,21 +1931,17 @@ function buildRecallResult(hits) {
       lot: lot,
       runDate: runDate,
       runTs: runDate ? runDate.getTime() : -Infinity, // sort key; undated lots sink to the bottom
-      qty: hits[i].qty,
+      kg: agg.kg,
       units: units
     });
-    totKg += hits[i].qty;
-    totUnits += (units || 0);
+    totKg += agg.kg;
+    totUnits += (units || 0);                                       // safe: rows are lot-unique
     if (customer != null) custSet[customer] = 1;
-    if (product != null) prodSet[product] = 1;
-    if (hits[i].material) matSet[hits[i].material] = 1;
-    if (hits[i].part) partSet[hits[i].part] = 1;
   }
-  // Run date descending (most recent first); tie-break by kg desc so a day's runs
-  // read biggest-consumer-first.
-  rows.sort(function(a, b) { return (b.runTs - a.runTs) || (b.qty - a.qty); });
+  // Run date descending (most recent first); tie-break by kg desc.
+  rows.sort(function(a, b) { return (b.runTs - a.runTs) || (b.kg - a.kg); });
   return { rows: rows, totKg: totKg, totUnits: totUnits,
-           runs: rows.length, products: countKeys(prodSet), customers: countKeys(custSet),
+           lots: rows.length, customers: countKeys(custSet),   // "lots" replaces "runs"; no "products"
            material: Object.keys(matSet).join(', '), part: Object.keys(partSet).join(', ') };
 }
 
@@ -2413,13 +2426,9 @@ function renderSubBar() {
       + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'
       + '</div>';
   } else if (mainSection === 'recall') {
-    // The search UI lives in #content; the sub-bar just carries the incident label.
-    sb.innerHTML =
-      '<div style="display:inline-flex;align-items:center;gap:8px;padding:4px 12px;border-radius:8px;background:#3A2708;border:0.5px solid #BA7517;">'
-      + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg>'
-      + '<span style="font-size:12px;font-weight:500;color:#D08A1E;">Recall Tracking</span>'
-      + '<span style="font-size:11px;color:#9a8560;">Trace a T# to every affected lot, product &amp; customer</span>'
-      + '</div>';
+    // No sub-bar strip — the active "Recall Tracking" nav item and the Trace card
+    // title already convey context; the summary now lives inside the card.
+    sb.innerHTML = '';
   } else {
     sb.innerHTML = '';
   }
@@ -9626,84 +9635,98 @@ function renderRecall() {
   // (that double-pads and nudges the recall column off the header's left edge).
   var html = '';
 
-  // Intro / search card
+  var hasResult = recallResult && recallResult.rows;
+
+  // Trace card: two columns — search on the left, the result summary on the right
+  // (a muted placeholder until a trace runs, then T# + material + the metric row).
   html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
-    + '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a T#</div>'
-    + '<div style="font-size:12px;color:#888780;margin-bottom:14px;">Enter a T# to trace every production run that consumed it — the affected lots, products, customers and units produced.</div>'
-    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
-    +   '<input id="recall-input" type="text" value="'+q+'" placeholder="e.g. T30693" autocomplete="off" spellcheck="false" '
-    +     'onkeydown="onRecallKey(event)" '
-    +     'style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:9px 12px;min-width:220px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;" />'
-    +   '<button onclick="runRecallTrace()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;border:1.5px solid #BA7517;background:#3A2708;color:#D08A1E;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;">'
-    +     '<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#D08A1E" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round"/></svg>'
-    +     'Trace</button>'
+    + '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:stretch;">'
+    // LEFT — search (fixed ~330px with a right divider)
+    +   '<div style="flex:0 1 330px;min-width:260px;border-right:0.5px solid #2c2c2a;padding-right:24px;box-sizing:border-box;">'
+    +     '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a T#</div>'
+    +     '<div style="font-size:12px;color:#888780;margin-bottom:14px;">Enter a T# to trace every production run that consumed it — the affected lots, customers and units produced.</div>'
+    +     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+    +       '<input id="recall-input" type="text" value="'+q+'" placeholder="e.g. T30693" autocomplete="off" spellcheck="false" onkeydown="onRecallKey(event)" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:9px 12px;min-width:160px;flex:1 1 160px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;box-sizing:border-box;" />'
+    +       '<button onclick="runRecallTrace()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;border:1.5px solid #BA7517;background:#3A2708;color:#D08A1E;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#D08A1E" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round"/></svg>Trace</button>'
+    +     '</div>'
+    +     (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
+    +   '</div>'
+    // RIGHT — summary (placeholder before trace, metrics after)
+    +   '<div style="flex:1 1 360px;min-width:260px;display:flex;align-items:center;">'
+    +     (hasResult ? recallSummaryHTML(recallResult)
+                     : '<div style="color:#5f5e5a;font-size:12px;">Enter a T# and trace to see affected lots here.</div>')
+    +   '</div>'
     + '</div>'
-    + (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
     + '</div>';
 
-  if (recallResult) {
-    html += renderRecallResultHTML(recallResult);
-  } else {
-    html += '<div style="text-align:center;padding:3rem 1rem;color:#5f5e5a;font-size:13px;">'
-      + '<svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="#2c2c2a" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:12px;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#2c2c2a"/></svg>'
-      + '<div>Enter a T# above to build the recall list.</div>'
-      + '</div>';
+  // Results table sits below the card, only after a trace that found lots.
+  if (hasResult && recallResult.rows.length > 0) {
+    html += renderRecallTableHTML(recallResult);
   }
 
   document.getElementById('content').innerHTML = html;
 }
 
-function renderRecallResultHTML(res) {
-  var out = '';
+// Right-column summary of a completed trace: T# + material, then a compact metric
+// row with a thin amber left-accent (no full-width filled banner). Handles the
+// zero-lots case inline so the card's right column carries the not-found message.
+function recallSummaryHTML(res) {
   var tNum = esc(res.tNum || '');
-  var unresolved = 0, i;
-  for (i = 0; i < res.rows.length; i++) { if (!res.rows[i].resolved) unresolved++; }
+  var triangle = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg>';
 
   if (res.rows.length === 0) {
-    return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:2.5rem 1.5rem;text-align:center;">'
-      + '<div style="font-size:14px;font-weight:600;color:#e8e6e0;margin-bottom:6px;">No production runs found for '+tNum+'</div>'
+    return '<div style="width:100%;">'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'+triangle
+      +   '<span style="font-size:15px;font-weight:700;color:#D08A1E;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+tNum+'</span></div>'
+      + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No production runs found</div>'
       + '<div style="font-size:12px;color:#888780;">No pick line drew from this T# in any of the four slots. Check the T# and try again.</div>'
       + '</div>';
   }
 
-  // Summary banner (incident treatment). Amber by default; if any lot failed to
-  // resolve to a production run, add a red flag line — a missing join in a recall
-  // must be visible, never silently absent.
+  var unresolved = 0, i;
+  for (i = 0; i < res.rows.length; i++) { if (!res.rows[i].resolved) unresolved++; }
   var matLabel = res.material ? esc(res.material) : '(material name unavailable)';
   var partLabel = res.part ? ' <span style="color:#9a8560;">('+esc(res.part)+')</span>' : '';
-  out += '<div style="background:#3A2708;border:1px solid #BA7517;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
-    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">'
-    +   '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg>'
+
+  return '<div style="width:100%;">'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'+triangle
     +   '<span style="font-size:15px;font-weight:700;color:#D08A1E;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+tNum+'</span>'
     +   '<span style="font-size:13px;color:#e8e6e0;font-weight:500;">'+matLabel+'</span>'+partLabel
     + '</div>'
-    + '<div style="display:flex;gap:28px;flex-wrap:wrap;">'
-    +   recallStat(res.runs.toLocaleString(), 'Affected runs')
-    +   recallStat(res.products.toLocaleString(), 'Products')
+    // Metric row — four only, with a thin amber left accent (condensed from the banner).
+    + '<div style="border-left:2px solid rgba(224,158,74,0.5);padding-left:14px;display:flex;gap:28px;flex-wrap:wrap;">'
+    +   recallStat(res.lots.toLocaleString(), 'Affected lots')
     +   recallStat(res.customers.toLocaleString(), 'Customers')
     +   recallStat(recallFmtKg(res.totKg) + ' kg', 'Total consumed')
-    +   recallStat(Math.round(res.totUnits).toLocaleString(), 'Total units produced')
+    +   recallStat(Math.round(res.totUnits).toLocaleString(), 'Total units')
     + '</div>'
     + (unresolved > 0
         ? '<div style="margin-top:12px;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;">'
           + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#F09595" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="10.8" r="0.4" fill="#F09595"/></svg>'
-          + '<span>'+unresolved.toLocaleString()+' pick line'+(unresolved===1?'':'s')+' could not be matched to a production run — listed below with product/units flagged. Verify these lots manually.</span>'
+          + '<span>'+unresolved.toLocaleString()+' lot'+(unresolved===1?'':'s')+' could not be matched to a production run — listed below with product/units flagged. Verify these lots manually.</span>'
           + '</div>'
         : '')
     + '</div>';
+}
+
+// Export bar + customer-grouped results table (rendered below the card).
+function renderRecallTableHTML(res) {
+  var out = '';
+  var tNum = esc(res.tNum || '');
+  var i;
 
   // Export bar
   out += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Affected runs</div>'
+    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Affected lots</div>'
     + '<button onclick="exportRecall()" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
     +   '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
     +   'Export recall list</button>'
     + '</div>';
 
-  // Group rows by customer. Rows arrive sorted run-date desc, so each customer's
-  // runs stay in recency order and customers appear by their most-recent affected
-  // run (first-seen order preserved by the stable sort below). The unresolved
-  // ('—') bucket is forced to the end.
+  // Group rows by customer. Rows arrive sorted run-date desc, so within each
+  // customer the runs stay newest-first; customers themselves are ordered
+  // alphabetically (case-insensitive) below, with the unresolved ('—') bucket
+  // forced to the end.
   var groups = [], gIndex = {}, gi, ri;
   for (i = 0; i < res.rows.length; i++) {
     var rr = res.rows[i];
@@ -9714,12 +9737,13 @@ function renderRecallResultHTML(res) {
     }
     var g = groups[gIndex[key]];
     g.rows.push(rr);
-    g.kg += rr.qty;
+    g.kg += rr.kg;
     if (rr.units != null) { g.units += rr.units; g.hasUnits = true; }
   }
   groups.sort(function(a, b) {
     var au = a.customer === '—' ? 1 : 0, bu = b.customer === '—' ? 1 : 0;
-    return au - bu; // stable: only nudges the unresolved bucket last, keeps recency order
+    if (au !== bu) return au - bu;                 // unresolved bucket always last
+    return a.customer.toLowerCase().localeCompare(b.customer.toLowerCase());  // A→Z by brand
   });
 
   // Results table — customer-grouped. The CUSTOMER column is dropped (it's now the
@@ -9739,7 +9763,7 @@ function renderRecallResultHTML(res) {
     var grp = groups[gi];
     var isUnres = grp.customer === '—';
     var custName = isUnres ? 'Unresolved lots' : grp.customer;
-    var meta = grp.rows.length + ' run' + (grp.rows.length === 1 ? '' : 's')
+    var meta = grp.rows.length + ' lot' + (grp.rows.length === 1 ? '' : 's')
       + ' &middot; ' + recallFmtKg(grp.kg) + ' kg'
       + (grp.hasUnits ? ' &middot; ' + Math.round(grp.units).toLocaleString() + ' units' : '');
     // Customer group header (spans all columns)
@@ -9761,7 +9785,7 @@ function renderRecallResultHTML(res) {
         + '<td style="padding:8px 14px 8px 28px;">'+prodCell+'</td>'
         + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#85B7EB;">'+esc(r.lot)+'</td>'
         + '<td style="padding:8px 14px;color:#888780;">'+recallFmtDate(r.runDate)+'</td>'
-        + '<td style="padding:8px 14px;text-align:right;font-weight:600;color:#D08A1E;">'+recallFmtKg(r.qty)+'</td>'
+        + '<td style="padding:8px 14px;text-align:right;font-weight:600;color:#D08A1E;">'+recallFmtKg(r.kg)+'</td>'
         + '<td style="padding:8px 14px;text-align:right;">'+unitsCell+'</td>'
         + '</tr>';
     }
@@ -9817,7 +9841,7 @@ function exportRecall() {
   var rows = [
     ['DTF Recall List — T#: ' + tNum],
     ['Material: ' + (res.material || '(unavailable)') + (res.part ? ' (' + res.part + ')' : '')],
-    ['Affected runs: ' + res.runs + ' · Products: ' + res.products + ' · Customers: ' + res.customers
+    ['Affected lots: ' + res.lots + ' · Customers: ' + res.customers
       + ' · Total kg: ' + recallFmtKg(res.totKg) + ' · Total units: ' + Math.round(res.totUnits)],
     ['Exported: ' + dateStr],
     [],
@@ -9828,8 +9852,9 @@ function exportRecall() {
   var exportRows = res.rows.slice().sort(function(a, b) {
     var au = a.customer === '—' ? 1 : 0, bu = b.customer === '—' ? 1 : 0;
     if (au !== bu) return au - bu;
-    if (a.customer !== b.customer) return a.customer < b.customer ? -1 : 1;
-    return (b.runTs - a.runTs) || (b.qty - a.qty);
+    var byCust = a.customer.toLowerCase().localeCompare(b.customer.toLowerCase());
+    if (byCust !== 0) return byCust;
+    return (b.runTs - a.runTs) || (b.kg - a.kg);
   });
   exportRows.forEach(function(r) {
     rows.push([
@@ -9837,7 +9862,7 @@ function exportRecall() {
       r.product,   // keep the "(lot not found…)" text so the flag survives export
       r.lot,
       recallFmtDate(r.runDate),
-      Math.round(r.qty * 100) / 100,
+      Math.round(r.kg * 100) / 100,
       r.units == null ? '' : Math.round(r.units),
       r.resolved ? 'Yes' : 'NOT FOUND'
     ]);
