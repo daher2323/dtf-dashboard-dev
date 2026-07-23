@@ -9640,7 +9640,7 @@ function renderRecall() {
   // Trace card: two columns — search on the left, the result summary on the right
   // (a muted placeholder until a trace runs, then T# + material + the metric row).
   html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
-    + '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">'
+    + '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:stretch;">'
     // LEFT — search (fixed ~330px with a right divider)
     +   '<div style="flex:0 1 330px;min-width:260px;border-right:0.5px solid #2c2c2a;padding-right:24px;box-sizing:border-box;">'
     +     '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a T#</div>'
@@ -9651,11 +9651,10 @@ function renderRecall() {
     +     '</div>'
     +     (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
     +   '</div>'
-    // RIGHT — summary (placeholder before trace, metrics after); top-aligned so the
-    // T#/material line sits level with the left "Trace a T#" title.
-    +   '<div style="flex:1 1 360px;min-width:260px;">'
+    // RIGHT — summary, centered both axes (placeholder before trace, bubble after).
+    +   '<div style="flex:1 1 360px;min-width:260px;display:flex;align-items:center;justify-content:center;padding:18px 24px;box-sizing:border-box;">'
     +     (hasResult ? recallSummaryHTML(recallResult)
-                     : '<div style="color:#5f5e5a;font-size:12px;padding-top:2px;">Enter a T# and trace to see affected lots here.</div>')
+                     : '<div style="color:#5f5e5a;font-size:12px;text-align:center;">Enter a T# and trace to see affected lots here.</div>')
     +   '</div>'
     + '</div>'
     + '</div>';
@@ -9668,17 +9667,25 @@ function renderRecall() {
   document.getElementById('content').innerHTML = html;
 }
 
-// Right-column summary of a completed trace: T# + material, then a compact metric
-// row with a thin amber left-accent (no full-width filled banner). Handles the
-// zero-lots case inline so the card's right column carries the not-found message.
+// One metric column inside the summary bubble (centered number + muted label).
+function recallMetricCell(v, l) {
+  return '<div style="flex:1;"><div style="font-size:22px;font-weight:600;line-height:1;color:#e8e6e0;">' + v
+    + '</div><div style="font-size:11px;color:#9a8f74;margin-top:5px;">' + l + '</div></div>';
+}
+
+// Right-pane summary of a completed trace: a single centered amber bubble —
+// header (⚠ T# · material (part#)), a hairline, then three centered metrics.
+// Handles the zero-lots case inline. Show/hide vs the placeholder is the ternary
+// in renderRecall; this only builds the filled markup.
 function recallSummaryHTML(res) {
   var tNum = esc(res.tNum || '');
-  var triangle = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg>';
+  // Amber triangle in the bubble palette (#E09E4A).
+  var triangle = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#E09E4A" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#E09E4A"/></svg>';
 
   if (res.rows.length === 0) {
-    return '<div style="width:100%;">'
-      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'+triangle
-      +   '<span style="font-size:15px;font-weight:700;color:#D08A1E;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+tNum+'</span></div>'
+    return '<div style="max-width:560px;width:100%;background:rgba(224,158,74,0.09);border:0.5px solid rgba(224,158,74,0.45);border-radius:12px;padding:16px 22px;text-align:center;">'
+      + '<div style="display:inline-flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px;">'+triangle
+      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#E09E4A;font-weight:600;">'+tNum+'</span></div>'
       + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No production runs found</div>'
       + '<div style="font-size:12px;color:#888780;">No pick line drew from this T# in any of the four slots. Check the T# and try again.</div>'
       + '</div>';
@@ -9686,30 +9693,32 @@ function recallSummaryHTML(res) {
 
   var unresolved = 0, i;
   for (i = 0; i < res.rows.length; i++) { if (!res.rows[i].resolved) unresolved++; }
-  var matLabel = res.material ? esc(res.material) : '(material name unavailable)';
-  var partLabel = res.part ? ' <span style="color:#9a8560;">('+esc(res.part)+')</span>' : '';
+  var matText = res.material ? esc(res.material) : '(material name unavailable)';
+  var partText = res.part ? ' <span style="color:#8f8467;">('+esc(res.part)+')</span>' : '';
+  var divider = '<div style="width:0.5px;align-self:stretch;background:rgba(224,158,74,0.22);"></div>';
 
-  return '<div style="width:100%;">'
-    // Amber accent spans the WHOLE summary — T#/material line through the metrics.
-    + '<div style="border-left:2px solid rgba(224,158,74,0.55);padding-left:16px;">'
-    +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;">'+triangle
-    +     '<span style="font-size:15px;font-weight:700;color:#D08A1E;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+tNum+'</span>'
-    +     '<span style="font-size:13px;color:#e8e6e0;font-weight:500;">'+matLabel+'</span>'+partLabel
-    +   '</div>'
-    // Three metrics — Affected lots · Customers · Total units (kg removed).
-    +   '<div style="display:flex;gap:36px;flex-wrap:wrap;">'
-    +     recallStat(res.lots.toLocaleString(), 'Affected lots')
-    +     recallStat(res.customers.toLocaleString(), 'Customers')
-    +     recallStat(Math.round(res.totUnits).toLocaleString(), 'Total units')
-    +   '</div>'
+  var bubble =
+    '<div style="max-width:560px;width:100%;background:rgba(224,158,74,0.09);border:0.5px solid rgba(224,158,74,0.45);border-radius:12px;padding:16px 22px;text-align:center;">'
+    + '<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:14px;">'+triangle
+    +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#E09E4A;font-weight:600;">'+tNum+'</span>'
+    +   '<span style="color:#c7cbcf;font-size:13px;">'+matText+partText+'</span>'
     + '</div>'
-    + (unresolved > 0
-        ? '<div style="margin-top:12px;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;">'
-          + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#F09595" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="10.8" r="0.4" fill="#F09595"/></svg>'
-          + '<span>'+unresolved.toLocaleString()+' lot'+(unresolved===1?'':'s')+' could not be matched to a production run — listed below with product/units flagged. Verify these lots manually.</span>'
-          + '</div>'
-        : '')
+    + '<div style="display:flex;align-items:center;justify-content:center;border-top:0.5px solid rgba(224,158,74,0.22);padding-top:14px;">'
+    +   recallMetricCell(res.lots.toLocaleString(), 'Affected lots') + divider
+    +   recallMetricCell(res.customers.toLocaleString(), 'Customers') + divider
+    +   recallMetricCell(Math.round(res.totUnits).toLocaleString(), 'Total units')
+    + '</div>'
     + '</div>';
+
+  // Preserve the unmatched-lots flag (stacked under the bubble, still centered).
+  var flag = unresolved > 0
+    ? '<div style="max-width:560px;width:100%;box-sizing:border-box;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;text-align:left;">'
+      + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#F09595" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="10.8" r="0.4" fill="#F09595"/></svg>'
+      + '<span>'+unresolved.toLocaleString()+' lot'+(unresolved===1?'':'s')+' could not be matched to a production run — listed below with product/units flagged. Verify these lots manually.</span>'
+      + '</div>'
+    : '';
+
+  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;">' + bubble + flag + '</div>';
 }
 
 // Export bar + customer-grouped results table (rendered below the card).
@@ -9818,10 +9827,6 @@ function renderRecallTableHTML(res) {
   return out;
 }
 
-function recallStat(value, label) {
-  return '<div><div style="font-size:20px;font-weight:700;color:#e8e6e0;line-height:1.1;">'+value+'</div>'
-    + '<div style="font-size:11px;color:#9a8560;margin-top:2px;">'+esc(label)+'</div></div>';
-}
 
 function recallTh(label, align) {
   return '<th style="text-align:'+align+';padding:9px 14px;font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">'+esc(label)+'</th>';
