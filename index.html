@@ -1904,12 +1904,16 @@ function buildRecallResult(hits) {
     product = productionProd || (lotIdxEntry && lotIdxEntry.combined) || null;
     customer = product ? (product.split('-')[0].trim() || null) : null;
     units = maps.unitsByLot.hasOwnProperty(lot) ? maps.unitsByLot[lot] : null;
+    // RUN DATE = the production run date (matches L4), not the material-pull date
+    // on the pick row. Fall back to the pick date only if the lot never ran.
+    var runDate = maps.prodDateByLot[lot] || parseLocalDate(hits[i].date) || null;
     rows.push({
       product: product != null ? product : '(lot not found in production data)',
       resolved: product != null,
       customer: customer != null ? customer : '—',
       lot: lot,
-      date: hits[i].date,
+      runDate: runDate,
+      runTs: runDate ? runDate.getTime() : -Infinity, // sort key; undated lots sink to the bottom
       qty: hits[i].qty,
       units: units
     });
@@ -1920,7 +1924,9 @@ function buildRecallResult(hits) {
     if (hits[i].material) matSet[hits[i].material] = 1;
     if (hits[i].part) partSet[hits[i].part] = 1;
   }
-  rows.sort(function(a, b) { return b.qty - a.qty; }); // kg desc (see spec note: swap to date desc if team reads by recency)
+  // Run date descending (most recent first); tie-break by kg desc so a day's runs
+  // read biggest-consumer-first.
+  rows.sort(function(a, b) { return (b.runTs - a.runTs) || (b.qty - a.qty); });
   return { rows: rows, totKg: totKg, totUnits: totUnits,
            runs: rows.length, products: countKeys(prodSet), customers: countKeys(custSet),
            material: Object.keys(matSet).join(', '), part: Object.keys(partSet).join(', ') };
@@ -9590,9 +9596,9 @@ function recallFmtKg(n) {
 }
 
 function recallFmtDate(d) {
-  // date is the pick-row Date cell (string) or a production Date; keep it simple.
+  // Accepts a Date object (row.runDate) or a date string; '—' when absent.
   if (!d) return '—';
-  var dt = parseLocalDate(d);
+  var dt = (d instanceof Date) ? d : parseLocalDate(d);
   if (!dt) return esc(String(d));
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
@@ -9623,7 +9629,7 @@ function renderRecall() {
   // Intro / search card
   html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;">'
     + '<div style="font-size:15px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">Trace a T#</div>'
-    + '<div style="font-size:12px;color:#888780;margin-bottom:14px;">Enter a receipt T# to trace every production run that consumed it — the affected lots, products, customers and units produced.</div>'
+    + '<div style="font-size:12px;color:#888780;margin-bottom:14px;">Enter a T# to trace every production run that consumed it — the affected lots, products, customers and units produced.</div>'
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
     +   '<input id="recall-input" type="text" value="'+q+'" placeholder="e.g. T30693" autocomplete="off" spellcheck="false" '
     +     'onkeydown="onRecallKey(event)" '
@@ -9689,40 +9695,76 @@ function renderRecallResultHTML(res) {
   // Export bar
   out += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
     + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Affected runs</div>'
-    + '<button onclick="exportRecall()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;border:0.5px solid #1D9E75;background:#085041;color:#9FE1CB;font-size:12px;font-weight:500;cursor:pointer;font-family:system-ui;">'
-    +   '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#9FE1CB" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1v8"/><polyline points="4,6 7,9 10,6"/><path d="M2 11v1.5h10V11"/></svg>'
+    + '<button onclick="exportRecall()" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
+    +   '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
     +   'Export recall list</button>'
     + '</div>';
 
-  // Results table
+  // Group rows by customer. Rows arrive sorted run-date desc, so each customer's
+  // runs stay in recency order and customers appear by their most-recent affected
+  // run (first-seen order preserved by the stable sort below). The unresolved
+  // ('—') bucket is forced to the end.
+  var groups = [], gIndex = {}, gi, ri;
+  for (i = 0; i < res.rows.length; i++) {
+    var rr = res.rows[i];
+    var key = rr.customer;
+    if (!gIndex.hasOwnProperty(key)) {
+      gIndex[key] = groups.length;
+      groups.push({ customer: key, rows: [], units: 0, kg: 0, hasUnits: false });
+    }
+    var g = groups[gIndex[key]];
+    g.rows.push(rr);
+    g.kg += rr.qty;
+    if (rr.units != null) { g.units += rr.units; g.hasUnits = true; }
+  }
+  groups.sort(function(a, b) {
+    var au = a.customer === '—' ? 1 : 0, bu = b.customer === '—' ? 1 : 0;
+    return au - bu; // stable: only nudges the unresolved bucket last, keeps recency order
+  });
+
+  // Results table — customer-grouped. The CUSTOMER column is dropped (it's now the
+  // group header); products indent beneath their customer.
   out += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     + '<div style="overflow-x:auto;">'
     + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
     + '<thead><tr style="background:#141618;">'
     +   recallTh('PRODUCT', 'left')
-    +   recallTh('CUSTOMER', 'left')
     +   recallTh('LOT #', 'left')
     +   recallTh('RUN DATE', 'left')
     +   recallTh('KG FROM ' + tNum, 'right')
     +   recallTh('UNITS', 'right')
     + '</tr></thead><tbody>';
 
-  for (i = 0; i < res.rows.length; i++) {
-    var r = res.rows[i];
-    var prodCell = r.resolved
-      ? '<span style="color:#e8e6e0;">'+esc(r.product)+'</span>'
-      : '<span style="color:#F09595;font-style:italic;">'+esc(r.product)+'</span>';
-    var unitsCell = (r.units == null)
-      ? '<span style="color:#5f5e5a;">—</span>'
-      : '<span style="color:#e8e6e0;">'+Math.round(r.units).toLocaleString()+'</span>';
-    out += '<tr style="border-top:0.5px solid #2c2c2a;">'
-      + '<td style="padding:9px 14px;">'+prodCell+'</td>'
-      + '<td style="padding:9px 14px;color:#b8b6b0;">'+esc(r.customer)+'</td>'
-      + '<td style="padding:9px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#85B7EB;">'+esc(r.lot)+'</td>'
-      + '<td style="padding:9px 14px;color:#888780;">'+recallFmtDate(r.date)+'</td>'
-      + '<td style="padding:9px 14px;text-align:right;font-weight:600;color:#D08A1E;">'+recallFmtKg(r.qty)+'</td>'
-      + '<td style="padding:9px 14px;text-align:right;">'+unitsCell+'</td>'
-      + '</tr>';
+  for (gi = 0; gi < groups.length; gi++) {
+    var grp = groups[gi];
+    var isUnres = grp.customer === '—';
+    var custName = isUnres ? 'Unresolved lots' : grp.customer;
+    var meta = grp.rows.length + ' run' + (grp.rows.length === 1 ? '' : 's')
+      + ' &middot; ' + recallFmtKg(grp.kg) + ' kg'
+      + (grp.hasUnits ? ' &middot; ' + Math.round(grp.units).toLocaleString() + ' units' : '');
+    // Customer group header (spans all columns)
+    out += '<tr style="background:#191c1f;border-top:0.5px solid #2c2c2a;">'
+      + '<td colspan="5" style="padding:9px 14px;">'
+      +   '<span style="font-size:12px;font-weight:600;color:'+(isUnres?'#F09595':'#e8e6e0')+';">'+esc(custName)+'</span>'
+      +   '<span style="font-size:11px;color:#888780;margin-left:8px;">'+meta+'</span>'
+      + '</td></tr>';
+    for (ri = 0; ri < grp.rows.length; ri++) {
+      var r = grp.rows[ri];
+      var prodName = r.resolved ? displayProduct(r.product, r.customer) : r.product;
+      var prodCell = r.resolved
+        ? '<span style="color:#e8e6e0;">'+esc(prodName)+'</span>'
+        : '<span style="color:#F09595;font-style:italic;">'+esc(prodName)+'</span>';
+      var unitsCell = (r.units == null)
+        ? '<span style="color:#5f5e5a;">—</span>'
+        : '<span style="color:#e8e6e0;">'+Math.round(r.units).toLocaleString()+'</span>';
+      out += '<tr style="border-top:0.5px solid #232629;">'
+        + '<td style="padding:8px 14px 8px 28px;">'+prodCell+'</td>'
+        + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#85B7EB;">'+esc(r.lot)+'</td>'
+        + '<td style="padding:8px 14px;color:#888780;">'+recallFmtDate(r.runDate)+'</td>'
+        + '<td style="padding:8px 14px;text-align:right;font-weight:600;color:#D08A1E;">'+recallFmtKg(r.qty)+'</td>'
+        + '<td style="padding:8px 14px;text-align:right;">'+unitsCell+'</td>'
+        + '</tr>';
+    }
   }
   out += '</tbody></table></div></div>';
   return out;
@@ -9779,14 +9821,22 @@ function exportRecall() {
       + ' · Total kg: ' + recallFmtKg(res.totKg) + ' · Total units: ' + Math.round(res.totUnits)],
     ['Exported: ' + dateStr],
     [],
-    ['Product', 'Customer', 'Lot #', 'Run Date', 'KG from ' + tNum, 'Units Produced', 'Resolved']
+    ['Customer', 'Product', 'Lot #', 'Run Date', 'KG from ' + tNum, 'Units Produced', 'Resolved']
   ];
-  res.rows.forEach(function(r) {
+  // Group export rows by customer (matching the on-screen view): sort by customer,
+  // unresolved last, then run date desc within each customer.
+  var exportRows = res.rows.slice().sort(function(a, b) {
+    var au = a.customer === '—' ? 1 : 0, bu = b.customer === '—' ? 1 : 0;
+    if (au !== bu) return au - bu;
+    if (a.customer !== b.customer) return a.customer < b.customer ? -1 : 1;
+    return (b.runTs - a.runTs) || (b.qty - a.qty);
+  });
+  exportRows.forEach(function(r) {
     rows.push([
-      r.resolved ? r.product : r.product,   // keep the "(lot not found…)" text so the flag survives export
       r.customer,
+      r.product,   // keep the "(lot not found…)" text so the flag survives export
       r.lot,
-      recallFmtDate(r.date),
+      recallFmtDate(r.runDate),
       Math.round(r.qty * 100) / 100,
       r.units == null ? '' : Math.round(r.units),
       r.resolved ? 'Yes' : 'NOT FOUND'
