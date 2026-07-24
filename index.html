@@ -28,10 +28,6 @@
   .main-tab-name { font-size: 13px; font-weight: 500; }
   .main-tab.on .main-tab-name { color: #e8e6e0; }
   .main-tab:not(.on) .main-tab-name { color: #5f5e5a; }
-  /* Recall Tracking — incident-response accent (amber), set apart from browse tabs */
-  .recall-tab.on { background: #3A2708; border-color: #BA7517; }
-  .recall-tab.on .main-tab-icon { background: #5A3B0C; border: 0.5px solid #D08A1E; }
-  .recall-tab:not(.on):hover .main-tab-name { color: #D08A1E; }
   .app-bar-right { display: flex; align-items: center; gap: 8px; padding-left: 16px; border-left: 0.5px solid #2c2c2a; margin-left: auto; flex-shrink: 0; }
   .sub-bar-outer { background: #0d1118; border-bottom: 0.5px solid #1a2030; position: sticky; top: 68px; z-index: 99; }
   .cust-concentration-outer { background: #1e2124; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 68px; z-index: 99; display: none; }
@@ -360,11 +356,9 @@
         <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="5" r="2.2"/><path d="M1 14c0-2.2 2.2-3.8 5-3.8"/><path d="M15 14c0-2.2-1.8-3.8-4-3.8"/><path d="M6 10.2c2.5-.5 5 .5 5 3.8"/></svg></div>
         <span class="main-tab-name">Customers</span>
       </div>
-      <!-- Recall Tracking: set apart from the browse tabs (incident response). -->
-      <div id="recall-divider" style="width:1px;height:26px;background:#2c2c2a;margin:0 4px;flex-shrink:0;"></div>
-      <div class="main-tab recall-tab" id="mtab-recall" onclick="setMainSection('recall')">
-        <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#D08A1E" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#D08A1E"/></svg></div>
-        <span class="main-tab-name">Recall Tracking</span>
+      <div class="main-tab" id="mtab-quality" onclick="setMainSection('quality')">
+        <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l5.5 2v4c0 3.4-2.3 6-5.5 7-3.2-1-5.5-3.6-5.5-7v-4z"/><path d="M5.8 8l1.6 1.6L10.4 6.4"/></svg></div>
+        <span class="main-tab-name">Quality</span>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
@@ -652,7 +646,8 @@ function renderAgingStatusBar(agingOrders) {
 }
 
 var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets = {};
-var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders' | 'recall'
+var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders' | 'quality'
+var qualitySubTab = 'recall';   // Quality sub-tab; 'recall' is the only option today
 var topView = 'summary', subView = 'today';
 // Recall Tracking (transient view state). recallResult persists across re-renders
 // so a background data refresh doesn't wipe an active trace; it only changes when
@@ -1162,15 +1157,13 @@ function applyRole() {
   var ct = document.getElementById('mtab-customers');
   var pt = document.getElementById('mtab-procurement');
   var ot = document.getElementById('mtab-orders');
-  var rt = document.getElementById('mtab-recall');
+  var rt = document.getElementById('mtab-quality');
   if (ct) ct.style.display = isAdmin ? '' : 'none';
   if (pt) pt.style.display = isAdmin ? '' : 'none';
   if (ot) ot.style.display = isAdmin ? '' : 'none';
   if (rt) rt.style.display = isAdmin ? '' : 'none';
-  var rd = document.getElementById('recall-divider');
-  if (rd) rd.style.display = isAdmin ? '' : 'none';
   // If viewer lands on a restricted section, redirect to production/today
-  if (!isAdmin && (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'recall')) {
+  if (!isAdmin && (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'quality')) {
     mainSection = 'production';
     topView = 'summary';
     subView = 'today';
@@ -1463,7 +1456,7 @@ function fetchMaterialsIfNeeded() {
       // Same raw text, parsed positionally for Recall Tracking (see parsePickRows).
       pickRows = parsePickRows(t);
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
-      if (mainSection === 'recall') renderRecall();
+      if (mainSection === 'quality' && qualitySubTab === 'recall') renderRecall();
     }
   });
 }
@@ -2340,22 +2333,20 @@ function setMainSection(s) {
   // Hide customer col header when not on customers
   var hdrOuter = document.getElementById('cust-col-header-outer');
   if(hdrOuter && s !== 'customers') hdrOuter.style.display = 'none';
-  ['production','customers','procurement','orders','recall'].forEach(function(k) {
+  ['production','customers','procurement','orders','quality'].forEach(function(k) {
     var t = document.getElementById('mtab-' + k);
     if (!t) return;
     var isOn = k === s;
-    var isRecall = k === 'recall';
-    t.className = 'main-tab' + (isRecall ? ' recall-tab' : '') + (isOn ? ' on' : '');
+    t.className = 'main-tab' + (isOn ? ' on' : '');
     var ico = t.querySelector('.main-tab-icon');
     if (ico) {
-      // Recall keeps its amber accent when active; the browse tabs use blue.
-      var onColor = isRecall ? '#D08A1E' : '#85B7EB';
+      var onColor = '#85B7EB';
       var svgs = {
         production:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="3" height="8" rx="1"/><rect x="6" y="6" width="3" height="6" rx="1"/><rect x="11" y="2" width="3" height="10" rx="1"/><line x1="1" y1="14" x2="15" y2="14"/></svg>',
         customers:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="5" r="2.2"/><path d="M1 14c0-2.2 2.2-3.8 5-3.8"/><path d="M15 14c0-2.2-1.8-3.8-4-3.8"/><path d="M6 10.2c2.5-.5 5 .5 5 3.8"/></svg>',
         procurement:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><line x1="8" y1="8" x2="8" y2="15"/></svg>',
         orders:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5"/><line x1="5.5" y1="8" x2="10.5" y2="8"/><line x1="5.5" y1="11" x2="9" y2="11"/></svg>',
-        recall:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="'+(isOn?onColor:'#444441')+'"/></svg>'
+        quality:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l5.5 2v4c0 3.4-2.3 6-5.5 7-3.2-1-5.5-3.6-5.5-7v-4z"/><path d="M5.8 8l1.6 1.6L10.4 6.4"/></svg>'
       };
       ico.innerHTML = svgs[k] || '';
     }
@@ -2427,10 +2418,15 @@ function renderSubBar() {
       + '<button onclick="setOrdersView(\'labels\')"   style="'+navBtnStyle(ordersView==='labels')+'">Labels</button>'
       + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'
       + '</div>';
-  } else if (mainSection === 'recall') {
-    // No sub-bar strip — the active "Recall Tracking" nav item and the Trace card
-    // title already convey context; the summary now lives inside the card.
-    sb.innerHTML = '';
+  } else if (mainSection === 'quality') {
+    // Quality sub-tab bar — same segmented pattern as Procurement. Built as a real
+    // group so more sub-tabs (CoA, deviations, hold/release…) drop in later. The
+    // small amber triangle identifies the recall tool inside the neutral Quality tab.
+    var qr = qualitySubTab === 'recall';
+    sb.innerHTML =
+      '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      + '<button onclick="setQualitySubTab(\'recall\')" style="'+navBtnStyle(qr)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>Recall Tracking</button>'
+      + '</div>';
   } else {
     sb.innerHTML = '';
   }
@@ -2537,6 +2533,23 @@ function setProcView(v) {
   procView = v;
   renderSubBar();
   render();
+}
+
+// Quality sub-tab switch — mirrors setProcView. State lives in qualitySubTab; the
+// recall trace state (recallResult) is a module global, so switching sub-tabs or
+// top-level tabs and back preserves an active trace (top-up, not reset).
+function setQualitySubTab(v) {
+  closeMsPanel();
+  qualitySubTab = v;
+  trackEvent('quality_subtab', { subtab: v === 'recall' ? 'recall_tracking' : v });
+  renderSubBar();
+  render();
+}
+
+// Quality view dispatcher — renders the active sub-tab's content into #content.
+function renderQuality() {
+  if (qualitySubTab === 'recall') { renderRecall(); return; }
+  renderRecall(); // default/fallback until more sub-tabs exist
 }
 
 function filterProcurement() {
@@ -2996,7 +3009,7 @@ function renderImpl() {
   try {
     // Enforce viewer restrictions
     if (userRole !== 'admin') {
-      if (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'recall') { mainSection = 'production'; }
+      if (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'quality') { mainSection = 'production'; }
       if (topView === 'detail') { topView = 'summary'; }
       if (subView === 'performance') { subView = 'today'; }
     }
@@ -3010,9 +3023,7 @@ function renderImpl() {
       if (_subOuter)  { _subOuter.style.display = ''; _subOuter.style.top = '120px'; }  // 68 (app-bar) + 52 (conc bar)
     } else {
       if (_concOuter) _concOuter.style.display = 'none';
-      // Recall has no sub-bar content — hide the empty bar so no ghost band sits
-      // between the nav and the card. Every other section shows it.
-      if (_subOuter)  { _subOuter.style.top = ''; _subOuter.style.display = (mainSection === 'recall') ? 'none' : ''; }
+      if (_subOuter)  { _subOuter.style.top = ''; _subOuter.style.display = ''; }
     }
     if (mainSection === 'customers') {
       renderCustomers();
@@ -3026,8 +3037,8 @@ function renderImpl() {
       renderOrders();
       return;
     }
-    if (mainSection === 'recall') {
-      renderRecall();
+    if (mainSection === 'quality') {
+      renderQuality();
       return;
     }
     if (topView==='detail') renderDetail();
