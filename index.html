@@ -5130,11 +5130,17 @@ function renderPerformance() {
       + '</div>';
   }
 
+  // Bars scale to the highest % across the months (so 151% reads longer than
+  // 105%), with a recessive target tick at the 100% position. Floor the scale at
+  // 100 so an all-under-target set still anchors the tick at the track's end.
+  var moMaxPct = 100;
+  monthRows.forEach(function(m){ if (m.pctOfTarget > moMaxPct) moMaxPct = m.pctOfTarget; });
+  var moTickPos = (100 / moMaxPct) * 100; // % from left — same target line for every row
   var monthHTML=monthRows.map(function(m){
     var key = m.year+'-'+String(m.month).padStart(2,'0');
     var isG=m.pctOfTarget>=100, isY=m.pctOfTarget>=80&&m.pctOfTarget<100;
     var pBg=isG?'#0F6E56':isY?'#633806':'#791F1F', pTxt=isG?'#9FE1CB':isY?'#FAC775':'#F09595', bCol=isG?'#1D9E75':isY?'#EF9F27':'#E24B4A';
-    var bw=Math.min(Math.round(m.pctOfTarget),100);
+    var bw=(m.pctOfTarget/moMaxPct*100).toFixed(1);
     var monthLabel=m.isPartial?m.label+'<sup style="color:#9FE1CB;font-size:9px"> *</sup>':m.label;
     var prior25Sub=m.units25?'<div style="font-size:11px;color:#5f5e5a;margin-top:2px;">'+m.units25.toLocaleString()+' in '+compYearLabel+'</div>':'';
     var yoyDelta='<td style="text-align:right">';
@@ -5147,7 +5153,7 @@ function renderPerformance() {
       + '<td style="text-align:right">'+m.units.toLocaleString()+'</td>'
       + '<td style="text-align:right;color:#888780">'+m.target.toLocaleString()+'</td>'
       + '<td style="text-align:right"><span class="badge" style="background:'+pBg+';color:'+pTxt+'">'+m.pctOfTarget.toFixed(2)+'%</span></td>'
-      + '<td style="min-width:100px;padding:6px 10px"><div style="background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div></div></td>'
+      + '<td style="min-width:100px;padding:6px 10px"><div style="position:relative;background:#2c2c2a;border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:3px"></div><div title="Target (100%)" style="position:absolute;top:0;bottom:0;left:'+moTickPos.toFixed(1)+'%;width:1px;background:rgba(232,230,224,0.55)"></div></div></td>'
       + yoyDelta
       + '</tr>';
     var drill = _moDrill(m.year, m.month);
