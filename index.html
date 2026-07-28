@@ -1805,7 +1805,10 @@ function fetchLogisticsIfNeeded(force) {
   var stale = (Date.now() - logisticsLastFetch) > 60000;
   if (!force && have && !stale) return;
   logisticsFetchInFlight = true;
-  fetchWithRetry(CSV_LOGISTICS, null, null, true).catch(function(){ return ''; }).then(function(text){
+  // Use fetchCSVSimple (not fetchWithRetry): fetchWithRetry validates that the
+  // FIRST line contains "date"/"lot", but this sheet's first line is a stray junk
+  // row (the real header is row 1), so it would reject every response and hang.
+  fetchCSVSimple(CSV_LOGISTICS, true).then(function(text){
     var parsed = parseLogistics(text);
     // Stale-data guard: never overwrite good data with an empty/short response, and
     // refuse a dataset that shrank >20% (the Sheets CDN occasionally serves stale
@@ -1814,9 +1817,9 @@ function fetchLogisticsIfNeeded(force) {
       logisticsData = parsed;
       logisticsLastFetch = Date.now();
       _saveLogisticsCache();
+      if (mainSection === 'logistics') render();  // re-render only on a successful load
     }
     logisticsFetchInFlight = false;
-    if (mainSection === 'logistics') render();
   }).catch(function(){ logisticsFetchInFlight = false; });
 }
 
