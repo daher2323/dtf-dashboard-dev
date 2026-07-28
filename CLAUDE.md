@@ -10,7 +10,7 @@ To run locally, open `index.html` in a browser or serve the directory with any s
 
 ## Data flow
 
-All data is fetched at runtime from **published Google Sheets CSVs** — URLs live in two maps at the top of the `<script>` block (`CSV_BY_YEAR`, plus `CSV_TARGETS` / `CSV_WEEKLY_TARGETS` / `CSV_MATERIALS`). There is no backend.
+All data is fetched at runtime from **published Google Sheets CSVs** — URLs live in two maps at the top of the `<script>` block (`CSV_BY_YEAR`, plus `CSV_TARGETS` / `CSV_WEEKLY_TARGETS` / `CSV_MATERIALS` / `CSV_OPEN_ORDERS_*` / `CSV_LOGISTICS`). There is no backend.
 
 ### Adding a new year (annual rollover)
 
@@ -59,7 +59,7 @@ Load sequence (`loadDashboard` → `fetchData`):
 
 Client-side only. `CORRECT_PW` (viewer) and `ADMIN_PW` (admin) are SHA-256 hashes stored in the script. `checkPw` hashes the input via `crypto.subtle.digest` and compares. Session persists in `sessionStorage` (`dtf_auth`, `dtf_role`). This is obfuscation, not real security — the CSVs are public and the hashes are visible in source. Do not add features that assume this gates anything sensitive.
 
-`applyRole` hides the Sales, Procurement, and Quality tabs for viewers and redirects them to Production if they land on a restricted section.
+`applyRole` hides the Sales, Procurement, Logistics, and Quality tabs for viewers and redirects them to Production if they land on a restricted section.
 
 ## UI architecture
 
@@ -76,6 +76,8 @@ State is held in module-level `var`s at the top of `<script>` (`mainSection`, `t
 | Sales → Open Orders      | `renderOrders` (`ordersView`: `summary` / `labels` / `planning`) |
 | Sales → Customers        | `renderCustomers` → `renderCustomerOverview` / `computeCustomerData` |
 | Procurement              | `renderProcurement` / `renderMaterials` |
+| Logistics → Shipments    | `renderLogistics` → `renderLogiShipments` / `renderLogiBody` (`logiView`) |
+| Logistics → Summary      | `renderLogistics` → `renderLogiSummary` (`computeLogiSummary`) |
 | Quality → Recall         | `renderQuality` (`qualitySubTab`) |
 
 **The "Sales" top tab is a virtual umbrella, not a stored value.** `mainSection` only ever holds `'orders'` or `'customers'` — the two halves of Sales — so all the logic keyed on those strings (dispatch, refresh timers, the customer concentration bar, viewer redirects) is unchanged. `setMainSection('sales')` resolves to `'orders'` (landing on Open Orders → Summary) unless you're already inside Sales, in which case it keeps the current half. The Sales tab lights up when `mainSection` is either value, and `renderSubBar` prepends a shared `[ Open Orders | Customers ]` toggle (`salesToggle`) to both halves' secondary controls — mirroring the Production sub-bar's toggle-plus-divider pattern.
@@ -97,6 +99,7 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
 - **Product field convention**: the `Product` string is `"<Customer> - <Product Name>"`. Customer is extracted as `product.split('-')[0].trim()` throughout the code.
 - **Jar size normalization** (`jarSizeKey`): fuzzy-parses strings like "1 gal", "32 oz", "500ml" to a canonical key.
 - **Week number** (`getWeekNum`) uses ISO-ish Monday-anchored weeks; `dateKey` is the `M/D/YYYY` string used as a map key everywhere.
+- **Logistics sheet** (`CSV_LOGISTICS`, `parseLogistics`): a freight-cost ledger, one row per line item shipped. Parsed **positionally** (`LOGI_COL` index map via `parseCSVGrid`) because row 0 is stray junk and the real header is row 1. Two quirks the parser handles and must keep handling: (1) the `Date` column is sparse and **forward-fills** — a blank date inherits the most recent date above it; (2) the sheet trails ~800 empty rows that still compute `Total Cost = $0.00`, so a row counts only if it has a `Product Name` or `Lot #`. Out-of-range years (2020–2035 guard) are treated as blank so a typo'd date forward-fills instead of creating a bogus bucket. `Product Name` follows the same `"Customer - Product"` convention. The Shipments view period toggle (`logiPeriod`) drives both the KPI strip and the date-grouped table (capped at `LOGI_ROW_CAP`); Summary is `CURRENT_YEAR` YTD analytics.
 
 ## Conventions to preserve when editing
 
