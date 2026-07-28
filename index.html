@@ -700,7 +700,8 @@ var logisticsData = null;           // null = not yet fetched; array of shipment
 var logisticsLastFetch = 0;
 var logisticsFetchInFlight = false;
 var logisticsLoadError = false;     // true after a fetch exhausts its retries with no usable data
-var logiPeriodSel = 'month';        // 'today' | 'week' | 'month' — scopes tiles + log (NOT the trend chart)
+var logiGran = 'monthly';           // 'daily' | 'weekly' | 'monthly' — scopes tiles + log (NOT the trend chart)
+var logiAnchor = null;              // Date within the selected period; null = current period (mirrors Production nav)
 var logiSearch = '';                // case-insensitive filter (product / customer / lot / carrier / tracking / BOL)
 var logiTrendGran = 'week';         // 'week' | 'month' — trend chart granularity
 var logiTrendMetric = 'shipments';  // 'shipments' | 'lots' | 'boxes' | 'pallets' — trend chart metric
@@ -2613,19 +2614,14 @@ function renderSubBar() {
       + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'
       + '</div>';
   } else if (mainSection === 'logistics') {
-    // Logistics sub-bar: Today / This week / This month period selector + resolved
-    // range line, and the search box (right-aligned). One view — no sub-tabs.
-    var _lb = periodBounds(logiPeriodSel, new Date());
-    var _rangeLine = _logiRangeLabel(_lb.start, _lb.end) + ' · ' + _lb.businessDays + ' business day' + (_lb.businessDays === 1 ? '' : 's');
+    // Logistics sub-bar: Daily / Weekly / Monthly granularity toggle + search box.
+    // The period navigator (‹ label ▾ ›) lives in the content, mirroring Production.
     sb.innerHTML =
       '<div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">'
-      + '<div style="display:flex;align-items:center;gap:10px;">'
-      +   '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
-      +     '<button onclick="setLogiPeriodSel(\'today\')" style="'+navBtnStyle(logiPeriodSel==='today')+'">Today</button>'
-      +     '<button onclick="setLogiPeriodSel(\'week\')"  style="'+navBtnStyle(logiPeriodSel==='week')+'">This week</button>'
-      +     '<button onclick="setLogiPeriodSel(\'month\')" style="'+navBtnStyle(logiPeriodSel==='month')+'">This month</button>'
-      +   '</div>'
-      +   '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+esc(_rangeLine)+'</span>'
+      + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      +   '<button onclick="setLogiGran(\'daily\')"   style="'+navBtnStyle(logiGran==='daily')+'">Daily</button>'
+      +   '<button onclick="setLogiGran(\'weekly\')"  style="'+navBtnStyle(logiGran==='weekly')+'">Weekly</button>'
+      +   '<button onclick="setLogiGran(\'monthly\')" style="'+navBtnStyle(logiGran==='monthly')+'">Monthly</button>'
       + '</div>'
       + '<div class="cust-search-wrap">'
       +   '<span class="cust-search-icon"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#888780" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#888780" stroke-width="1.3" stroke-linecap="round"/></svg></span>'
@@ -2648,12 +2644,27 @@ function renderSubBar() {
 }
 
 // ── Logistics nav handlers ────────────────────────────────────────────────
-function setLogiPeriodSel(p) {
-  closeMsPanel();
-  logiPeriodSel = p;
+function setLogiGran(g) {
+  closeMsPanel(); closeLogiPicker();
+  logiGran = g;                 // keep the current anchor across granularity switches
   renderSubBar();
   render();
 }
+// Step the selected period by one unit (mirrors Production's navDay/navWeek).
+function navLogi(dir) {
+  closeLogiPicker();
+  var today = new Date();
+  var b = periodBounds(logiGran, _logiAnchorDate(), today);
+  var a;
+  if (logiGran === 'daily') { a = new Date(b.start); a.setDate(a.getDate() + dir); }
+  else if (logiGran === 'weekly') { a = new Date(b.start); a.setDate(a.getDate() + dir * 7); }
+  else { a = new Date(b.start.getFullYear(), b.start.getMonth() + dir, 1); }
+  var t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  if (a > t0) a = t0;           // never step into the future
+  logiAnchor = a;
+  render();
+}
+function goLogiLive() { closeLogiPicker(); logiAnchor = null; render(); }
 function retryLogistics() {
   logisticsLoadError = false;
   fetchLogisticsIfNeeded(true);  // force a fresh fetch
@@ -2669,7 +2680,7 @@ function toggleLogiShipment(key) {
   var host = document.getElementById('logi-log-host');
   if (!host) return;
   var ships = _logiShipmentsCache || groupLotsToShipments(logisticsData || []);
-  host.innerHTML = _logiLogHTML(ships, periodBounds(logiPeriodSel, new Date()));
+  host.innerHTML = _logiLogHTML(ships, periodBounds(logiGran, _logiAnchorDate(), new Date()));
 }
 function onLogiSearchInput(v) {
   logiSearch = v || '';
@@ -2677,7 +2688,7 @@ function onLogiSearchInput(v) {
   if (clr) clr.style.display = logiSearch ? 'inline-flex' : 'none';
   // Re-render only the log host so the search input keeps focus + caret.
   var host = document.getElementById('logi-log-host');
-  if (host) host.innerHTML = _logiLogHTML(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), periodBounds(logiPeriodSel, new Date()));
+  if (host) host.innerHTML = _logiLogHTML(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), periodBounds(logiGran, _logiAnchorDate(), new Date()));
   else render();
 }
 function clearLogiSearch() {
@@ -2687,7 +2698,7 @@ function clearLogiSearch() {
   var clr = document.getElementById('logiSearchClear');
   if (clr) clr.style.display = 'none';
   var host = document.getElementById('logi-log-host');
-  if (host) host.innerHTML = _logiLogHTML(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), periodBounds(logiPeriodSel, new Date()));
+  if (host) host.innerHTML = _logiLogHTML(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), periodBounds(logiGran, _logiAnchorDate(), new Date()));
   else render();
 }
 
@@ -2854,30 +2865,55 @@ function _logiRangeLabel(a, b) {
   }
   return _LOGI_MONTHS[a.getMonth()] + ' ' + a.getDate() + ' – ' + _LOGI_MONTHS[b.getMonth()] + ' ' + b.getDate();
 }
-// 2.3 — current-period bounds.
-function periodBounds(period, today) {
-  var end = new Date(today.getFullYear(), today.getMonth(), today.getDate()), start;
-  if (period === 'today') start = new Date(end);
-  else if (period === 'week') start = _logiMondayOf(today);
-  else start = new Date(today.getFullYear(), today.getMonth(), 1);
-  return { start: start, end: end, businessDays: countBusinessDays(start, end), label: _logiRangeLabel(start, end) };
+// The anchor day of the selected period (null anchor = current period).
+function _logiAnchorDate() { return logiAnchor ? logiAnchor : new Date(); }
+// 2.3 — bounds for a period (gran + anchor day). Also returns a navigator label
+// and isCurrent (the period contains today, so it's still in progress).
+function periodBounds(gran, anchor, today) {
+  var t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  var a = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+  if (a > t0) a = new Date(t0);
+  var start, end, isCurrent, label;
+  if (gran === 'daily') {
+    start = new Date(a); end = new Date(a);
+    isCurrent = start.getTime() === t0.getTime();
+    label = _LOGI_WDAYS[start.getDay()] + ', ' + _LOGI_MONTHS[start.getMonth()] + ' ' + start.getDate() + ', ' + start.getFullYear();
+  } else if (gran === 'weekly') {
+    start = _logiMondayOf(a);
+    var sun = new Date(start); sun.setDate(start.getDate() + 6);
+    isCurrent = (t0 >= start && t0 <= sun);
+    end = isCurrent ? new Date(t0) : new Date(sun);
+    var endBit = (start.getMonth() === sun.getMonth()) ? sun.getDate() : (_LOGI_MONTHS[sun.getMonth()] + ' ' + sun.getDate());
+    label = 'Week ' + getWeekNum(start) + ' · ' + _LOGI_MONTHS[start.getMonth()] + ' ' + start.getDate() + ' – ' + endBit + ', ' + sun.getFullYear();
+  } else {
+    start = new Date(a.getFullYear(), a.getMonth(), 1);
+    var last = new Date(a.getFullYear(), a.getMonth() + 1, 0);
+    isCurrent = (a.getFullYear() === t0.getFullYear() && a.getMonth() === t0.getMonth());
+    end = isCurrent ? new Date(t0) : new Date(last);
+    label = _LOGI_MONTHS[start.getMonth()] + ' ' + start.getFullYear();
+  }
+  return { start: start, end: end, businessDays: countBusinessDays(start, end), label: label, isCurrent: isCurrent, gran: gran };
 }
-// 2.4 — prior-period bounds, matched on business days elapsed (like-for-like).
-function priorPeriodBounds(period, today) {
-  var N = periodBounds(period, today).businessDays;
-  if (period === 'today') {
-    var d = new Date(today.getFullYear(), today.getMonth(), today.getDate()), g = 0;
+// 2.4 — prior-period bounds. A current, in-progress period compares against the
+// prior period's first N business days (like-for-like); a past, complete period
+// compares against the full period immediately before it.
+function priorPeriodBounds(gran, anchor, today) {
+  var cur = periodBounds(gran, anchor, today);
+  if (gran === 'daily') {
+    var d = new Date(cur.start), g = 0;
     do { d.setDate(d.getDate() - 1); g++; } while (!isBusinessDay(d) && g < 14);
-    return { start: new Date(d), end: new Date(d), businessDays: 1, label: 'vs ' + _logiRangeLabel(d, d) };
+    return { start: new Date(d), end: new Date(d), businessDays: 1, label: 'vs ' + _LOGI_WDAYS[d.getDay()] + ' ' + _LOGI_MONTHS[d.getMonth()] + ' ' + d.getDate() };
   }
-  if (period === 'week') {
-    var pm = _logiMondayOf(today); pm.setDate(pm.getDate() - 7);
-    var s = _logiFirstNBusinessDays(pm, N);
-    return { start: s.start, end: s.end, businessDays: s.count, label: 'vs ' + _logiRangeLabel(s.start, s.end) };
+  if (gran === 'weekly') {
+    var pm = new Date(cur.start); pm.setDate(pm.getDate() - 7);
+    if (cur.isCurrent) { var s = _logiFirstNBusinessDays(pm, cur.businessDays); return { start: s.start, end: s.end, businessDays: s.count, label: 'vs ' + _logiRangeLabel(s.start, s.end) }; }
+    var sun = new Date(pm); sun.setDate(pm.getDate() + 6);
+    return { start: pm, end: sun, businessDays: countBusinessDays(pm, sun), label: 'vs ' + _logiRangeLabel(pm, sun) };
   }
-  var fp = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-  var s2 = _logiFirstNBusinessDays(fp, N);
-  return { start: s2.start, end: s2.end, businessDays: s2.count, label: 'vs ' + _logiRangeLabel(s2.start, s2.end) };
+  var fp = new Date(cur.start.getFullYear(), cur.start.getMonth() - 1, 1);
+  if (cur.isCurrent) { var s2 = _logiFirstNBusinessDays(fp, cur.businessDays); return { start: s2.start, end: s2.end, businessDays: s2.count, label: 'vs ' + _logiRangeLabel(s2.start, s2.end) }; }
+  var lp = new Date(cur.start.getFullYear(), cur.start.getMonth(), 0);
+  return { start: fp, end: lp, businessDays: countBusinessDays(fp, lp), label: 'vs ' + _logiRangeLabel(fp, lp) };
 }
 
 // Carrier class from Carrier + Broker (pickup lives in Broker; parcel in either).
@@ -2951,12 +2987,14 @@ function computeThroughput(shipments, bounds) {
     pickupShipments: pickup,
     pickupPct: n ? (pickup / n * 100) : 0 };
 }
-// 3.2 — projected period total from the current per-business-day rate.
-function computePace(current, period, today) {
-  if (period === 'today') return null;
+// 3.2 — projected period total from the per-business-day rate. Only meaningful
+// for the current, in-progress week/month; null otherwise (daily or a past period).
+function computePace(current, gran, anchor, today) {
+  var b = periodBounds(gran, anchor, today);
+  if (gran === 'daily' || !b.isCurrent) return null;
   var total;
-  if (period === 'week') { var mon = _logiMondayOf(today), fri = new Date(mon); fri.setDate(mon.getDate() + 4); total = countBusinessDays(mon, fri); }
-  else { var f = new Date(today.getFullYear(), today.getMonth(), 1), l = new Date(today.getFullYear(), today.getMonth() + 1, 0); total = countBusinessDays(f, l); }
+  if (gran === 'weekly') { var mon = new Date(b.start), fri = new Date(mon); fri.setDate(mon.getDate() + 4); total = countBusinessDays(mon, fri); }
+  else { var f = new Date(b.start.getFullYear(), b.start.getMonth(), 1), l = new Date(b.start.getFullYear(), b.start.getMonth() + 1, 0); total = countBusinessDays(f, l); }
   return Math.round(current.shipmentsPerDay * total);
 }
 function _logiAggRange(shipments, start, end) {
@@ -3011,15 +3049,17 @@ function renderLogistics() {
     return;
   }
   var today = new Date();
+  var anchor = _logiAnchorDate();
   var ships = groupLotsToShipments(logisticsData);
   _logiShipmentsCache = ships;
-  var bounds = periodBounds(logiPeriodSel, today);
-  var prior = priorPeriodBounds(logiPeriodSel, today);
+  var bounds = periodBounds(logiGran, anchor, today);
+  var prior = priorPeriodBounds(logiGran, anchor, today);
   var cur = computeThroughput(ships, bounds);
   var prev = computeThroughput(ships, prior);
-  var pace = computePace(cur, logiPeriodSel, today);
+  var pace = computePace(cur, logiGran, anchor, today);
   var trend = computeTrendSeries(ships, logiTrendGran);
-  content.innerHTML = _logiTilesHTML(cur, prev, prior, pace, logiPeriodSel)
+  content.innerHTML = _logiNavHTML(bounds)
+    + _logiTilesHTML(cur, prev, prior, pace, logiGran, bounds.isCurrent)
     + _logiTrendHTML(trend)
     + '<div id="logi-log-host">' + _logiLogHTML(ships, bounds) + '</div>';
   _drawLogiTrendChart(trend);
@@ -3033,7 +3073,7 @@ function _logiDelta(curVal, prevVal, priorHasData, label) {
   var up = p > 0, col = up ? '#9FE1CB' : '#F09595', arrow = up ? '▲' : '▼';
   return '<span style="color:' + col + ';">' + arrow + ' ' + (up ? '+' : '') + p.toFixed(1) + '%</span> <span style="color:#5f5e5a;">' + esc(label) + '</span>';
 }
-function _logiTilesHTML(cur, prev, prior, pace, period) {
+function _logiTilesHTML(cur, prev, prior, pace, gran, isCurrent) {
   var priorHas = prev.shipments > 0;
   var GRID = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;';
   var row1 = '<div style="' + GRID + 'margin-bottom:10px;">'
@@ -3042,18 +3082,99 @@ function _logiTilesHTML(cur, prev, prior, pace, period) {
     + _ordersCard('Boxes', _logiInt(cur.boxes), _logiDelta(cur.boxes, prev.boxes, priorHas, prior.label))
     + _ordersCard('Pallets', _logiInt(cur.pallets), _logiDelta(cur.pallets, prev.pallets, priorHas, prior.label))
     + '</div>';
-  var paceLabel = (period === 'week') ? 'Pace' : 'Pace';
-  var paceProj = (period === 'week') ? 'projected full week' : 'projected full month';
+  var paceProj = (gran === 'weekly') ? 'projected full week' : 'projected full month';
   var paceVal = (pace == null) ? '—' : _logiInt(pace);
-  var paceSub = (pace == null) ? '<span style="color:#5f5e5a;">n/a for a single day</span>' : '<span style="color:#5f5e5a;">' + paceProj + '</span>';
+  var paceSub;
+  if (pace != null) paceSub = '<span style="color:#5f5e5a;">' + paceProj + '</span>';
+  else if (gran === 'daily') paceSub = '<span style="color:#5f5e5a;">n/a for a single day</span>';
+  else paceSub = '<span style="color:#5f5e5a;">completed period</span>';
   var row2 = '<div style="' + GRID + 'margin-bottom:18px;">'
     + _ordersCard('Shipments / business day', cur.shipmentsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.shipmentsPerDay.toFixed(1) + '/day</span>')
     + _ordersCard('Pallets / business day', cur.palletsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.palletsPerDay.toFixed(1) + '/day</span>')
-    + _ordersCard(paceLabel, paceVal, paceSub)
+    + _ordersCard('Pace', paceVal, paceSub)
     + _ordersCard('Customer pickup', Math.round(cur.pickupPct) + '%', '<span style="color:#5f5e5a;">' + cur.pickupShipments + ' of ' + cur.shipments + ' shipments</span>')
     + '</div>';
   return row1 + row2;
 }
+
+// ── Period navigator + picker (mirrors Production's date/week navigators) ────
+function _logiEarliest() {
+  var recs = logisticsData || [], min = null, i;
+  for (i = 0; i < recs.length; i++) { var d = recs[i].date; if (d && (!min || d < min)) min = d; }
+  return min || new Date();
+}
+function _logiNavHTML(bounds) {
+  var sub = bounds.businessDays + ' business day' + (bounds.businessDays === 1 ? '' : 's');
+  if (bounds.isCurrent) sub += (logiGran === 'daily' ? ' · today' : ' · ' + (logiGran === 'weekly' ? 'week' : 'month') + ' to date');
+  function btn(dir, disabled, sym) {
+    return '<button onclick="' + (disabled ? '' : 'navLogi(' + dir + ')') + '" ' + (disabled ? 'disabled' : '') + ' style="width:28px;height:28px;flex-shrink:0;border-radius:8px;border:0.5px solid #444441;background:transparent;cursor:' + (disabled ? 'default' : 'pointer') + ';color:' + (disabled ? '#444441' : '#e8e6e0') + ';font-size:16px;display:flex;align-items:center;justify-content:center;font-family:system-ui">' + sym + '</button>';
+  }
+  return '<div style="display:flex;align-items:center;gap:6px;position:relative;margin-bottom:16px;" id="logi-nav-anchor">'
+    + btn(-1, false, '&#8249;')
+    + '<div onclick="openLogiPicker()" style="text-align:center;min-width:250px;cursor:pointer;padding:5px 14px;border-radius:8px;border:0.5px solid #444441;background:transparent;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
+    +   '<div style="font-size:13px;font-weight:500;color:#e8e6e0;white-space:nowrap;">' + esc(bounds.label) + ' &#x25BE;</div>'
+    +   '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">' + esc(sub) + '</div>'
+    + '</div>'
+    + btn(1, bounds.isCurrent, '&#8250;')
+    + (bounds.isCurrent ? '' : '<button onclick="goLogiLive()" style="margin-left:6px;padding:6px 12px;border-radius:8px;border:0.5px solid #1D5A99;background:#0C2240;color:#85B7EB;font-size:11px;font-weight:500;cursor:pointer;font-family:system-ui;">Jump to current</button>')
+    + '</div>';
+}
+function closeLogiPicker() { var p = document.getElementById('logi-picker'); if (p) p.remove(); }
+function openLogiPicker() {
+  if (document.getElementById('logi-picker')) { closeLogiPicker(); return; }
+  var today = new Date(), t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  var cur = periodBounds(logiGran, _logiAnchorDate(), today);
+  var earliest = _logiEarliest(), eDay = new Date(earliest.getFullYear(), earliest.getMonth(), earliest.getDate());
+  var inner = '', DOW = '<div style="display:grid;grid-template-columns:repeat(7,30px);gap:2px;"><div style="font-size:10px;color:#5f5e5a;text-align:center">Su</div><div style="font-size:10px;color:#5f5e5a;text-align:center">Mo</div><div style="font-size:10px;color:#5f5e5a;text-align:center">Tu</div><div style="font-size:10px;color:#5f5e5a;text-align:center">We</div><div style="font-size:10px;color:#5f5e5a;text-align:center">Th</div><div style="font-size:10px;color:#5f5e5a;text-align:center">Fr</div><div style="font-size:10px;color:#5f5e5a;text-align:center">Sa</div>';
+  if (logiGran === 'monthly') {
+    var y, m, yrs = [];
+    for (y = t0.getFullYear(); y >= earliest.getFullYear(); y--) yrs.push(y);
+    inner = yrs.map(function(yr){
+      var cells = '';
+      for (m = 0; m < 12; m++) {
+        var future = (yr > t0.getFullYear()) || (yr === t0.getFullYear() && m > t0.getMonth());
+        var before = (yr < earliest.getFullYear()) || (yr === earliest.getFullYear() && m < earliest.getMonth());
+        var active = !future && !before;
+        var sel = (cur.start.getFullYear() === yr && cur.start.getMonth() === m);
+        var isNow = (yr === t0.getFullYear() && m === t0.getMonth());
+        var bg = sel ? '#1D9E75' : isNow ? '#0C447C' : 'transparent';
+        var color = sel ? '#fff' : isNow ? '#85B7EB' : active ? '#e8e6e0' : '#444441';
+        cells += '<div onclick="' + (active ? 'pickLogiMonth(' + yr + ',' + m + ')' : '') + '" style="padding:7px 0;text-align:center;border-radius:6px;font-size:12px;font-weight:' + (sel || isNow ? '500' : '400') + ';color:' + color + ';background:' + bg + ';cursor:' + (active ? 'pointer' : 'default') + ';">' + _LOGI_MONTHS[m] + '</div>';
+      }
+      return '<div style="margin-bottom:1rem"><div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">' + yr + '</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">' + cells + '</div></div>';
+    }).join('');
+  } else {
+    var months = [], mm = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
+    while (mm <= t0) { months.push(new Date(mm)); mm = new Date(mm.getFullYear(), mm.getMonth() + 1, 1); }
+    var weekEnd = new Date(cur.start.getFullYear(), cur.start.getMonth(), cur.start.getDate() + 6);
+    inner = months.reverse().map(function(mo){
+      var first = new Date(mo.getFullYear(), mo.getMonth(), 1), dim = new Date(mo.getFullYear(), mo.getMonth() + 1, 0).getDate(), sdow = first.getDay();
+      var cells = '', dnum;
+      for (dnum = 0; dnum < sdow; dnum++) cells += '<div></div>';
+      for (dnum = 1; dnum <= dim; dnum++) {
+        var dd = new Date(mo.getFullYear(), mo.getMonth(), dnum);
+        var active = dd <= t0 && dd >= eDay;
+        var inSel = (logiGran === 'weekly') ? (dd >= cur.start && dd <= weekEnd) : (dd.getTime() === cur.start.getTime());
+        var isNow = dd.getTime() === t0.getTime();
+        var bg = inSel ? '#1D9E75' : isNow ? '#0C447C' : 'transparent';
+        var color = inSel ? '#fff' : isNow ? '#85B7EB' : active ? '#e8e6e0' : '#444441';
+        cells += '<div onclick="' + (active ? 'pickLogiDay(\'' + _logiYMD(dd) + '\')' : '') + '" style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:12px;color:' + color + ';background:' + bg + ';cursor:' + (active ? 'pointer' : 'default') + ';">' + dnum + '</div>';
+      }
+      return '<div style="margin-bottom:1rem"><div style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">' + mo.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) + '</div>' + DOW + cells + '</div></div>';
+    }).join('');
+  }
+  var title = logiGran === 'daily' ? 'Select day' : logiGran === 'weekly' ? 'Select week' : 'Select month';
+  var p = document.createElement('div');
+  p.id = 'logi-picker';
+  p.style.cssText = 'position:absolute;z-index:1000;background:#1e2124;border:0.5px solid #444441;border-radius:12px;padding:1rem;max-height:420px;overflow-y:auto;min-width:' + (logiGran === 'monthly' ? '240px' : '250px') + ';left:34px;top:52px;';
+  p.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem"><span style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em">' + title + '</span><button onclick="closeLogiPicker()" style="background:transparent;border:none;color:#888780;cursor:pointer;font-size:16px;line-height:1;padding:0">&#x2715;</button></div>' + inner;
+  p.addEventListener('click', function(e){ e.stopPropagation(); });
+  var anchor = document.getElementById('logi-nav-anchor');
+  if (anchor) anchor.appendChild(p);
+  setTimeout(function(){ document.addEventListener('click', closeLogiPicker, { once: true }); }, 0);
+}
+function pickLogiDay(ymd) { var p = ymd.split('-'); logiAnchor = new Date(+p[0], +p[1] - 1, +p[2]); closeLogiPicker(); render(); }
+function pickLogiMonth(yr, m) { logiAnchor = new Date(yr, m, 1); closeLogiPicker(); render(); }
 
 function _logiTrendTogglesHTML() {
   function grp(items) { var h = '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'; for (var i = 0; i < items.length; i++) h += items[i]; return h + '</div>'; }
