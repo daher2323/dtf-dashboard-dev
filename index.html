@@ -2960,10 +2960,12 @@ function _logiFetchActive() { if (logiDir === 'inbound') fetchInboundIfNeeded(fa
 function _logiLabels() {
   if (logiDir === 'inbound') {
     return { unit:'Deliveries', unitOne:'delivery', unitMany:'deliveries', line:'POs received', lineShort:'POs', per:'POs per delivery',
-      entity:'Vendor', pickup:false, search:'Search PO, vendor, carrier, tracking…', pickupWord:'self-pickup', lineIdPrefix:'PO' };
+      entity:'Vendor', pickup:false, search:'Search PO, vendor, carrier, tracking…', pickupWord:'self-pickup', lineIdPrefix:'PO',
+      showStatus:true, showBoxesNote:false };
   }
   return { unit:'Shipments', unitOne:'shipment', unitMany:'shipments', line:'Lots shipped', lineShort:'Lots', per:'lots per shipment',
-    entity:'Customer', pickup:true, search:'Search product, lot, carrier, tracking…', pickupWord:'customer pickup', lineIdPrefix:'Lot' };
+    entity:'Customer', pickup:true, search:'Search product, lot, carrier, tracking…', pickupWord:'customer pickup', lineIdPrefix:'Lot',
+    showStatus:false, showBoxesNote:true };
 }
 
 // 2.1 — business day: weekday in DTF_SHIP_DAYS and not a holiday.
@@ -3085,8 +3087,9 @@ function groupLotsToShipments(recs) {
 }
 function _logiBuildShipment(bucket) {
   var rows = bucket.rows, boxes = 0, pallets = 0, boxesRecorded = false;
-  var carrier = '', reference = '', eta = '', lots = [];
-  var anyPickup = false, firstParcel = false, firstFreight = false, i;
+  var carrier = '', reference = '', eta = '', lots = [], firstStatus = '';
+  var anyPickup = false, firstParcel = false, firstFreight = false;
+  var inTransit = false, pendingPickup = false, canceled = false, i;
   for (i = 0; i < rows.length; i++) {
     var r = rows[i];
     boxes += (r.boxes || 0); pallets += (r.pallets || 0);
@@ -3094,6 +3097,11 @@ function _logiBuildShipment(bucket) {
     if (!carrier && r.carrier) carrier = r.carrier;
     if (!reference && (r.tracking || r.bol)) reference = r.tracking || r.bol;
     if (!eta && r.eta) eta = r.eta;
+    if (!firstStatus && r.status) firstStatus = r.status;
+    var su = (r.status || '').toLowerCase();
+    if (su.indexOf('transit') !== -1) inTransit = true;
+    else if (su.indexOf('pending') !== -1 || su.indexOf('pickup') !== -1) pendingPickup = true;
+    else if (su.indexOf('cancel') !== -1) canceled = true;
     lots.push({ lotNo: lotKey(r), product: r.product, boxes: r.boxes || 0, pallets: r.pallets || 0 });
     var cc = carrierClass(r.carrier, r.broker);
     if (cc === 'pickup') anyPickup = true;
@@ -3101,9 +3109,12 @@ function _logiBuildShipment(bucket) {
     else if (cc === 'freight') firstFreight = true;
   }
   var klass = anyPickup ? 'pickup' : (firstParcel ? 'parcel' : (firstFreight ? 'freight' : 'none'));
+  // Representative status: surface an in-progress state (In Transit / Pending
+  // Pickup) if any member line has one; otherwise fall back to the first status.
+  var status = inTransit ? 'In Transit' : pendingPickup ? 'Pending Pickup' : (firstStatus || (canceled ? 'Canceled' : ''));
   return { key: bucket.key, date: bucket.date, customer: bucket.customer, lots: lots,
     boxes: boxes, pallets: pallets, boxesRecorded: boxesRecorded,
-    carrier: carrier, carrierClass: klass, reference: reference, eta: eta };
+    carrier: carrier, carrierClass: klass, reference: reference, eta: eta, status: status };
 }
 
 // 3.1 — throughput over shipments within bounds.
@@ -3406,6 +3417,17 @@ function _logiCarrierBit(s) {
   if (!s.carrier) return '<span style="color:#5f5e5a;">no carrier recorded</span>';
   return esc(s.carrier);
 }
+// Shipment-status badge (inbound: Received / In Transit / Pending Pickup / Canceled).
+function _logiStatusBadge(status) {
+  var s = (status || '').trim(); if (!s) return '';
+  var u = s.toLowerCase(), bg, color;
+  if (u.indexOf('transit') !== -1)      { bg = '#0C2240'; color = '#85B7EB'; }
+  else if (u.indexOf('pending') !== -1 || u.indexOf('pickup') !== -1) { bg = '#633806'; color = '#FAC775'; }
+  else if (u.indexOf('receiv') !== -1)  { bg = '#085041'; color = '#9FE1CB'; }
+  else if (u.indexOf('cancel') !== -1)  { bg = '#3a2323'; color = '#F09595'; }
+  else                                  { bg = '#2c2c2a'; color = '#888780'; }
+  return '<span style="display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:500;background:' + bg + ';color:' + color + ';">' + esc(s) + '</span>';
+}
 // Copy a value (tracking/BOL/PO) to the clipboard with brief button feedback.
 function _logiCopy(text, btn) {
   try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch(e) {}
@@ -3459,7 +3481,7 @@ function _logiLogHTML(shipments, bounds) {
     if (shown >= LOGI_LOG_CAP) { truncated = true; break; }
     var day = days[d];
     var hdrDate = day.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-    var unrecNote = day.unrec ? ' <span style="color:#5f5e5a;">(' + day.unrec + ' ' + (day.unrec === 1 ? L.unitOne : L.unitMany) + ', boxes not recorded)</span>' : '';
+    var unrecNote = (L.showBoxesNote && day.unrec) ? ' <span style="color:#5f5e5a;">(' + day.unrec + ' ' + (day.unrec === 1 ? L.unitOne : L.unitMany) + ', boxes not recorded)</span>' : '';
     html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;margin-bottom:12px;">'
       + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;padding:11px 16px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
       +   '<span style="font-size:15px;font-weight:500;color:#e8e6e0;">' + esc(hdrDate) + '</span>'
@@ -3479,10 +3501,11 @@ function _logiLogHTML(shipments, bounds) {
         var shownIds = ids.slice(0, 3).join(', ') + (ids.length > 3 ? ' +' + (ids.length - 3) : '');
         parts.push('<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#cfcdc7;">' + esc(L.lineIdPrefix) + ' ' + esc(shownIds) + '</span>');
       }
+      if (L.showStatus && s2.status) parts.push(_logiStatusBadge(s2.status));
       parts.push(_logiCarrierBit(s2));
       if (s2.reference) parts.push(_logiRefCell(s2.reference));
       if (s2.eta) parts.push('ETA ' + esc(s2.eta));
-      if (!bx.recorded) parts.push('<span style="color:#C9A227;">boxes not recorded</span>');
+      if (L.showBoxesNote && !bx.recorded) parts.push('<span style="color:#C9A227;">boxes not recorded</span>');
       var meta = parts.join(sep);
       html += '<div onclick="toggleLogiShipment(' + jsStr(s2.key) + ')" style="padding:8px 16px;border-bottom:0.5px solid #1a1d20;cursor:pointer;" onmouseover="this.style.background=\'#191c1f\'" onmouseout="this.style.background=\'transparent\'">'
         + '<div style="display:grid;' + GC + 'gap:10px;align-items:center;">'
