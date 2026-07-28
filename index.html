@@ -3077,27 +3077,44 @@ function _logiTrendHTML(trend) {
     +   '<span id="logi-trend-toggle-wrap">' + _logiTrendTogglesHTML() + '</span>'
     + '</div>'
     + '<div style="height:260px;position:relative;"><canvas id="logiTrendChart" role="img" aria-label="' + esc(_logiChartAria(trend)) + '"></canvas></div>'
-    + '<div style="font-size:11px;color:#5f5e5a;margin-top:10px;font-family:system-ui;">The lighter bar is the current, in-progress period. This chart is independent of the period selector above.</div>'
+    + '<div style="font-size:11px;color:#5f5e5a;margin-top:10px;font-family:system-ui;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    +   '<span style="display:inline-flex;align-items:center;gap:5px;"><span style="display:inline-block;width:16px;border-top:2px dashed #EF9F27;"></span>Average <span id="logi-trend-avg" style="color:#888780;"></span></span>'
+    +   '<span style="color:#3a3a38;">·</span>'
+    +   '<span>Lighter bar is the current, in-progress period; the chart is independent of the period selector.</span>'
+    + '</div>'
     + '</div>';
 }
 function _logiAxisTick(metric) { if (metric === 'boxes') return function(v){ return v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v; }; return function(v){ return v; }; }
+// Average of the non-zero buckets (empty buckets shouldn't drag the mean down),
+// rounded — matches the Weekly Output chart's 8-week-average convention.
+function _logiTrendAvg(data) {
+  var s = 0, c = 0, i;
+  for (i = 0; i < data.length; i++) { if (data[i] > 0) { s += data[i]; c++; } }
+  return c ? Math.round(s / c) : 0;
+}
 function _drawLogiTrendChart(trend) {
   var cv = document.getElementById('logiTrendChart');
   if (!cv || typeof Chart === 'undefined') return;
   var data = trend[logiTrendMetric], colors = [], i;
   for (i = 0; i < data.length; i++) colors.push(i === trend.partialIndex ? '#1f4a7d' : '#3987e5');
+  var avg = _logiTrendAvg(data), avgData = [];
+  for (i = 0; i < data.length; i++) avgData.push(avg);
   charts.logiTrend = new Chart(cv, {
     type: 'bar',
-    data: { labels: trend.labels, datasets: [{ data: data, backgroundColor: colors, borderRadius: 4, maxBarThickness: 24 }] },
+    data: { labels: trend.labels, datasets: [
+      { type: 'bar', data: data, backgroundColor: colors, borderRadius: 4, maxBarThickness: 24, order: 2 },
+      { type: 'line', label: 'avg', data: avgData, borderColor: '#EF9F27', borderWidth: 1.5, borderDash: [3,3], pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0, order: 1 }
+    ]},
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx){ return ctx.raw.toLocaleString(); } } } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx){ if (ctx.dataset.label === 'avg') return 'avg: ' + Math.round(ctx.raw).toLocaleString(); return ctx.raw.toLocaleString(); } } } },
       scales: {
         x: { ticks: { color: '#888780', font: { size: 10 }, autoSkip: false, maxRotation: 45 }, grid: { display: false } },
         y: { beginAtZero: true, ticks: { color: '#888780', callback: _logiAxisTick(logiTrendMetric) }, grid: { color: '#2c2c2a' } }
       }
     }
   });
+  var avgEl = document.getElementById('logi-trend-avg'); if (avgEl) avgEl.textContent = avg.toLocaleString();
 }
 function _updateLogiTrend() {
   var trend = computeTrendSeries(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), logiTrendGran);
@@ -3107,12 +3124,16 @@ function _updateLogiTrend() {
   if (!ch) return;
   var data = trend[logiTrendMetric], colors = [], i;
   for (i = 0; i < data.length; i++) colors.push(i === trend.partialIndex ? '#1f4a7d' : '#3987e5');
+  var avg = _logiTrendAvg(data), avgData = [];
+  for (i = 0; i < data.length; i++) avgData.push(avg);
   ch.data.labels = trend.labels;
   ch.data.datasets[0].data = data;
   ch.data.datasets[0].backgroundColor = colors;
+  ch.data.datasets[1].data = avgData;
   ch.options.scales.y.ticks.callback = _logiAxisTick(logiTrendMetric);
   var cv = document.getElementById('logiTrendChart');
   if (cv) cv.setAttribute('aria-label', _logiChartAria(trend));
+  var avgEl = document.getElementById('logi-trend-avg'); if (avgEl) avgEl.textContent = avg.toLocaleString();
   ch.update();
 }
 
