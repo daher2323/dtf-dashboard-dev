@@ -2984,18 +2984,9 @@ function computeThroughput(shipments, bounds) {
     lotsPerShipment: n ? (lots / n) : 0,
     shipmentsPerDay: bd ? (n / bd) : 0,
     palletsPerDay: bd ? (pallets / bd) : 0,
+    boxesPerDay: bd ? (boxes / bd) : 0,
     pickupShipments: pickup,
     pickupPct: n ? (pickup / n * 100) : 0 };
-}
-// 3.2 — projected period total from the per-business-day rate. Only meaningful
-// for the current, in-progress week/month; null otherwise (daily or a past period).
-function computePace(current, gran, anchor, today) {
-  var b = periodBounds(gran, anchor, today);
-  if (gran === 'daily' || !b.isCurrent) return null;
-  var total;
-  if (gran === 'weekly') { var mon = new Date(b.start), fri = new Date(mon); fri.setDate(mon.getDate() + 4); total = countBusinessDays(mon, fri); }
-  else { var f = new Date(b.start.getFullYear(), b.start.getMonth(), 1), l = new Date(b.start.getFullYear(), b.start.getMonth() + 1, 0); total = countBusinessDays(f, l); }
-  return Math.round(current.shipmentsPerDay * total);
 }
 function _logiAggRange(shipments, start, end) {
   var n = 0, lots = 0, boxes = 0, pallets = 0, i;
@@ -3062,10 +3053,9 @@ function renderLogistics() {
   var prior = priorPeriodBounds(logiGran, anchor, today);
   var cur = computeThroughput(ships, bounds);
   var prev = computeThroughput(ships, prior);
-  var pace = computePace(cur, logiGran, anchor, today);
   var trend = computeTrendSeries(ships, logiGran, anchor, today);
   content.innerHTML = _logiNavHTML(bounds)
-    + _logiTilesHTML(cur, prev, prior, pace, logiGran, bounds.isCurrent)
+    + _logiTilesHTML(cur, prev, prior)
     + _logiTrendHTML(trend)
     + '<div id="logi-log-host">' + _logiLogHTML(ships, bounds) + '</div>';
   _drawLogiTrendChart(trend);
@@ -3079,7 +3069,7 @@ function _logiDelta(curVal, prevVal, priorHasData, label) {
   var up = p > 0, col = up ? '#9FE1CB' : '#F09595', arrow = up ? '▲' : '▼';
   return '<span style="color:' + col + ';">' + arrow + ' ' + (up ? '+' : '') + p.toFixed(1) + '%</span> <span style="color:#5f5e5a;">' + esc(label) + '</span>';
 }
-function _logiTilesHTML(cur, prev, prior, pace, gran, isCurrent) {
+function _logiTilesHTML(cur, prev, prior) {
   var priorHas = prev.shipments > 0;
   var GRID = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;';
   var row1 = '<div style="' + GRID + 'margin-bottom:10px;">'
@@ -3088,16 +3078,10 @@ function _logiTilesHTML(cur, prev, prior, pace, gran, isCurrent) {
     + _ordersCard('Boxes', _logiInt(cur.boxes), _logiDelta(cur.boxes, prev.boxes, priorHas, prior.label))
     + _ordersCard('Pallets', _logiInt(cur.pallets), _logiDelta(cur.pallets, prev.pallets, priorHas, prior.label))
     + '</div>';
-  var paceProj = (gran === 'weekly') ? 'projected full week' : 'projected full month';
-  var paceVal = (pace == null) ? '—' : _logiInt(pace);
-  var paceSub;
-  if (pace != null) paceSub = '<span style="color:#5f5e5a;">' + paceProj + '</span>';
-  else if (gran === 'daily') paceSub = '<span style="color:#5f5e5a;">n/a for a single day</span>';
-  else paceSub = '<span style="color:#5f5e5a;">completed period</span>';
   var row2 = '<div style="' + GRID + 'margin-bottom:18px;">'
     + _ordersCard('Shipments / business day', cur.shipmentsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.shipmentsPerDay.toFixed(1) + '/day</span>')
+    + _ordersCard('Boxes / business day', _logiInt(cur.boxesPerDay), '<span style="color:#5f5e5a;">prior ' + _logiInt(prev.boxesPerDay) + '/day</span>')
     + _ordersCard('Pallets / business day', cur.palletsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.palletsPerDay.toFixed(1) + '/day</span>')
-    + _ordersCard('Pace', paceVal, paceSub)
     + _ordersCard('Customer pickup', Math.round(cur.pickupPct) + '%', '<span style="color:#5f5e5a;">' + cur.pickupShipments + ' of ' + cur.shipments + ' shipments</span>')
     + '</div>';
   return row1 + row2;
