@@ -699,11 +699,9 @@ var agingDrilldown     = null;      // null | '4-8' | '8-12' | '12+' — which a
 var logisticsData = null;           // null = not yet fetched; array of shipment records once loaded
 var logisticsLastFetch = 0;
 var logisticsFetchInFlight = false;
-var logiPeriodSel = 'month';        // 'today' | 'week' | 'month' — throughput period (replaces old sub-tab + range)
-var logiTrendGran = 'week';         // 'week' | 'month' — trend chart granularity
-var logiTrendMetric = 'shipments';  // 'shipments' | 'pallets' | 'boxes' — trend chart metric
-var logiExpanded = {};              // shipmentKey -> true; expanded rows in the shipment log (persists across re-renders)
-var _logiShipmentsCache = null;     // last grouped shipments, reused by chart-toggle + log-expand updates
+var logiView = 'shipments';         // 'shipments' | 'summary'
+var logiPeriod = '30';              // '30' | '90' | 'ytd' | 'all' — drives the Shipments KPI strip + table
+var logiSearch = '';                // case-insensitive filter (product / customer / lot / carrier / tracking / BOL)
 
 // Part number -> display group name. Parts listed here roll up under one row.
 var SKU_GROUPS = {
@@ -1720,44 +1718,6 @@ var LOGI_COL = {
   boxCost:22, palletCost:23, laborCost:24, total:25
 };
 
-/* Logistics throughput config
-   ---------------------------
-   DTF_HOLIDAYS: dates DTF is closed. Business-day denominators exclude these.
-   Format 'YYYY-MM-DD'. Update annually. Left empty until confirmed — an empty
-   array means holidays are counted as business days, which understates the
-   per-day rate (e.g. July 2026 reads 20 business days rather than 19 if the 3rd
-   is a closure). One-line fix when confirmed. */
-var DTF_HOLIDAYS = [];
-
-/* Carriers that ship without pallets. Matched case-insensitively as a substring
-   against the Carrier AND Broker cells (parcel names appear in either column).
-   Blank pallets are treated as a genuine zero regardless of carrier per the
-   throughput-view decision — these lists drive pickup detection and log display,
-   not the pallet total. */
-var PARCEL_CARRIERS = ['UPS', 'FEDEX', 'FED EX'];
-
-/* Strings indicating the customer collected the shipment themselves. In this
-   sheet the pickup marker lives in the Broker column, not Carrier. */
-var PICKUP_MARKERS = ['CUST PICK', 'PICKUP', 'PICK UP', 'CUSTOMER PICK'];
-
-/* Shipment grouping rule.
-   ----------------------
-   The source sheet is one row per LOT. Multiple lots ride one truck. There is no
-   shipment ID in the source data, and BOL is only populated on brokered rows, so
-   BOL cannot serve as a general key.
-
-   Rule (confirmed): group by ship date + customer. Split the group ONLY when it
-   contains two or more distinct non-blank BOLs (then one shipment per distinct
-   BOL, plus one for the blank-BOL remainder). A single BOL among blanks does NOT
-   split — that is what makes lots 2607134/135/136 group as one 250-box shipment.
-
-   Known limitation: two separate trucks to the same customer on the same day,
-   with no BOL on either, merge into one shipment. 2026 data groups ~1,716 lots
-   into ~528 shipments (ratio ~3.25), so shipment counts are presented as
-   APPROXIMATE; lots / pallets / boxes are exact. Replace groupLotsToShipments the
-   day a real shipment or SO identifier exists in the source. */
-var PALLET_COVERAGE_WARN_BELOW = 0.97;  // retained for reference; not used while blank pallets = genuine 0
-
 // Parse the logistics CSV into shipment records. Returns null on empty/parse
 // failure so callers can keep the previous good fetch. Two quirks handled here:
 //   1. Date forward-fill — only ~6% of rows carry a date; a blank Date inherits
@@ -2611,18 +2571,33 @@ function renderSubBar() {
       + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'
       + '</div>';
   } else if (mainSection === 'logistics') {
-    // Logistics sub-bar: one view, a Today / This week / This month period
-    // selector, and a muted line showing the resolved range + business-day count.
-    var _lb = periodBounds(logiPeriodSel, new Date());
-    var _rangeLine = _logiRangeLabel(_lb.start, _lb.end) + ' · ' + _lb.businessDays + ' business day' + (_lb.businessDays === 1 ? '' : 's');
+    // Logistics sub-bar: [Shipments | Summary] segmented group. Shipments also
+    // gets a period toggle + search box (right-aligned); Summary is YTD analytics.
+    var lsShip = logiView === 'shipments', lsSum = logiView === 'summary';
     sb.innerHTML =
       '<div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">'
-      + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
-      +   '<button onclick="setLogiPeriodSel(\'today\')" style="'+navBtnStyle(logiPeriodSel==='today')+'">Today</button>'
-      +   '<button onclick="setLogiPeriodSel(\'week\')"  style="'+navBtnStyle(logiPeriodSel==='week')+'">This week</button>'
-      +   '<button onclick="setLogiPeriodSel(\'month\')" style="'+navBtnStyle(logiPeriodSel==='month')+'">This month</button>'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      +   '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      +     '<button onclick="setLogiView(\'shipments\')" style="'+navBtnStyle(lsShip)+'">Shipments</button>'
+      +     '<button onclick="setLogiView(\'summary\')" style="'+navBtnStyle(lsSum)+'">Summary</button>'
+      +   '</div>'
+      +   (lsShip
+            ? '<div class="sub-divider"></div>'
+              + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+              +   '<button onclick="setLogiPeriod(\'30\')"  style="'+navBtnStyle(logiPeriod==='30')+'">30d</button>'
+              +   '<button onclick="setLogiPeriod(\'90\')"  style="'+navBtnStyle(logiPeriod==='90')+'">90d</button>'
+              +   '<button onclick="setLogiPeriod(\'ytd\')" style="'+navBtnStyle(logiPeriod==='ytd')+'">YTD</button>'
+              +   '<button onclick="setLogiPeriod(\'all\')" style="'+navBtnStyle(logiPeriod==='all')+'">All</button>'
+              + '</div>'
+            : '')
       + '</div>'
-      + '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+esc(_rangeLine)+'</span>'
+      + (lsShip
+          ? '<div class="cust-search-wrap">'
+            +   '<span class="cust-search-icon"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#888780" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#888780" stroke-width="1.3" stroke-linecap="round"/></svg></span>'
+            +   '<input id="logiSearchInput" type="text" class="cust-search-input" placeholder="Search product, lot, carrier, tracking&hellip;" aria-label="Search shipments" autocomplete="off" value="'+esc(logiSearch)+'" oninput="onLogiSearchInput(this.value)" />'
+            +   '<button id="logiSearchClear" type="button" class="cust-search-clear" aria-label="Clear search" style="display:'+(logiSearch?'inline-flex':'none')+';" onclick="clearLogiSearch()">&times;</button>'
+            + '</div>'
+          : '')
       + '</div>';
   } else if (mainSection === 'quality') {
     // Quality sub-tab bar — same segmented pattern as Procurement. Built as a real
@@ -2639,30 +2614,37 @@ function renderSubBar() {
 }
 
 // ── Logistics nav handlers ────────────────────────────────────────────────
-function setLogiPeriodSel(p) {
+function setLogiView(v) {
   closeMsPanel();
-  logiPeriodSel = p;
+  logiView = v;
   renderSubBar();
   render();
 }
-// Trend toggles mutate the existing chart in place (no destroy/recreate) and
-// restyle just the toggle bar — a full render would tear down the chart.
-function setLogiTrendGran(g) {
-  logiTrendGran = g;
-  _updateLogiTrend();
+function setLogiPeriod(p) {
+  closeMsPanel();
+  logiPeriod = p;
+  renderSubBar();
+  render();
 }
-function setLogiTrendMetric(m) {
-  logiTrendMetric = m;
-  _updateLogiTrend();
+function onLogiSearchInput(v) {
+  logiSearch = v || '';
+  var clr = document.getElementById('logiSearchClear');
+  if (clr) clr.style.display = logiSearch ? 'inline-flex' : 'none';
+  // Re-render only the table body so the search input keeps focus + caret. The
+  // render() wrapper also restores focus, but a targeted update avoids the flash.
+  var host = document.getElementById('logi-table-host');
+  if (host) host.innerHTML = renderLogiBody(getLogiFilteredSorted());
+  else render();
 }
-// Expand/collapse one shipment in the log; re-renders only the log host so the
-// rest of the page (and the chart) stays put. State persists in logiExpanded.
-function toggleLogiShipment(key) {
-  logiExpanded[key] = !logiExpanded[key];
-  var host = document.getElementById('logi-log-host');
-  if (!host) return;
-  var shipments = _logiShipmentsCache || groupLotsToShipments(logisticsData || []);
-  host.innerHTML = _logiLogHTML(shipments, periodBounds(logiPeriodSel, new Date()));
+function clearLogiSearch() {
+  logiSearch = '';
+  var inp = document.getElementById('logiSearchInput');
+  if (inp) { inp.value = ''; inp.focus(); }
+  var clr = document.getElementById('logiSearchClear');
+  if (clr) clr.style.display = 'none';
+  var host = document.getElementById('logi-table-host');
+  if (host) host.innerHTML = renderLogiBody(getLogiFilteredSorted());
+  else render();
 }
 
 function setOrdersView(v) {
@@ -2785,274 +2767,59 @@ function renderQuality() {
   renderRecall(); // default/fallback until more sub-tabs exist
 }
 
-// ══ Logistics — shipping throughput ═══════════════════════════════════════
-// Rebuilt around one job: shipping throughput (what went out, and at what rate).
-// Cost fields are still parsed (parseLogistics) but deliberately unreferenced by
-// this view. See the config block near LOGI_COL for the grouping + pallet rules.
+// ══ Logistics (shipping tracker) ═══════════════════════════════════════════
 
-function _logiInt(n) { return Math.round(n || 0).toLocaleString(); }
-function _logiYMD(d) {
-  function p(n){ return n < 10 ? '0' + n : '' + n; }
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+// Money → "$1,235" (whole dollars). Logistics costs are freight/box/pallet sums
+// where cents add noise, so we round for display.
+function _logiMoney(v) { return '$' + Math.round(v || 0).toLocaleString(); }
+
+// STATUS badge. STATUS is ~71% blank in the source, so a blank renders as nothing.
+function _logiStatusBadge(status) {
+  var s = (status || '').trim();
+  if (!s) return '<span style="color:#5f5e5a;">—</span>';
+  var u = s.toLowerCase(), bg, color;
+  if (u === 'delivered')      { bg = '#085041'; color = '#9FE1CB'; }
+  else if (u === 'paid')      { bg = '#0C2240'; color = '#85B7EB'; }
+  else if (u === 'quoted')    { bg = '#633806'; color = '#FAC775'; }
+  else                        { bg = '#2c2c2a'; color = '#888780'; }
+  return '<span style="display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:500;background:'+bg+';color:'+color+';">'+esc(s)+'</span>';
 }
 
-// 2.1 — business day: not Sat/Sun, not a DTF holiday.
-function isBusinessDay(d) {
-  var wd = d.getDay();
-  if (wd === 0 || wd === 6) return false;
-  return DTF_HOLIDAYS.indexOf(_logiYMD(d)) === -1;
+// The Shipments period toggle → cutoff Date (null = no lower bound / all time).
+function _logiPeriodCutoff() {
+  var now = new Date();
+  if (logiPeriod === 'all') return null;
+  if (logiPeriod === 'ytd') return new Date(now.getFullYear(), 0, 1);
+  var days = logiPeriod === '30' ? 30 : 90;
+  var d = new Date(now); d.setHours(0,0,0,0); d.setDate(d.getDate() - days);
+  return d;
 }
 
-// 2.2 — inclusive business-day count between two dates.
-function countBusinessDays(startDate, endDate) {
-  var d = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-  var end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-  var n = 0;
-  while (d <= end) { if (isBusinessDay(d)) n++; d.setDate(d.getDate() + 1); }
-  return n;
-}
-
-// 2.3 — carrier class. Reads BOTH Carrier and Broker: in this sheet the pickup
-// marker lives in the Broker column and parcel names appear in either.
-function carrierClass(carrier, broker) {
-  var c = (carrier == null ? '' : String(carrier)).trim().toUpperCase();
-  var b = (broker == null ? '' : String(broker)).trim().toUpperCase();
-  if (!c && !b) return 'none';
-  var both = c + ' ' + b, i;
-  for (i = 0; i < PICKUP_MARKERS.length; i++) if (both.indexOf(PICKUP_MARKERS[i]) !== -1) return 'pickup';
-  for (i = 0; i < PARCEL_CARRIERS.length; i++) if (both.indexOf(PARCEL_CARRIERS[i]) !== -1) return 'parcel';
-  return 'freight';
-}
-
-// 2.4 — pallets for a row. Per the throughput decision, a blank/zero pallet cell
-// is a genuine zero for every carrier class, so recorded is always true.
-function palletsForRow(row) {
-  var raw = row.pallets;
-  var n = (typeof raw === 'number') ? raw : num(String(raw == null ? '' : raw).replace(/,/g, ''));
-  if (n > 0) return { pallets: n, recorded: true };
-  return { pallets: 0, recorded: true };
-}
-
-// 2.5 — lot number stays a trimmed STRING. Never Number() — leading zeros matter.
-function lotKey(row) { return (row.lot == null ? '' : String(row.lot)).trim(); }
-
-// 2.6 — stable shipment key: date + normalized customer + BOL. Built at the group
-// level (see groupLotsToShipments), joined with a delimiter absent from the data.
-function shipmentKey(dateYMD, customer, bol) {
-  return dateYMD + '' + (customer == null ? '' : String(customer)).trim().toUpperCase() + '' + (bol || '');
-}
-
-// 2.7 — group lot rows into shipments. Group by date + customer; split a group
-// only when it holds >=2 distinct non-blank BOLs.
-function groupLotsToShipments(rows) {
-  var buckets = {}, order = [], i;
-  for (i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    if (!r.date) continue;
-    var ymd = _logiYMD(r.date);
-    var bk = ymd + '' + (r.customer || '').trim().toUpperCase();
-    if (!buckets[bk]) { buckets[bk] = { ymd: ymd, date: r.date, customer: r.customer, rows: [] }; order.push(bk); }
-    buckets[bk].rows.push(r);
-  }
-  var shipments = [];
-  for (i = 0; i < order.length; i++) {
-    var grp = buckets[order[i]];
-    var bolSet = {}, distinct = 0, j;
-    for (j = 0; j < grp.rows.length; j++) {
-      var bl = (grp.rows[j].bol || '').trim();
-      if (bl && !bolSet[bl]) { bolSet[bl] = 1; distinct++; }
+// Records for the Shipments view: filtered by the active period + search, sorted
+// newest-first (stable within a day by original sheet order).
+function getLogiFilteredSorted() {
+  var recs = logisticsData || [];
+  var cutoff = _logiPeriodCutoff();
+  var q = (logiSearch || '').toLowerCase().trim();
+  var out = recs.filter(function(r){
+    if (cutoff && (!r.date || r.date < cutoff)) return false;
+    if (q) {
+      var hay = (r.product + ' ' + r.lot + ' ' + r.carrier + ' ' + r.broker + ' ' + r.tracking + ' ' + r.bol + ' ' + r.goingTo).toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
     }
-    if (distinct >= 2) {
-      var sub = {}, subOrder = [];
-      for (j = 0; j < grp.rows.length; j++) {
-        var r2 = grp.rows[j], sk = (r2.bol || '').trim() || 'none';
-        if (!sub[sk]) { sub[sk] = []; subOrder.push(sk); }
-        sub[sk].push(r2);
-      }
-      for (j = 0; j < subOrder.length; j++) {
-        shipments.push(_logiBuildShipment(grp, sub[subOrder[j]], subOrder[j] === 'none' ? '' : subOrder[j]));
-      }
-    } else {
-      var singleBol = '';
-      for (j = 0; j < grp.rows.length; j++) { var bb = (grp.rows[j].bol || '').trim(); if (bb) { singleBol = bb; break; } }
-      shipments.push(_logiBuildShipment(grp, grp.rows, singleBol));
-    }
-  }
-  return shipments;
-}
-function _logiBuildShipment(grp, memberRows, bol) {
-  var carrier = '', tracking = '', boxes = 0, pallets = 0, palletsRecorded = true, lots = [], i;
-  for (i = 0; i < memberRows.length; i++) {
-    var r = memberRows[i];
-    if (!carrier && r.carrier) carrier = r.carrier;
-    if (!tracking && r.tracking) tracking = r.tracking;
-    boxes += (r.boxes || 0);
-    var pr = palletsForRow(r);
-    pallets += pr.pallets;
-    if (!pr.recorded) palletsRecorded = false;
-    lots.push({ lotNo: lotKey(r), product: r.product, boxes: r.boxes || 0 });
-  }
-  var cc = 'none';
-  for (i = 0; i < memberRows.length; i++) {
-    var c = carrierClass(memberRows[i].carrier, memberRows[i].broker);
-    if (c !== 'none') { cc = c; break; }
-  }
-  return {
-    key: shipmentKey(grp.ymd, grp.customer, bol),
-    date: grp.date,
-    customer: grp.customer,
-    carrier: carrier,
-    carrierClass: cc,
-    bol: bol,
-    tracking: tracking,
-    boxes: boxes,
-    pallets: pallets,
-    palletsRecorded: palletsRecorded,
-    lots: lots
-  };
+    return true;
+  });
+  out.sort(function(a,b){
+    var ta = a.date ? a.date.getTime() : 0, tb = b.date ? b.date.getTime() : 0;
+    if (tb !== ta) return tb - ta;           // newest day first
+    return a._idx - b._idx;                   // sheet order within a day
+  });
+  return out;
 }
 
-function _logiMondayOf(d) {
-  var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  var wd = x.getDay();
-  var diff = (wd === 0) ? 6 : (wd - 1);
-  x.setDate(x.getDate() - diff);
-  return x;
-}
-// First N business days starting at startDate. Returns { start, end, count }.
-function _logiFirstNBusinessDays(startDate, N) {
-  var start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-  if (N <= 0) return { start: start, end: start, count: 0 };
-  var d = new Date(start), count = 0, last = new Date(start), guard = 0;
-  while (count < N && guard < 400) {
-    if (isBusinessDay(d)) { count++; last = new Date(d); }
-    d.setDate(d.getDate() + 1);
-    guard++;
-  }
-  return { start: start, end: last, count: count };
-}
-var _LOGI_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function _logiRangeLabel(a, b) {
-  if (a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()) {
-    if (a.getDate() === b.getDate()) return _LOGI_MONTHS[a.getMonth()] + ' ' + a.getDate();
-    return _LOGI_MONTHS[a.getMonth()] + ' ' + a.getDate() + '–' + b.getDate();
-  }
-  return _LOGI_MONTHS[a.getMonth()] + ' ' + a.getDate() + ' – ' + _LOGI_MONTHS[b.getMonth()] + ' ' + b.getDate();
-}
+var LOGI_ROW_CAP = 500; // guard against dumping ~1,700 YTD rows into the DOM at once
 
-// 2.8 — current-period bounds.
-function periodBounds(period, today) {
-  var end = new Date(today.getFullYear(), today.getMonth(), today.getDate()), start;
-  if (period === 'today') start = new Date(end);
-  else if (period === 'week') start = _logiMondayOf(today);
-  else start = new Date(today.getFullYear(), today.getMonth(), 1);
-  return { start: start, end: end, businessDays: countBusinessDays(start, end) };
-}
-
-// 2.9 — prior-period bounds, matched on business days elapsed (like-for-like).
-function priorPeriodBounds(period, today) {
-  var cur = periodBounds(period, today);
-  var N = cur.businessDays;
-  if (period === 'today') {
-    var d = new Date(today.getFullYear(), today.getMonth(), today.getDate()), g = 0;
-    do { d.setDate(d.getDate() - 1); g++; } while (!isBusinessDay(d) && g < 14);
-    return { start: new Date(d), end: new Date(d), businessDays: 1, label: _logiRangeLabel(d, d) };
-  }
-  if (period === 'week') {
-    var priorMon = _logiMondayOf(today); priorMon.setDate(priorMon.getDate() - 7);
-    var s = _logiFirstNBusinessDays(priorMon, N);
-    return { start: s.start, end: s.end, businessDays: s.count, label: _logiRangeLabel(s.start, s.end) };
-  }
-  var firstPrior = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-  var s2 = _logiFirstNBusinessDays(firstPrior, N);
-  return { start: s2.start, end: s2.end, businessDays: s2.count, label: _logiRangeLabel(s2.start, s2.end) };
-}
-
-// 3.1 — throughput aggregate over shipments within bounds.
-function computeThroughput(shipments, bounds) {
-  var lots = 0, boxes = 0, pallets = 0, pickup = 0, recorded = 0, n = 0, i;
-  for (i = 0; i < shipments.length; i++) {
-    var s = shipments[i];
-    if (!s.date || s.date < bounds.start || s.date > bounds.end) continue;
-    n++;
-    lots += s.lots.length;
-    boxes += s.boxes;
-    pallets += s.pallets;
-    if (s.carrierClass === 'pickup') pickup++;
-    if (s.palletsRecorded) recorded++;
-  }
-  var bd = bounds.businessDays || 0;
-  return {
-    shipments: n,
-    lots: lots,
-    boxes: boxes,
-    pallets: pallets,
-    lotsPerShipment: n ? (lots / n) : 0,
-    shipmentsPerDay: bd ? (n / bd) : 0,
-    palletsPerDay: bd ? (pallets / bd) : 0,
-    pickupCount: pickup,
-    pickupPct: n ? (pickup / n * 100) : 0,
-    palletCoverage: n ? (recorded / n) : 1
-  };
-}
-
-// 3.2 — projected full-period shipments (month/week only).
-function computePace(current, period, today) {
-  if (period === 'today') return null;
-  var total;
-  if (period === 'week') {
-    var mon = _logiMondayOf(today), fri = new Date(mon); fri.setDate(mon.getDate() + 4);
-    total = countBusinessDays(mon, fri);
-  } else {
-    var first = new Date(today.getFullYear(), today.getMonth(), 1);
-    var lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    total = countBusinessDays(first, lastDay);
-  }
-  return Math.round(current.shipmentsPerDay * total);
-}
-
-function _logiAggRange(shipments, start, end) {
-  var n = 0, p = 0, b = 0, i;
-  for (i = 0; i < shipments.length; i++) {
-    var s = shipments[i];
-    if (s.date && s.date >= start && s.date <= end) { n++; p += s.pallets; b += s.boxes; }
-  }
-  return { shipments: n, pallets: p, boxes: b };
-}
-
-// 3.3 — trend series. Weekly: last 13 Monday weeks incl. the current partial.
-// Monthly: every month present in the current year incl. the current partial.
-function computeTrendSeries(shipments, granularity) {
-  var today = new Date();
-  var labels = [], sh = [], pa = [], bo = [], partialIndex = -1, i;
-  if (granularity === 'week') {
-    var curMon = _logiMondayOf(today);
-    for (i = 12; i >= 0; i--) {
-      var s0 = new Date(curMon); s0.setDate(curMon.getDate() - i * 7);
-      var e0 = new Date(s0); e0.setDate(s0.getDate() + 6); e0.setHours(23, 59, 59, 999);
-      var agg = _logiAggRange(shipments, s0, e0);
-      labels.push(_LOGI_MONTHS[s0.getMonth()] + ' ' + s0.getDate());
-      sh.push(agg.shipments); pa.push(agg.pallets); bo.push(agg.boxes);
-      if (s0.getTime() === curMon.getTime()) partialIndex = labels.length - 1;
-    }
-  } else {
-    var yr = today.getFullYear(), present = {};
-    for (i = 0; i < shipments.length; i++) { var d = shipments[i].date; if (d && d.getFullYear() === yr) present[d.getMonth()] = 1; }
-    present[today.getMonth()] = 1;
-    var mos = []; for (var k in present) if (present.hasOwnProperty(k)) mos.push(Number(k));
-    mos.sort(function(a, b2){ return a - b2; });
-    for (i = 0; i < mos.length; i++) {
-      var mm = mos[i];
-      var s1 = new Date(yr, mm, 1), e1 = new Date(yr, mm + 1, 0); e1.setHours(23, 59, 59, 999);
-      var agg1 = _logiAggRange(shipments, s1, e1);
-      labels.push(_LOGI_MONTHS[mm]); sh.push(agg1.shipments); pa.push(agg1.pallets); bo.push(agg1.boxes);
-      if (mm === today.getMonth()) partialIndex = labels.length - 1;
-    }
-  }
-  return { labels: labels, shipments: sh, pallets: pa, boxes: bo, partialIndex: partialIndex };
-}
-
-// ── Rendering ──────────────────────────────────────────────────────────────
+// Dispatcher. Handles the not-yet-loaded state, then routes to the active sub-view.
 function renderLogistics() {
   fetchLogisticsIfNeeded(false);
   var content = document.getElementById('content');
@@ -3066,209 +2833,209 @@ function renderLogistics() {
       + '<style>@keyframes orders-spin{to{transform:rotate(360deg);}}</style>';
     return;
   }
-  var today = new Date();
-  var shipments = groupLotsToShipments(logisticsData);
-  _logiShipmentsCache = shipments;
-  var bounds = periodBounds(logiPeriodSel, today);
-  var prior = priorPeriodBounds(logiPeriodSel, today);
-  var cur = computeThroughput(shipments, bounds);
-  var prev = computeThroughput(shipments, prior);
-  var pace = computePace(cur, logiPeriodSel, today);
-  var trend = computeTrendSeries(shipments, logiTrendGran);
-  content.innerHTML =
-    _logiTilesHTML(cur, prev, prior, pace, logiPeriodSel)
-    + _logiTrendHTML(trend)
-    + '<div id="logi-log-host">' + _logiLogHTML(shipments, bounds) + '</div>';
-  _drawLogiTrendChart(trend);
+  if (logiView === 'summary') renderLogiSummary();
+  else renderLogiShipments();
 }
 
-function _logiTile(label, value, subHTML, approx) {
-  return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;">'
-    + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">' + esc(label)
-    + (approx ? ' <span style="text-transform:none;letter-spacing:0;color:#5f5e5a;">(approx)</span>' : '') + '</div>'
-    + '<div style="font-size:22px;font-weight:500;color:#e8e6e0;line-height:1.2;">' + value + '</div>'
-    + '<div style="font-size:11px;margin-top:4px;font-family:system-ui;min-height:15px;">' + subHTML + '</div>'
-    + '</div>';
-}
-// Delta vs prior. When priorHasData is false (prior period had zero shipments), suppress it.
-function _logiDelta(curVal, prevVal, priorHasData, suffix) {
-  if (!priorHasData) return '<span style="color:#5f5e5a;">no prior data</span>';
-  if (prevVal === 0) return '<span style="color:#5f5e5a;">— ' + esc(suffix) + '</span>';
-  var p = (curVal - prevVal) / prevVal * 100;
-  if (Math.abs(p) < 0.5) return '<span style="color:#888780;">—</span> <span style="color:#5f5e5a;">' + esc(suffix) + '</span>';
-  var up = p > 0, col = up ? '#9FE1CB' : '#F09595', arrow = up ? '▲' : '▼';
-  return '<span style="color:' + col + ';">' + arrow + ' ' + (up ? '+' : '') + p.toFixed(1) + '%</span> <span style="color:#5f5e5a;">' + esc(suffix) + '</span>';
-}
-function _logiTilesHTML(cur, prev, prior, pace, period) {
-  var priorHas = prev.shipments > 0;
-  var vs = 'vs ' + prior.label;
-  var GRID = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:10px;">';
-  var row1 = GRID
-    + _logiTile('Shipments', _logiInt(cur.shipments), _logiDelta(cur.shipments, prev.shipments, priorHas, vs), true)
-    + _logiTile('Pallets', _logiInt(cur.pallets), _logiDelta(cur.pallets, prev.pallets, priorHas, vs), false)
-    + _logiTile('Boxes', _logiInt(cur.boxes), _logiDelta(cur.boxes, prev.boxes, priorHas, vs), false)
-    + _logiTile('Lots shipped', _logiInt(cur.lots), '<span style="color:#888780;">' + cur.lotsPerShipment.toFixed(2) + ' lots per shipment</span>', false)
-    + '</div>';
-  var paceLabel = (period === 'week') ? 'Week pace' : 'Month pace';
-  var paceProj = (period === 'week') ? 'projected full week' : 'projected full month';
-  var paceVal = (pace == null) ? '—' : _logiInt(pace);
-  var paceSub = (pace == null) ? '<span style="color:#5f5e5a;">n/a for a single day</span>' : '<span style="color:#5f5e5a;">' + esc(paceProj) + '</span>';
-  var row2 = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px;">'
-    + _logiTile('Shipments / business day', cur.shipmentsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.shipmentsPerDay.toFixed(1) + '/day</span>', true)
-    + _logiTile('Pallets / business day', cur.palletsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.palletsPerDay.toFixed(1) + '/day</span>', false)
-    + _logiTile(paceLabel, paceVal, paceSub, true)
-    + _logiTile('Customer pickup', Math.round(cur.pickupPct) + '%', '<span style="color:#5f5e5a;">' + cur.pickupCount + ' of ' + cur.shipments + ' shipments</span>', false)
-    + '</div>';
-  var note = '<div style="font-size:11px;color:#5f5e5a;font-family:system-ui;margin-bottom:18px;line-height:1.5;">Lots, pallets and boxes are exact. Shipment counts group lots by ship date + customer (the source has no shipment ID), so shipments and per-shipment rates are approximate.</div>';
-  return row1 + row2 + note;
+// ── Shipments: KPI strip + date-grouped tracker table ──────────────────────
+function renderLogiShipments() {
+  var content = document.getElementById('content');
+  content.innerHTML = '<div id="logi-table-host">' + renderLogiBody(getLogiFilteredSorted()) + '</div>';
 }
 
-function _logiTrendTogglesHTML() {
-  var g1 = logiTrendGran === 'week', g2 = logiTrendGran === 'month';
-  var m1 = logiTrendMetric === 'shipments', m2 = logiTrendMetric === 'pallets', m3 = logiTrendMetric === 'boxes';
-  return '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">'
-    + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    +   '<button onclick="setLogiTrendGran(\'week\')" style="' + navBtnStyle(g1) + '">Weekly</button>'
-    +   '<button onclick="setLogiTrendGran(\'month\')" style="' + navBtnStyle(g2) + '">Monthly</button>'
-    + '</div>'
-    + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    +   '<button onclick="setLogiTrendMetric(\'shipments\')" style="' + navBtnStyle(m1) + '">Shipments</button>'
-    +   '<button onclick="setLogiTrendMetric(\'pallets\')" style="' + navBtnStyle(m2) + '">Pallets</button>'
-    +   '<button onclick="setLogiTrendMetric(\'boxes\')" style="' + navBtnStyle(m3) + '">Boxes</button>'
-    + '</div>'
-    + '</div>';
-}
-function _logiChartAria(trend) {
-  return 'Throughput by ' + (logiTrendGran === 'week' ? 'week' : 'month') + ', metric ' + logiTrendMetric + '. ' + trend.labels.length + ' buckets, most recent in progress.';
-}
-function _logiTrendHTML(trend) {
-  return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;margin-bottom:18px;">'
-    + '<div style="font-size:12px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">Throughput trend</div>'
-    + '<div style="font-size:11px;color:#5f5e5a;margin-bottom:14px;">The in-progress bucket is shown in a lighter fill.</div>'
-    + '<div id="logi-trend-toggles">' + _logiTrendTogglesHTML() + '</div>'
-    + '<div style="height:260px;position:relative;"><canvas id="logiTrendChart" role="img" aria-label="' + esc(_logiChartAria(trend)) + '"></canvas></div>'
-    + '</div>';
-}
-function _logiAxisTick(metric) {
-  if (metric === 'boxes') return function(v){ return v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v; };
-  return function(v){ return v; };
-}
-function _drawLogiTrendChart(trend) {
-  var cv = document.getElementById('logiTrendChart');
-  if (!cv || typeof Chart === 'undefined') return;
-  var data = trend[logiTrendMetric], colors = [], i;
-  for (i = 0; i < data.length; i++) colors.push(i === trend.partialIndex ? '#1f4a7d' : '#3987e5');
-  charts.logiTrend = new Chart(cv, {
-    type: 'bar',
-    data: { labels: trend.labels, datasets: [{ data: data, backgroundColor: colors, borderRadius: 4, maxBarThickness: 24 }] },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx){ return ctx.raw.toLocaleString(); } } } },
-      scales: {
-        x: { ticks: { color: '#888780', font: { size: 10 }, autoSkip: false, maxRotation: 45 }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { color: '#888780', callback: _logiAxisTick(logiTrendMetric) }, grid: { color: '#2c2c2a' } }
-      }
-    }
-  });
-}
-// Toggle handler target: mutate the existing chart, restyle the toggle bar. No
-// destroy/recreate — that only happens on a full render (renderImpl clears charts).
-function _updateLogiTrend() {
-  var trend = computeTrendSeries(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), logiTrendGran);
-  var tg = document.getElementById('logi-trend-toggles');
-  if (tg) tg.innerHTML = _logiTrendTogglesHTML();
-  var ch = charts.logiTrend;
-  if (!ch) return;
-  var data = trend[logiTrendMetric], colors = [], i;
-  for (i = 0; i < data.length; i++) colors.push(i === trend.partialIndex ? '#1f4a7d' : '#3987e5');
-  ch.data.labels = trend.labels;
-  ch.data.datasets[0].data = data;
-  ch.data.datasets[0].backgroundColor = colors;
-  ch.options.scales.y.ticks.callback = _logiAxisTick(logiTrendMetric);
-  var cv = document.getElementById('logiTrendChart');
-  if (cv) cv.setAttribute('aria-label', _logiChartAria(trend));
-  ch.update();
-}
+// KPI strip + table for the current filtered set. Split out so the search box can
+// re-render just this block (keeping the sub-bar input focused).
+function renderLogiBody(recs) {
+  var periodLabel = logiPeriod === 'all' ? 'all time' : logiPeriod === 'ytd' ? 'year to date' : 'last ' + logiPeriod + ' days';
+  var shipments = recs.length, freight = 0, total = 0, boxes = 0, pallets = 0;
+  recs.forEach(function(r){ freight += r.freight; total += r.total; boxes += r.boxes; pallets += r.pallets; });
 
-var LOGI_LOG_CAP = 50;
-function _logiLogHTML(shipments, bounds) {
-  var inRange = [], i;
-  for (i = 0; i < shipments.length; i++) {
-    var s = shipments[i];
-    if (s.date && s.date >= bounds.start && s.date <= bounds.end) inRange.push(s);
+  var kpis = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">'
+    + _ordersCard('Shipments',    shipments.toLocaleString(),   periodLabel)
+    + _ordersCard('Freight paid', _logiMoney(freight),          periodLabel, '#85B7EB')
+    + _ordersCard('Total logistics cost', _logiMoney(total),    'freight + box + pallet + labor')
+    + _ordersCard('Boxes',        Math.round(boxes).toLocaleString(),   periodLabel)
+    + _ordersCard('Pallets',      Math.round(pallets).toLocaleString(), periodLabel)
+    + '</div>';
+
+  if (!shipments) {
+    var empty = logiSearch
+      ? 'No shipments match &ldquo;' + esc(logiSearch) + '&rdquo;'
+      : 'No shipments in this period.';
+    return kpis + '<div style="padding:2.5rem;text-align:center;color:#5f5e5a;font-size:13px;font-family:system-ui;">' + empty + '</div>';
   }
-  if (!inRange.length) return '<div style="padding:2.5rem;text-align:center;color:#5f5e5a;font-size:13px;font-family:system-ui;">No shipments in this period.</div>';
-  inRange.sort(function(a, b) {
-    var t = b.date.getTime() - a.date.getTime();
-    if (t !== 0) return t;
-    return (a.customer || '') < (b.customer || '') ? -1 : ((a.customer || '') > (b.customer || '') ? 1 : 0);
+
+  var capped = recs.length > LOGI_ROW_CAP;
+  var shown = capped ? recs.slice(0, LOGI_ROW_CAP) : recs;
+
+  // Group consecutive records by day (they're already date-sorted).
+  var groups = [], cur = null;
+  shown.forEach(function(r){
+    var key = r.date ? r.date.getTime() : 0;
+    if (!cur || cur.key !== key) { cur = { key: key, date: r.date, rows: [] }; groups.push(cur); }
+    cur.rows.push(r);
   });
-  // Build day groups (with full-day summaries) preserving the sorted order.
-  var days = [], dmap = {};
-  for (i = 0; i < inRange.length; i++) {
-    var s2 = inRange[i], dk = _logiYMD(s2.date);
-    if (!dmap[dk]) { dmap[dk] = { key: dk, date: s2.date, list: [], ships: 0, pallets: 0, boxes: 0 }; days.push(dmap[dk]); }
-    dmap[dk].list.push(s2); dmap[dk].ships++; dmap[dk].pallets += s2.pallets; dmap[dk].boxes += s2.boxes;
-  }
-  var GC = 'grid-template-columns:22px 1fr 70px 70px 70px 150px;';
-  var th = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;';
-  var html = '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;">';
-  html += '<div style="display:grid;' + GC + 'gap:10px;padding:8px 14px;border-bottom:0.5px solid #2c2c2a;">'
-    + '<span></span>'
-    + '<span style="' + th + '">Customer</span>'
-    + '<span style="' + th + 'text-align:right;">Lots</span>'
-    + '<span style="' + th + 'text-align:right;">Boxes</span>'
-    + '<span style="' + th + 'text-align:right;">Pallets</span>'
-    + '<span style="' + th + 'text-align:right;">Carrier</span>'
+
+  var thBase = 'padding:8px 10px;font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;';
+  var thL = 'text-align:left;' + thBase, thR = 'text-align:right;' + thBase;
+  var head = '<thead><tr>'
+    + '<th style="'+thL+'">Product</th>'
+    + '<th style="'+thL+'">Lot #</th>'
+    + '<th style="'+thL+'">Going to</th>'
+    + '<th style="'+thR+'">Boxes</th>'
+    + '<th style="'+thR+'">Pallets</th>'
+    + '<th style="'+thL+'">Carrier</th>'
+    + '<th style="'+thL+'">Tracking / BOL</th>'
+    + '<th style="'+thL+'">ETA</th>'
+    + '<th style="'+thL+'">Status</th>'
+    + '<th style="'+thR+'">Freight</th>'
+    + '<th style="'+thR+'">Total cost</th>'
+    + '</tr></thead>';
+
+  var tdBase = 'padding:7px 10px;border-bottom:0.5px solid #1a1d20;vertical-align:top;';
+  var tdL = 'text-align:left;' + tdBase, tdR = 'text-align:right;' + tdBase + 'font-variant-numeric:tabular-nums;color:#cfcdc7;';
+  var body = '';
+  groups.forEach(function(gp){
+    var dayTotal = 0; gp.rows.forEach(function(r){ dayTotal += r.total; });
+    var dLabel = gp.date
+      ? gp.date.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })
+      : 'Undated';
+    body += '<tr><td colspan="11" style="padding:9px 10px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
+      + '<span style="font-size:12px;font-weight:600;color:#e8e6e0;">'+esc(dLabel)+'</span>'
+      + '<span style="font-size:11px;color:#5f5e5a;margin-left:10px;">'+gp.rows.length+' shipment'+(gp.rows.length===1?'':'s')+' &middot; '+_logiMoney(dayTotal)+'</span>'
+      + '</td></tr>';
+    gp.rows.forEach(function(r){
+      var dash = r.product.indexOf('-');
+      var prodRest = dash !== -1 ? r.product.slice(dash+1).trim() : '';
+      var prodCell = '<div style="font-weight:500;color:#e8e6e0;">'+esc(r.customer || r.product)+'</div>'
+        + (prodRest ? '<div style="font-size:11px;color:#888780;">'+esc(prodRest)+'</div>' : '');
+      var track = r.tracking || r.bol;
+      body += '<tr>'
+        + '<td style="'+tdL+'min-width:180px;">'+prodCell+'</td>'
+        + '<td style="'+tdL+'color:#888780;">'+(r.lot ? esc(r.lot) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdL+'color:#888780;">'+(r.goingTo ? esc(r.goingTo) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdR+'">'+(r.boxes ? Math.round(r.boxes).toLocaleString() : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdR+'">'+(r.pallets ? Math.round(r.pallets).toLocaleString() : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdL+'color:#cfcdc7;">'+(r.carrier ? esc(r.carrier) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdL+'color:#888780;font-variant-numeric:tabular-nums;">'+(track ? esc(track) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdL+'color:#888780;">'+(r.eta ? esc(r.eta) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdL+'">'+_logiStatusBadge(r.status)+'</td>'
+        + '<td style="'+tdR+'">'+(r.freight ? _logiMoney(r.freight) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+        + '<td style="'+tdR+'font-weight:500;color:#e8e6e0;">'+_logiMoney(r.total)+'</td>'
+        + '</tr>';
+    });
+  });
+
+  var capNote = capped
+    ? '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">Showing the '+LOGI_ROW_CAP.toLocaleString()+' most recent of '+recs.length.toLocaleString()+' shipments in this period. Narrow the period or search to see the rest.</div>'
+    : '';
+
+  return kpis
+    + '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;">'
+    +   '<div style="overflow-x:auto;">'
+    +     '<table style="width:100%;border-collapse:collapse;font-size:12px;font-family:system-ui;">' + head + '<tbody>' + body + '</tbody></table>'
+    +   '</div>'
+    +   capNote
     + '</div>';
-  var shown = 0, truncated = false, d, j;
-  for (d = 0; d < days.length; d++) {
-    if (shown >= LOGI_LOG_CAP) { truncated = true; break; }
-    var day = days[d];
-    var hdr = day.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
-      + '<span style="font-size:12px;font-weight:600;color:#e8e6e0;">' + esc(hdr) + '</span>'
-      + '<span style="font-size:11px;color:#5f5e5a;font-variant-numeric:tabular-nums;">' + day.ships + ' shipment' + (day.ships === 1 ? '' : 's') + ' · ' + _logiInt(day.pallets) + ' pallet' + (day.pallets === 1 ? '' : 's') + ' · ' + _logiInt(day.boxes) + ' boxes</span>'
+}
+
+// ── Summary: YTD KPIs + monthly cost chart + cost-by-carrier ───────────────
+function computeLogiSummary() {
+  var recs = (logisticsData || []).filter(function(r){ return r.date && r.date.getFullYear() === CURRENT_YEAR; });
+  var t = { count:0, freight:0, total:0, boxes:0, pallets:0, units:0, pickup:0 };
+  var months = {}; // 0-11 -> {freight, box, pallet, labor, total, count}
+  var carriers = {};
+  recs.forEach(function(r){
+    t.count++; t.freight += r.freight; t.total += r.total; t.boxes += r.boxes;
+    t.pallets += r.pallets; t.units += r.units;
+    if ((r.broker || '').toLowerCase().indexOf('pick') !== -1) t.pickup++;
+    var m = r.date.getMonth();
+    if (!months[m]) months[m] = { freight:0, box:0, pallet:0, labor:0, total:0, count:0 };
+    months[m].freight += r.freight; months[m].box += r.boxCost; months[m].pallet += r.palletCost;
+    months[m].labor += r.laborCost; months[m].total += r.total; months[m].count++;
+    var cname = r.carrier || 'Unspecified / pickup';
+    carriers[cname] = (carriers[cname] || 0) + r.total;
+  });
+  var carrierList = Object.keys(carriers).map(function(k){ return { name:k, cost:carriers[k] }; })
+    .sort(function(a,b){ return b.cost - a.cost; });
+  return { totals:t, months:months, carriers:carrierList, recCount:recs.length };
+}
+
+function renderLogiSummary() {
+  var content = document.getElementById('content');
+  var sum = computeLogiSummary();
+  var t = sum.totals;
+
+  if (!t.count) {
+    content.innerHTML = '<div style="padding:2.5rem;text-align:center;color:#5f5e5a;font-size:13px;font-family:system-ui;">No '+CURRENT_YEAR+' shipping data yet.</div>';
+    return;
+  }
+
+  var pickupPct = t.count ? Math.round(t.pickup / t.count * 100) : 0;
+  var kpis = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px;">'
+    + _ordersCard('Shipments',            t.count.toLocaleString(),            CURRENT_YEAR + ' YTD')
+    + _ordersCard('Freight paid',         _logiMoney(t.freight),               CURRENT_YEAR + ' YTD', '#85B7EB')
+    + _ordersCard('Total logistics cost', _logiMoney(t.total),                 'freight + box + pallet + labor')
+    + _ordersCard('Boxes',                Math.round(t.boxes).toLocaleString(),   CURRENT_YEAR + ' YTD')
+    + _ordersCard('Pallets',              Math.round(t.pallets).toLocaleString(), CURRENT_YEAR + ' YTD')
+    + _ordersCard('Customer pickup',      pickupPct + '%',                     'of shipments picked up')
+    + '</div>';
+
+  // Monthly cost chart card
+  var chartCard = '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;margin-bottom:18px;">'
+    + '<div style="font-size:12px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">Monthly logistics cost</div>'
+    + '<div style="font-size:11px;color:#5f5e5a;margin-bottom:14px;">Freight, box, pallet and labor cost by month &middot; '+CURRENT_YEAR+'</div>'
+    + '<div style="height:260px;position:relative;"><canvas id="logiMonthlyChart"></canvas></div>'
+    + '</div>';
+
+  // Cost-by-carrier card (top 10 by total cost)
+  var top = sum.carriers.slice(0, 10);
+  var maxCost = top.length ? top[0].cost : 1;
+  var carrierRows = top.map(function(c){
+    var w = maxCost ? Math.max(2, Math.round(c.cost / maxCost * 100)) : 0;
+    return '<div style="display:grid;grid-template-columns:170px 1fr 90px;gap:12px;align-items:center;padding:6px 0;">'
+      + '<div style="font-size:12px;color:#cfcdc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="'+esc(c.name)+'">'+esc(c.name)+'</div>'
+      + '<div style="height:8px;background:#141618;border-radius:4px;overflow:hidden;"><div style="height:100%;width:'+w+'%;background:#378ADD;border-radius:4px;"></div></div>'
+      + '<div style="font-size:12px;color:#e8e6e0;text-align:right;font-variant-numeric:tabular-nums;">'+_logiMoney(c.cost)+'</div>'
       + '</div>';
-    for (j = 0; j < day.list.length; j++) {
-      if (shown >= LOGI_LOG_CAP) { truncated = true; break; }
-      var sp = day.list[j]; shown++;
-      var open = !!logiExpanded[sp.key];
-      var carrierTxt;
-      if (sp.carrierClass === 'pickup') carrierTxt = '<span style="color:#888780;">Pickup</span>';
-      else if (sp.carrierClass === 'none' || !sp.carrier) carrierTxt = '<span style="color:#5f5e5a;">—</span>';
-      else carrierTxt = esc(sp.carrier);
-      html += '<div onclick="toggleLogiShipment(' + jsStr(sp.key) + ')" style="display:grid;' + GC + 'gap:10px;align-items:center;padding:8px 14px;border-bottom:0.5px solid #1a1d20;cursor:pointer;" onmouseover="this.style.background=\'#191c1f\'" onmouseout="this.style.background=\'transparent\'">'
-        + '<span style="color:#888780;display:inline-block;' + (open ? 'transform:rotate(90deg);' : '') + '">▸</span>'
-        + '<span style="font-size:12px;color:#e8e6e0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(sp.customer || '—') + '</span>'
-        + '<span style="font-size:12px;color:#888780;text-align:right;font-variant-numeric:tabular-nums;">' + sp.lots.length + '</span>'
-        + '<span style="font-size:12px;color:#cfcdc7;text-align:right;font-variant-numeric:tabular-nums;">' + _logiInt(sp.boxes) + '</span>'
-        + '<span style="font-size:12px;color:#cfcdc7;text-align:right;font-variant-numeric:tabular-nums;">' + (sp.pallets ? _logiInt(sp.pallets) : '<span style="color:#5f5e5a;">—</span>') + '</span>'
-        + '<span style="font-size:12px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + carrierTxt + '</span>'
-        + '</div>';
-      if (open) {
-        var k;
-        for (k = 0; k < sp.lots.length; k++) {
-          var lt = sp.lots[k];
-          var dash = lt.product.indexOf('-');
-          var prodRest = (dash !== -1) ? lt.product.slice(dash + 1).trim() : lt.product;
-          html += '<div style="display:grid;' + GC + 'gap:10px;padding:5px 14px;border-bottom:0.5px solid #141618;background:#161a1d;">'
-            + '<span></span>'
-            + '<span style="font-size:11px;color:#888780;padding-left:6px;"><span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + esc(lt.lotNo) + '</span> · ' + esc(prodRest) + '</span>'
-            + '<span></span>'
-            + '<span style="font-size:11px;color:#888780;text-align:right;font-variant-numeric:tabular-nums;">' + _logiInt(lt.boxes) + '</span>'
-            + '<span></span><span></span>'
-            + '</div>';
+  }).join('');
+  var carrierCard = '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;">'
+    + '<div style="font-size:12px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">Cost by carrier</div>'
+    + '<div style="font-size:11px;color:#5f5e5a;margin-bottom:12px;">Top '+top.length+' carriers by total logistics cost &middot; '+CURRENT_YEAR+'</div>'
+    + carrierRows
+    + '</div>';
+
+  content.innerHTML = kpis + chartCard + carrierCard;
+
+  // Build the monthly stacked bar chart.
+  var monthsPresent = [];
+  for (var m = 0; m <= 11; m++) { if (sum.months[m]) monthsPresent.push(m); }
+  var MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var labels = monthsPresent.map(function(m){ return MONTH_ABBR[m]; });
+  function series(key){ return monthsPresent.map(function(m){ return Math.round(sum.months[m][key]); }); }
+  var canvas = document.getElementById('logiMonthlyChart');
+  if (canvas && typeof Chart !== 'undefined') {
+    charts.logiMonthly = new Chart(canvas, {
+      type: 'bar',
+      data: { labels: labels, datasets: [
+        { label:'Freight', data:series('freight'), backgroundColor:'#378ADD', stack:'cost', borderRadius:3 },
+        { label:'Box',     data:series('box'),     backgroundColor:'#85B7EB', stack:'cost', borderRadius:3 },
+        { label:'Pallet',  data:series('pallet'),  backgroundColor:'#EF9F27', stack:'cost', borderRadius:3 },
+        { label:'Labor',   data:series('labor'),   backgroundColor:'#1D9E75', stack:'cost', borderRadius:3 }
+      ]},
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{
+          legend:{ position:'bottom', labels:{ color:'#888780', font:{size:11}, boxWidth:12, boxHeight:12, padding:14 } },
+          tooltip:{ callbacks:{ label:function(ctx){ return ctx.dataset.label+': $'+Math.round(ctx.raw).toLocaleString(); } } }
+        },
+        scales:{
+          x:{ stacked:true, ticks:{ color:'#888780', font:{size:11} }, grid:{ display:false } },
+          y:{ stacked:true, ticks:{ color:'#888780', callback:function(v){ return '$'+(v/1000).toFixed(0)+'k'; } }, grid:{ color:'#2c2c2a' } }
         }
       }
-    }
+    });
   }
-  if (truncated) {
-    var remaining = inRange.length - shown;
-    html += '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">' + remaining + ' more shipment' + (remaining === 1 ? '' : 's') + ' — narrow the period to see them all.</div>';
-  }
-  html += '</div>';
-  return html;
 }
 
 function filterProcurement() {
