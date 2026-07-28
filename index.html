@@ -699,6 +699,7 @@ var agingDrilldown     = null;      // null | '4-8' | '8-12' | '12+' — which a
 var logisticsData = null;           // null = not yet fetched; array of shipment records once loaded
 var logisticsLastFetch = 0;
 var logisticsFetchInFlight = false;
+var logisticsLoadError = false;     // true after a fetch exhausts its retries with no usable data
 var logiView = 'shipments';         // 'shipments' | 'summary'
 var logiPeriod = '30';              // '30' | '90' | 'ytd' | 'all' — drives the Shipments KPI strip + table
 var logiSearch = '';                // case-insensitive filter (product / customer / lot / carrier / tracking / BOL)
@@ -1805,22 +1806,46 @@ function fetchLogisticsIfNeeded(force) {
   var stale = (Date.now() - logisticsLastFetch) > 60000;
   if (!force && have && !stale) return;
   logisticsFetchInFlight = true;
-  // Use fetchCSVSimple (not fetchWithRetry): fetchWithRetry validates that the
-  // FIRST line contains "date"/"lot", but this sheet's first line is a stray junk
-  // row (the real header is row 1), so it would reject every response and hang.
+  logisticsLoadError = false;
+  _logiFetchAttempt(5, 1500);
+}
+
+// One fetch attempt with a bounded retry. Uses fetchCSVSimple (NOT fetchWithRetry):
+// fetchWithRetry validates that the FIRST line contains "date"/"lot", but this
+// sheet's first line is a stray junk row (real header is row 1), so it would reject
+// every response and hang. fetchCSVSimple has no retry of its own, and the Sheets
+// CDN intermittently serves an empty/short body — so we retry here on any response
+// that doesn't parse into usable rows, then surface an error rather than spin forever.
+function _logiFetchAttempt(triesLeft, delay) {
   fetchCSVSimple(CSV_LOGISTICS, true).then(function(text){
     var parsed = parseLogistics(text);
     // Stale-data guard: never overwrite good data with an empty/short response, and
-    // refuse a dataset that shrank >20% (the Sheets CDN occasionally serves stale
-    // partial CSVs). This ledger only grows, so a large shrink is always suspect.
-    if (parsed && parsed.length > 0 && !(logisticsData && parsed.length < logisticsData.length * 0.8)) {
+    // refuse a dataset that shrank >20% (a stale partial CSV). This ledger only grows.
+    var usable = parsed && parsed.length > 0 && !(logisticsData && parsed.length < logisticsData.length * 0.8);
+    if (usable) {
       logisticsData = parsed;
       logisticsLastFetch = Date.now();
+      logisticsFetchInFlight = false;
       _saveLogisticsCache();
-      if (mainSection === 'logistics') render();  // re-render only on a successful load
+      if (mainSection === 'logistics') render();
+      return;
     }
-    logisticsFetchInFlight = false;
-  }).catch(function(){ logisticsFetchInFlight = false; });
+    if (triesLeft > 1) {
+      setTimeout(function(){ _logiFetchAttempt(triesLeft - 1, Math.round(delay * 1.5)); }, delay);
+    } else {
+      logisticsFetchInFlight = false;
+      logisticsLoadError = true;
+      if (mainSection === 'logistics' && logisticsData === null) render();  // show retry state, not an endless spinner
+    }
+  }).catch(function(){
+    if (triesLeft > 1) {
+      setTimeout(function(){ _logiFetchAttempt(triesLeft - 1, Math.round(delay * 1.5)); }, delay);
+    } else {
+      logisticsFetchInFlight = false;
+      logisticsLoadError = true;
+      if (mainSection === 'logistics' && logisticsData === null) render();
+    }
+  });
 }
 
 // Parse a Lot # reference sheet (columns: Lot #, Brand Name, Product Name,
@@ -2620,6 +2645,11 @@ function setLogiView(v) {
   renderSubBar();
   render();
 }
+function retryLogistics() {
+  logisticsLoadError = false;
+  fetchLogisticsIfNeeded(true);  // force a fresh fetch
+  render();                      // back to the loading spinner while it retries
+}
 function setLogiPeriod(p) {
   closeMsPanel();
   logiPeriod = p;
@@ -2821,12 +2851,20 @@ function renderLogistics() {
   var content = document.getElementById('content');
   content.style.display = 'block';
   if (logisticsData === null) {
-    content.innerHTML =
-      '<div style="padding:3rem;text-align:center;color:#5f5e5a;font-size:13px;font-family:system-ui;">'
-      + '<div style="display:inline-block;width:14px;height:14px;border:1.5px solid #444441;border-top-color:#85B7EB;border-radius:50%;animation:orders-spin 1s linear infinite;vertical-align:middle;margin-right:8px;"></div>'
-      + 'Loading shipping data…'
-      + '</div>'
-      + '<style>@keyframes orders-spin{to{transform:rotate(360deg);}}</style>';
+    if (logisticsLoadError) {
+      content.innerHTML =
+        '<div style="padding:3rem;text-align:center;color:#888780;font-size:13px;font-family:system-ui;">'
+        + 'Couldn’t load shipping data.'
+        + '<div style="margin-top:14px;"><button onclick="retryLogistics()" style="'+navBtnStyle(true)+'padding:6px 16px;">Retry</button></div>'
+        + '</div>';
+    } else {
+      content.innerHTML =
+        '<div style="padding:3rem;text-align:center;color:#5f5e5a;font-size:13px;font-family:system-ui;">'
+        + '<div style="display:inline-block;width:14px;height:14px;border:1.5px solid #444441;border-top-color:#85B7EB;border-radius:50%;animation:orders-spin 1s linear infinite;vertical-align:middle;margin-right:8px;"></div>'
+        + 'Loading shipping data…'
+        + '</div>'
+        + '<style>@keyframes orders-spin{to{transform:rotate(360deg);}}</style>';
+    }
     return;
   }
   if (logiView === 'summary') renderLogiSummary();
