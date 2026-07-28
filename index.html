@@ -467,7 +467,11 @@ var CSV_OPEN_ORDERS_CAPSULE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1v
 // item shipped. Parsed POSITIONALLY (parseLogistics): the sheet has a stray junk
 // row above the real header, the Date column is sparse and forward-fills from the
 // row(s) above, and it trails ~800 empty formula rows that still compute $0.00.
-var CSV_LOGISTICS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTVATNm79Q3hhLA71_716dUe7cXXVn4AriWGzNRmV4PbdtiijHZ9VOdFP0bSmyG2NZ9jzgfwG4xt3lK/pub?gid=1689518211&single=true&output=csv';
+// Published from the same lightweight spreadsheet that IMPORTRANGEs the materials/
+// inventory/demand feeds (shared 2PACX token) — isolating it from the heavy source
+// doc drops the cold fetch from tens of seconds to ~0.5s. Layout is mirrored as-is,
+// so the positional parse is unchanged.
+var CSV_LOGISTICS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=238220375&single=true&output=csv';
 var materialsData = [];
 // Recall Tracking source. Same raw CSV_MATERIALS text parseMaterials() reads, but
 // parsed POSITIONALLY (by column index) so the four T#/QTY-Picked slots survive.
