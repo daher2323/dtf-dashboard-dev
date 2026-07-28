@@ -703,8 +703,7 @@ var logisticsLoadError = false;     // true after a fetch exhausts its retries w
 var logiGran = 'monthly';           // 'daily' | 'weekly' | 'monthly' — scopes tiles + log (NOT the trend chart)
 var logiAnchor = null;              // Date within the selected period; null = current period (mirrors Production nav)
 var logiSearch = '';                // case-insensitive filter (product / customer / lot / carrier / tracking / BOL)
-var logiTrendGran = 'week';         // 'week' | 'month' — trend chart granularity
-var logiTrendMetric = 'shipments';  // 'shipments' | 'lots' | 'boxes' | 'pallets' — trend chart metric
+var logiTrendMetric = 'shipments';  // 'shipments' | 'lots' | 'boxes' | 'pallets' — trend chart metric (granularity follows logiGran)
 var logiExpanded = {};              // shipmentKey -> true; expanded shipments in the log (persists across re-renders)
 var _logiShipmentsCache = null;     // last grouped shipments, reused by chart-toggle + log-expand without re-grouping
 
@@ -1733,8 +1732,10 @@ var DTF_HOLIDAYS = [];
 /* Weekday indices DTF ships on. 1 = Monday through 5 = Friday. */
 var DTF_SHIP_DAYS = [1, 2, 3, 4, 5];
 
-/* Weeks of history in the weekly trend chart, including the current partial. */
+/* Buckets of history shown in the trend chart, ending at the selected period.
+   Weeks for the weekly view, business days for the daily view. */
 var TREND_WEEKS = 13;
+var TREND_DAYS = 20;
 
 // Parse the logistics CSV into shipment records. Returns null on empty/parse
 // failure so callers can keep the previous good fetch. Two quirks handled here:
@@ -2672,7 +2673,6 @@ function retryLogistics() {
 }
 // Trend toggles mutate the existing chart in place and restyle the toggle bar —
 // a full render would tear the chart down. The trend is period-independent.
-function setLogiTrendGran(g) { logiTrendGran = g; _updateLogiTrend(); }
 function setLogiTrendMetric(m) { logiTrendMetric = m; _updateLogiTrend(); }
 // Expand/collapse one shipment; re-render only the log host so chart + tiles stay.
 function toggleLogiShipment(key) {
@@ -3002,34 +3002,40 @@ function _logiAggRange(shipments, start, end) {
   for (i = 0; i < shipments.length; i++) { var s = shipments[i]; if (s.date && s.date >= start && s.date <= end) { n++; lots += s.lots.length; boxes += s.boxes; pallets += s.pallets; } }
   return { shipments: n, lots: lots, boxes: boxes, pallets: pallets };
 }
-// 3.3 — trend series. NOT filtered by the period selector.
-function computeTrendSeries(shipments, granularity) {
-  var today = new Date();
-  var labels = [], sh = [], lt = [], bo = [], pa = [], partialIndex = -1, i;
-  if (granularity === 'week') {
-    var curMon = _logiMondayOf(today);
+// 3.3 — trend series at the ACTIVE granularity (logiGran), showing the history
+// leading up to and including the selected period, which is the last (highlighted)
+// bucket. Granularity follows the top toggle so the whole view speaks one time unit.
+function computeTrendSeries(shipments, gran, anchor, today) {
+  var t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  var a = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+  if (a > t0) a = new Date(t0);
+  var labels = [], sh = [], lt = [], bo = [], pa = [], i;
+  function push(s, e, label) { var g = _logiAggRange(shipments, s, e); labels.push(label); sh.push(g.shipments); lt.push(g.lots); bo.push(g.boxes); pa.push(g.pallets); }
+  if (gran === 'daily') {
+    var days = [], d = new Date(a), guard = 0;
+    while (days.length < TREND_DAYS && guard < 500) { if (isBusinessDay(d)) days.unshift(new Date(d)); d.setDate(d.getDate() - 1); guard++; }
+    for (i = 0; i < days.length; i++) {
+      var dd = days[i], de = new Date(dd); de.setHours(23, 59, 59, 999);
+      push(new Date(dd.getFullYear(), dd.getMonth(), dd.getDate()), de, _LOGI_MONTHS[dd.getMonth()] + ' ' + dd.getDate());
+    }
+  } else if (gran === 'weekly') {
+    var selMon = _logiMondayOf(a);
     for (i = TREND_WEEKS - 1; i >= 0; i--) {
-      var s0 = new Date(curMon); s0.setDate(curMon.getDate() - i * 7);
+      var s0 = new Date(selMon); s0.setDate(selMon.getDate() - i * 7);
       var e0 = new Date(s0); e0.setDate(s0.getDate() + 6); e0.setHours(23, 59, 59, 999);
-      var a = _logiAggRange(shipments, s0, e0);
-      labels.push(_LOGI_MONTHS[s0.getMonth()] + ' ' + s0.getDate());
-      sh.push(a.shipments); lt.push(a.lots); bo.push(a.boxes); pa.push(a.pallets);
-      if (s0.getTime() === curMon.getTime()) partialIndex = labels.length - 1;
+      push(new Date(s0), e0, _LOGI_MONTHS[s0.getMonth()] + ' ' + s0.getDate());
     }
   } else {
-    var yr = today.getFullYear(), present = {};
-    for (i = 0; i < shipments.length; i++) { var d = shipments[i].date; if (d && d.getFullYear() === yr) present[d.getMonth()] = 1; }
-    present[today.getMonth()] = 1;
-    var mos = []; for (var k in present) if (present.hasOwnProperty(k)) mos.push(Number(k));
-    mos.sort(function(x, y){ return x - y; });
-    for (i = 0; i < mos.length; i++) {
-      var mm = mos[i], s1 = new Date(yr, mm, 1), e1 = new Date(yr, mm + 1, 0); e1.setHours(23, 59, 59, 999);
-      var a1 = _logiAggRange(shipments, s1, e1);
-      labels.push(_LOGI_MONTHS[mm]); sh.push(a1.shipments); lt.push(a1.lots); bo.push(a1.boxes); pa.push(a1.pallets);
-      if (mm === today.getMonth()) partialIndex = labels.length - 1;
+    var earliest = _logiEarliest(), cy = earliest.getFullYear(), cm = earliest.getMonth();
+    var selY = a.getFullYear(), selM = a.getMonth(), list = [];
+    while ((cy < selY || (cy === selY && cm <= selM)) && list.length < 25) { list.push({ y: cy, m: cm }); cm++; if (cm > 11) { cm = 0; cy++; } }
+    if (list.length > 12) list = list.slice(list.length - 12);
+    for (i = 0; i < list.length; i++) {
+      var s1 = new Date(list[i].y, list[i].m, 1), e1 = new Date(list[i].y, list[i].m + 1, 0); e1.setHours(23, 59, 59, 999);
+      push(s1, e1, _LOGI_MONTHS[list[i].m]);
     }
   }
-  return { labels: labels, shipments: sh, lots: lt, boxes: bo, pallets: pa, partialIndex: partialIndex };
+  return { labels: labels, shipments: sh, lots: lt, boxes: bo, pallets: pa, selectedIndex: labels.length - 1 };
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────────
@@ -3057,7 +3063,7 @@ function renderLogistics() {
   var cur = computeThroughput(ships, bounds);
   var prev = computeThroughput(ships, prior);
   var pace = computePace(cur, logiGran, anchor, today);
-  var trend = computeTrendSeries(ships, logiTrendGran);
+  var trend = computeTrendSeries(ships, logiGran, anchor, today);
   content.innerHTML = _logiNavHTML(bounds)
     + _logiTilesHTML(cur, prev, prior, pace, logiGran, bounds.isCurrent)
     + _logiTrendHTML(trend)
@@ -3176,32 +3182,30 @@ function openLogiPicker() {
 function pickLogiDay(ymd) { var p = ymd.split('-'); logiAnchor = new Date(+p[0], +p[1] - 1, +p[2]); closeLogiPicker(); render(); }
 function pickLogiMonth(yr, m) { logiAnchor = new Date(yr, m, 1); closeLogiPicker(); render(); }
 
+// Only the metric toggle remains — granularity follows the top Daily/Weekly/
+// Monthly selector so the whole view speaks one time unit.
 function _logiTrendTogglesHTML() {
   function grp(items) { var h = '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'; for (var i = 0; i < items.length; i++) h += items[i]; return h + '</div>'; }
-  var gran = grp([
-    '<button onclick="setLogiTrendGran(\'week\')" style="' + navBtnStyle(logiTrendGran === 'week') + '">Weekly</button>',
-    '<button onclick="setLogiTrendGran(\'month\')" style="' + navBtnStyle(logiTrendGran === 'month') + '">Monthly</button>'
-  ]);
-  var met = grp([
+  return grp([
     '<button onclick="setLogiTrendMetric(\'shipments\')" style="' + navBtnStyle(logiTrendMetric === 'shipments') + '">Shipments</button>',
     '<button onclick="setLogiTrendMetric(\'lots\')" style="' + navBtnStyle(logiTrendMetric === 'lots') + '">Lots</button>',
     '<button onclick="setLogiTrendMetric(\'boxes\')" style="' + navBtnStyle(logiTrendMetric === 'boxes') + '">Boxes</button>',
     '<button onclick="setLogiTrendMetric(\'pallets\')" style="' + navBtnStyle(logiTrendMetric === 'pallets') + '">Pallets</button>'
   ]);
-  return '<div style="display:flex;gap:10px;flex-wrap:wrap;">' + gran + met + '</div>';
 }
-function _logiChartAria(trend) { return 'Throughput by ' + (logiTrendGran === 'week' ? 'week' : 'month') + ', metric ' + logiTrendMetric + '. ' + trend.labels.length + ' buckets, most recent in progress.'; }
+function _logiGranNoun() { return logiGran === 'daily' ? 'day' : logiGran === 'weekly' ? 'week' : 'month'; }
+function _logiChartAria(trend) { return 'Throughput by ' + _logiGranNoun() + ', metric ' + logiTrendMetric + '. ' + trend.labels.length + ' buckets ending at the selected period.'; }
 function _logiTrendHTML(trend) {
   return '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;margin-bottom:18px;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">'
-    +   '<div style="font-size:12px;font-weight:600;color:#e8e6e0;">Throughput trend</div>'
+    +   '<div style="font-size:12px;font-weight:600;color:#e8e6e0;">Throughput trend <span style="font-weight:400;color:#5f5e5a;">· by ' + _logiGranNoun() + '</span></div>'
     +   '<span id="logi-trend-toggle-wrap">' + _logiTrendTogglesHTML() + '</span>'
     + '</div>'
     + '<div style="height:260px;position:relative;"><canvas id="logiTrendChart" role="img" aria-label="' + esc(_logiChartAria(trend)) + '"></canvas></div>'
     + '<div style="font-size:11px;color:#5f5e5a;margin-top:10px;font-family:system-ui;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
     +   '<span style="display:inline-flex;align-items:center;gap:5px;"><span style="display:inline-block;width:16px;border-top:2px dashed #EF9F27;"></span>Average <span id="logi-trend-avg" style="color:#888780;"></span></span>'
     +   '<span style="color:#3a3a38;">·</span>'
-    +   '<span>Lighter bar is the current, in-progress period; the chart is independent of the period selector.</span>'
+    +   '<span>Highlighted bar is the selected ' + _logiGranNoun() + ' shown above.</span>'
     + '</div>'
     + '</div>';
 }
@@ -3217,7 +3221,7 @@ function _drawLogiTrendChart(trend) {
   var cv = document.getElementById('logiTrendChart');
   if (!cv || typeof Chart === 'undefined') return;
   var data = trend[logiTrendMetric], colors = [], i;
-  for (i = 0; i < data.length; i++) colors.push(i === trend.partialIndex ? '#1f4a7d' : '#3987e5');
+  for (i = 0; i < data.length; i++) colors.push(i === trend.selectedIndex ? '#85B7EB' : '#3987e5');
   var avg = _logiTrendAvg(data), avgData = [];
   for (i = 0; i < data.length; i++) avgData.push(avg);
   charts.logiTrend = new Chart(cv, {
@@ -3238,13 +3242,13 @@ function _drawLogiTrendChart(trend) {
   var avgEl = document.getElementById('logi-trend-avg'); if (avgEl) avgEl.textContent = avg.toLocaleString();
 }
 function _updateLogiTrend() {
-  var trend = computeTrendSeries(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), logiTrendGran);
+  var trend = computeTrendSeries(_logiShipmentsCache || groupLotsToShipments(logisticsData || []), logiGran, _logiAnchorDate(), new Date());
   var wrap = document.getElementById('logi-trend-toggle-wrap');
   if (wrap) wrap.innerHTML = _logiTrendTogglesHTML();
   var ch = charts.logiTrend;
   if (!ch) return;
   var data = trend[logiTrendMetric], colors = [], i;
-  for (i = 0; i < data.length; i++) colors.push(i === trend.partialIndex ? '#1f4a7d' : '#3987e5');
+  for (i = 0; i < data.length; i++) colors.push(i === trend.selectedIndex ? '#85B7EB' : '#3987e5');
   var avg = _logiTrendAvg(data), avgData = [];
   for (i = 0; i < data.length; i++) avgData.push(avg);
   ch.data.labels = trend.labels;
