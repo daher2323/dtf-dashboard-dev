@@ -2960,10 +2960,10 @@ function _logiFetchActive() { if (logiDir === 'inbound') fetchInboundIfNeeded(fa
 function _logiLabels() {
   if (logiDir === 'inbound') {
     return { unit:'Deliveries', unitOne:'delivery', unitMany:'deliveries', line:'POs received', lineShort:'POs', per:'POs per delivery',
-      entity:'Vendor', pickup:false, search:'Search PO, vendor, carrier, tracking…', pickupWord:'self-pickup' };
+      entity:'Vendor', pickup:false, search:'Search PO, vendor, carrier, tracking…', pickupWord:'self-pickup', lineIdPrefix:'PO' };
   }
   return { unit:'Shipments', unitOne:'shipment', unitMany:'shipments', line:'Lots shipped', lineShort:'Lots', per:'lots per shipment',
-    entity:'Customer', pickup:true, search:'Search product, lot, carrier, tracking…', pickupWord:'customer pickup' };
+    entity:'Customer', pickup:true, search:'Search product, lot, carrier, tracking…', pickupWord:'customer pickup', lineIdPrefix:'Lot' };
 }
 
 // 2.1 — business day: weekday in DTF_SHIP_DAYS and not a holiday.
@@ -3406,13 +3406,27 @@ function _logiCarrierBit(s) {
   if (!s.carrier) return '<span style="color:#5f5e5a;">no carrier recorded</span>';
   return esc(s.carrier);
 }
+// Copy a value (tracking/BOL/PO) to the clipboard with brief button feedback.
+function _logiCopy(text, btn) {
+  try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch(e) {}
+  if (btn) { var o = btn.innerHTML; btn.innerHTML = '<span style="color:#1D9E75;font-size:11px;">&#10003;</span>'; setTimeout(function(){ try { btn.innerHTML = o; } catch(e){} }, 1000); }
+}
+// A reference (tracking/BOL) rendered as selectable text + a click-to-copy button.
+// stopPropagation so selecting/copying doesn't toggle the row's expand.
+function _logiRefCell(text) {
+  return '<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#a8c7e8;font-variant-numeric:tabular-nums;">' + esc(text) + '</span>'
+    + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(text) + ',this)" title="Copy tracking / BOL" style="margin-left:4px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
+}
 function _logiLogHTML(shipments, bounds) {
   var L = _logiLabels();
   var q = (logiSearch || '').toLowerCase().trim();
   var inRange = [], i;
   for (i = 0; i < shipments.length; i++) {
     var s = shipments[i];
-    if (!s.date || s.date < bounds.start || s.date > bounds.end) continue;
+    if (!s.date) continue;
+    // A search spans ALL dates (locate a PO/tracking regardless of the selected
+    // period); with no search, respect the period bounds.
+    if (!q && (s.date < bounds.start || s.date > bounds.end)) continue;
     if (q) {
       var hay = (s.customer + ' ' + s.carrier + ' ' + s.reference + ' ' + s.eta).toLowerCase();
       for (var j = 0; j < s.lots.length; j++) hay += ' ' + (s.lots[j].product + ' ' + s.lots[j].lotNo).toLowerCase();
@@ -3457,10 +3471,19 @@ function _logiLogHTML(shipments, bounds) {
       var open = !!logiExpanded[s2.key];
       var bx = boxesForShipment(s2);
       var boxCell = bx.recorded ? _logiInt(bx.boxes) : '<span style="color:#5f5e5a;">—</span>';
-      var meta = _logiCarrierBit(s2);
-      if (s2.reference) meta += ' <span style="color:#5f5e5a;">·</span> ' + esc(s2.reference);
-      if (s2.eta) meta += ' <span style="color:#5f5e5a;">·</span> ETA ' + esc(s2.eta);
-      if (!bx.recorded) meta += ' <span style="color:#5f5e5a;">·</span> <span style="color:#C9A227;">boxes not recorded</span>';
+      // Subline: PO#/Lot# (always visible, selectable) · carrier · tracking (copyable) · ETA
+      var sep = ' <span style="color:#3a3a38;">·</span> ', parts = [];
+      var ids = [], li;
+      for (li = 0; li < s2.lots.length; li++) if (s2.lots[li].lotNo) ids.push(s2.lots[li].lotNo);
+      if (ids.length) {
+        var shownIds = ids.slice(0, 3).join(', ') + (ids.length > 3 ? ' +' + (ids.length - 3) : '');
+        parts.push('<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#cfcdc7;">' + esc(L.lineIdPrefix) + ' ' + esc(shownIds) + '</span>');
+      }
+      parts.push(_logiCarrierBit(s2));
+      if (s2.reference) parts.push(_logiRefCell(s2.reference));
+      if (s2.eta) parts.push('ETA ' + esc(s2.eta));
+      if (!bx.recorded) parts.push('<span style="color:#C9A227;">boxes not recorded</span>');
+      var meta = parts.join(sep);
       html += '<div onclick="toggleLogiShipment(' + jsStr(s2.key) + ')" style="padding:8px 16px;border-bottom:0.5px solid #1a1d20;cursor:pointer;" onmouseover="this.style.background=\'#191c1f\'" onmouseout="this.style.background=\'transparent\'">'
         + '<div style="display:grid;' + GC + 'gap:10px;align-items:center;">'
         +   '<span style="color:#888780;display:inline-block;' + (open ? 'transform:rotate(90deg);' : '') + '">▸</span>'
@@ -3490,9 +3513,12 @@ function _logiLogHTML(shipments, bounds) {
   }
   if (truncated) {
     var remaining = inRange.length - shown;
-    html += '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">' + remaining + ' more ' + (remaining === 1 ? L.unitOne : L.unitMany) + ' — narrow the period or search to see them all.</div>';
+    html += '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">' + remaining + ' more ' + (remaining === 1 ? L.unitOne : L.unitMany) + ' — narrow the search to see them all.</div>';
   }
-  return html;
+  // When searching, results span all dates (not just the selected period) so you
+  // can locate a shipment by PO/tracking from anywhere.
+  var note = q ? '<div style="font-size:11px;color:#5f5e5a;margin-bottom:10px;font-family:system-ui;">Searching all dates for &ldquo;' + esc(logiSearch) + '&rdquo; &middot; ' + inRange.length + ' ' + (inRange.length === 1 ? L.unitOne : L.unitMany) + '.</div>' : '';
+  return note + html;
 }
 
 function filterProcurement() {
