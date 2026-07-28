@@ -2769,10 +2769,6 @@ function renderQuality() {
 
 // ══ Logistics (shipping tracker) ═══════════════════════════════════════════
 
-// Money → "$1,235" (whole dollars). Logistics costs are freight/box/pallet sums
-// where cents add noise, so we round for display.
-function _logiMoney(v) { return '$' + Math.round(v || 0).toLocaleString(); }
-
 // STATUS badge. STATUS is ~71% blank in the source, so a blank renders as nothing.
 function _logiStatusBadge(status) {
   var s = (status || '').trim();
@@ -2847,15 +2843,17 @@ function renderLogiShipments() {
 // re-render just this block (keeping the sub-bar input focused).
 function renderLogiBody(recs) {
   var periodLabel = logiPeriod === 'all' ? 'all time' : logiPeriod === 'ytd' ? 'year to date' : 'last ' + logiPeriod + ' days';
-  var shipments = recs.length, freight = 0, total = 0, boxes = 0, pallets = 0;
-  recs.forEach(function(r){ freight += r.freight; total += r.total; boxes += r.boxes; pallets += r.pallets; });
+  var boxes = 0, pallets = 0, shipSet = {};
+  recs.forEach(function(r){
+    boxes += r.boxes; pallets += r.pallets;
+    shipSet[(r.date ? r.date.getTime() : 0) + '|' + (r.customer || '—')] = 1;
+  });
+  var shipments = Object.keys(shipSet).length;  // a shipment = one customer's dispatch on a given day
 
   var kpis = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">'
-    + _ordersCard('Shipments',    shipments.toLocaleString(),   periodLabel)
-    + _ordersCard('Freight paid', _logiMoney(freight),          periodLabel, '#85B7EB')
-    + _ordersCard('Total logistics cost', _logiMoney(total),    'freight + box + pallet + labor')
-    + _ordersCard('Boxes',        Math.round(boxes).toLocaleString(),   periodLabel)
-    + _ordersCard('Pallets',      Math.round(pallets).toLocaleString(), periodLabel)
+    + _ordersCard('Shipments', shipments.toLocaleString(), periodLabel)
+    + _ordersCard('Boxes',     Math.round(boxes).toLocaleString(),   periodLabel)
+    + _ordersCard('Pallets',   Math.round(pallets).toLocaleString(), periodLabel)
     + '</div>';
 
   if (!shipments) {
@@ -2888,46 +2886,55 @@ function renderLogiBody(recs) {
     + '<th style="'+thL+'">Tracking / BOL</th>'
     + '<th style="'+thL+'">ETA</th>'
     + '<th style="'+thL+'">Status</th>'
-    + '<th style="'+thR+'">Freight</th>'
-    + '<th style="'+thR+'">Total cost</th>'
     + '</tr></thead>';
 
   var tdBase = 'padding:7px 10px;border-bottom:0.5px solid #1a1d20;vertical-align:top;';
   var tdL = 'text-align:left;' + tdBase, tdR = 'text-align:right;' + tdBase + 'font-variant-numeric:tabular-nums;color:#cfcdc7;';
+  var COLSPAN = 9;
   var body = '';
   groups.forEach(function(gp){
-    var dayTotal = 0; gp.rows.forEach(function(r){ dayTotal += r.total; });
     var dLabel = gp.date
       ? gp.date.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })
       : 'Undated';
-    body += '<tr><td colspan="11" style="padding:9px 10px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
-      + '<span style="font-size:12px;font-weight:600;color:#e8e6e0;">'+esc(dLabel)+'</span>'
-      + '<span style="font-size:11px;color:#5f5e5a;margin-left:10px;">'+gp.rows.length+' shipment'+(gp.rows.length===1?'':'s')+' &middot; '+_logiMoney(dayTotal)+'</span>'
-      + '</td></tr>';
+    // Sub-group the day's rows by customer, preserving first-appearance order.
+    var custs = [], cmap = {};
     gp.rows.forEach(function(r){
-      var dash = r.product.indexOf('-');
-      var prodRest = dash !== -1 ? r.product.slice(dash+1).trim() : '';
-      var prodCell = '<div style="font-weight:500;color:#e8e6e0;">'+esc(r.customer || r.product)+'</div>'
-        + (prodRest ? '<div style="font-size:11px;color:#888780;">'+esc(prodRest)+'</div>' : '');
-      var track = r.tracking || r.bol;
-      body += '<tr>'
-        + '<td style="'+tdL+'min-width:180px;">'+prodCell+'</td>'
-        + '<td style="'+tdL+'color:#888780;">'+(r.lot ? esc(r.lot) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdL+'color:#888780;">'+(r.goingTo ? esc(r.goingTo) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdR+'">'+(r.boxes ? Math.round(r.boxes).toLocaleString() : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdR+'">'+(r.pallets ? Math.round(r.pallets).toLocaleString() : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdL+'color:#cfcdc7;">'+(r.carrier ? esc(r.carrier) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdL+'color:#888780;font-variant-numeric:tabular-nums;">'+(track ? esc(track) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdL+'color:#888780;">'+(r.eta ? esc(r.eta) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdL+'">'+_logiStatusBadge(r.status)+'</td>'
-        + '<td style="'+tdR+'">'+(r.freight ? _logiMoney(r.freight) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
-        + '<td style="'+tdR+'font-weight:500;color:#e8e6e0;">'+_logiMoney(r.total)+'</td>'
-        + '</tr>';
+      var name = r.customer || '—';
+      if (!cmap[name]) { cmap[name] = { name: name, rows: [], boxes: 0, pallets: 0 }; custs.push(cmap[name]); }
+      cmap[name].rows.push(r); cmap[name].boxes += r.boxes; cmap[name].pallets += r.pallets;
+    });
+    body += '<tr><td colspan="'+COLSPAN+'" style="padding:9px 10px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
+      + '<span style="font-size:12px;font-weight:600;color:#e8e6e0;">'+esc(dLabel)+'</span>'
+      + '<span style="font-size:11px;color:#5f5e5a;margin-left:10px;">'+custs.length+' shipment'+(custs.length===1?'':'s')+' &middot; '+gp.rows.length+' product'+(gp.rows.length===1?'':'s')+'</span>'
+      + '</td></tr>';
+    custs.forEach(function(cu){
+      // Customer sub-header: brand shown once, with its day's box/pallet totals.
+      body += '<tr><td colspan="'+COLSPAN+'" style="padding:7px 10px;background:#191c1f;border-bottom:0.5px solid #23262a;">'
+        + '<span style="font-size:12px;font-weight:600;color:#e8e6e0;">'+esc(cu.name)+'</span>'
+        + '<span style="font-size:11px;color:#5f5e5a;margin-left:10px;font-variant-numeric:tabular-nums;">'+Math.round(cu.boxes).toLocaleString()+' boxes &middot; '+Math.round(cu.pallets).toLocaleString()+' pallet'+(cu.pallets===1?'':'s')+'</span>'
+        + '</td></tr>';
+      cu.rows.forEach(function(r){
+        var dash = r.product.indexOf('-');
+        var prodName = dash !== -1 ? r.product.slice(dash+1).trim() : r.product;
+        if (!prodName) prodName = r.product;
+        var track = r.tracking || r.bol;
+        body += '<tr>'
+          + '<td style="'+tdL+'min-width:180px;padding-left:24px;color:#e8e6e0;">'+esc(prodName)+'</td>'
+          + '<td style="'+tdL+'color:#888780;">'+(r.lot ? esc(r.lot) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+          + '<td style="'+tdL+'color:#888780;">'+(r.goingTo ? esc(r.goingTo) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+          + '<td style="'+tdR+'">'+(r.boxes ? Math.round(r.boxes).toLocaleString() : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+          + '<td style="'+tdR+'">'+(r.pallets ? Math.round(r.pallets).toLocaleString() : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+          + '<td style="'+tdL+'color:#cfcdc7;">'+(r.carrier ? esc(r.carrier) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+          + '<td style="'+tdL+'color:#888780;font-variant-numeric:tabular-nums;">'+(track ? esc(track) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+          + '<td style="'+tdL+'color:#888780;">'+(r.eta ? esc(r.eta) : '<span style="color:#5f5e5a;">—</span>')+'</td>'
+          + '<td style="'+tdL+'">'+_logiStatusBadge(r.status)+'</td>'
+          + '</tr>';
+      });
     });
   });
 
   var capNote = capped
-    ? '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">Showing the '+LOGI_ROW_CAP.toLocaleString()+' most recent of '+recs.length.toLocaleString()+' shipments in this period. Narrow the period or search to see the rest.</div>'
+    ? '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">Showing the '+LOGI_ROW_CAP.toLocaleString()+' most recent line items in this period. Narrow the period or search to see the rest.</div>'
     : '';
 
   return kpis
@@ -2942,23 +2949,16 @@ function renderLogiBody(recs) {
 // ── Summary: YTD KPIs + monthly cost chart + cost-by-carrier ───────────────
 function computeLogiSummary() {
   var recs = (logisticsData || []).filter(function(r){ return r.date && r.date.getFullYear() === CURRENT_YEAR; });
-  var t = { count:0, freight:0, total:0, boxes:0, pallets:0, units:0, pickup:0 };
-  var months = {}; // 0-11 -> {freight, box, pallet, labor, total, count}
-  var carriers = {};
+  var boxes = 0, pallets = 0, units = 0, ships = {};
   recs.forEach(function(r){
-    t.count++; t.freight += r.freight; t.total += r.total; t.boxes += r.boxes;
-    t.pallets += r.pallets; t.units += r.units;
-    if ((r.broker || '').toLowerCase().indexOf('pick') !== -1) t.pickup++;
-    var m = r.date.getMonth();
-    if (!months[m]) months[m] = { freight:0, box:0, pallet:0, labor:0, total:0, count:0 };
-    months[m].freight += r.freight; months[m].box += r.boxCost; months[m].pallet += r.palletCost;
-    months[m].labor += r.laborCost; months[m].total += r.total; months[m].count++;
-    var cname = r.carrier || 'Unspecified / pickup';
-    carriers[cname] = (carriers[cname] || 0) + r.total;
+    boxes += r.boxes; pallets += r.pallets; units += r.units;
+    var k = r.date.getTime() + '|' + (r.customer || '—');   // shipment = customer + day
+    if (!ships[k]) ships[k] = { pickup: false };
+    if ((r.broker || '').toLowerCase().indexOf('pick') !== -1) ships[k].pickup = true;
   });
-  var carrierList = Object.keys(carriers).map(function(k){ return { name:k, cost:carriers[k] }; })
-    .sort(function(a,b){ return b.cost - a.cost; });
-  return { totals:t, months:months, carriers:carrierList, recCount:recs.length };
+  var keys = Object.keys(ships), pickup = 0, i;
+  for (i = 0; i < keys.length; i++) if (ships[keys[i]].pickup) pickup++;
+  return { totals: { count: keys.length, boxes: boxes, pallets: pallets, units: units, pickup: pickup }, recCount: recs.length };
 }
 
 function renderLogiSummary() {
@@ -2973,69 +2973,13 @@ function renderLogiSummary() {
 
   var pickupPct = t.count ? Math.round(t.pickup / t.count * 100) : 0;
   var kpis = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px;">'
-    + _ordersCard('Shipments',            t.count.toLocaleString(),            CURRENT_YEAR + ' YTD')
-    + _ordersCard('Freight paid',         _logiMoney(t.freight),               CURRENT_YEAR + ' YTD', '#85B7EB')
-    + _ordersCard('Total logistics cost', _logiMoney(t.total),                 'freight + box + pallet + labor')
-    + _ordersCard('Boxes',                Math.round(t.boxes).toLocaleString(),   CURRENT_YEAR + ' YTD')
-    + _ordersCard('Pallets',              Math.round(t.pallets).toLocaleString(), CURRENT_YEAR + ' YTD')
-    + _ordersCard('Customer pickup',      pickupPct + '%',                     'of shipments picked up')
+    + _ordersCard('Shipments',       t.count.toLocaleString(),               CURRENT_YEAR + ' YTD')
+    + _ordersCard('Boxes',           Math.round(t.boxes).toLocaleString(),   CURRENT_YEAR + ' YTD')
+    + _ordersCard('Pallets',         Math.round(t.pallets).toLocaleString(), CURRENT_YEAR + ' YTD')
+    + _ordersCard('Customer pickup', pickupPct + '%',                        'of shipments picked up')
     + '</div>';
 
-  // Monthly cost chart card
-  var chartCard = '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;margin-bottom:18px;">'
-    + '<div style="font-size:12px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">Monthly logistics cost</div>'
-    + '<div style="font-size:11px;color:#5f5e5a;margin-bottom:14px;">Freight, box, pallet and labor cost by month &middot; '+CURRENT_YEAR+'</div>'
-    + '<div style="height:260px;position:relative;"><canvas id="logiMonthlyChart"></canvas></div>'
-    + '</div>';
-
-  // Cost-by-carrier card (top 10 by total cost)
-  var top = sum.carriers.slice(0, 10);
-  var maxCost = top.length ? top[0].cost : 1;
-  var carrierRows = top.map(function(c){
-    var w = maxCost ? Math.max(2, Math.round(c.cost / maxCost * 100)) : 0;
-    return '<div style="display:grid;grid-template-columns:170px 1fr 90px;gap:12px;align-items:center;padding:6px 0;">'
-      + '<div style="font-size:12px;color:#cfcdc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="'+esc(c.name)+'">'+esc(c.name)+'</div>'
-      + '<div style="height:8px;background:#141618;border-radius:4px;overflow:hidden;"><div style="height:100%;width:'+w+'%;background:#378ADD;border-radius:4px;"></div></div>'
-      + '<div style="font-size:12px;color:#e8e6e0;text-align:right;font-variant-numeric:tabular-nums;">'+_logiMoney(c.cost)+'</div>'
-      + '</div>';
-  }).join('');
-  var carrierCard = '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:16px 18px;">'
-    + '<div style="font-size:12px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">Cost by carrier</div>'
-    + '<div style="font-size:11px;color:#5f5e5a;margin-bottom:12px;">Top '+top.length+' carriers by total logistics cost &middot; '+CURRENT_YEAR+'</div>'
-    + carrierRows
-    + '</div>';
-
-  content.innerHTML = kpis + chartCard + carrierCard;
-
-  // Build the monthly stacked bar chart.
-  var monthsPresent = [];
-  for (var m = 0; m <= 11; m++) { if (sum.months[m]) monthsPresent.push(m); }
-  var MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  var labels = monthsPresent.map(function(m){ return MONTH_ABBR[m]; });
-  function series(key){ return monthsPresent.map(function(m){ return Math.round(sum.months[m][key]); }); }
-  var canvas = document.getElementById('logiMonthlyChart');
-  if (canvas && typeof Chart !== 'undefined') {
-    charts.logiMonthly = new Chart(canvas, {
-      type: 'bar',
-      data: { labels: labels, datasets: [
-        { label:'Freight', data:series('freight'), backgroundColor:'#378ADD', stack:'cost', borderRadius:3 },
-        { label:'Box',     data:series('box'),     backgroundColor:'#85B7EB', stack:'cost', borderRadius:3 },
-        { label:'Pallet',  data:series('pallet'),  backgroundColor:'#EF9F27', stack:'cost', borderRadius:3 },
-        { label:'Labor',   data:series('labor'),   backgroundColor:'#1D9E75', stack:'cost', borderRadius:3 }
-      ]},
-      options: {
-        responsive:true, maintainAspectRatio:false,
-        plugins:{
-          legend:{ position:'bottom', labels:{ color:'#888780', font:{size:11}, boxWidth:12, boxHeight:12, padding:14 } },
-          tooltip:{ callbacks:{ label:function(ctx){ return ctx.dataset.label+': $'+Math.round(ctx.raw).toLocaleString(); } } }
-        },
-        scales:{
-          x:{ stacked:true, ticks:{ color:'#888780', font:{size:11} }, grid:{ display:false } },
-          y:{ stacked:true, ticks:{ color:'#888780', callback:function(v){ return '$'+(v/1000).toFixed(0)+'k'; } }, grid:{ color:'#2c2c2a' } }
-        }
-      }
-    });
-  }
+  content.innerHTML = kpis;
 }
 
 function filterProcurement() {
