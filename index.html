@@ -30,7 +30,6 @@
   .main-tab:not(.on) .main-tab-name { color: #5f5e5a; }
   .app-bar-right { display: flex; align-items: center; gap: 8px; padding-left: 16px; border-left: 0.5px solid #2c2c2a; margin-left: auto; flex-shrink: 0; }
   .sub-bar-outer { background: #0d1118; border-bottom: 0.5px solid #1a2030; position: sticky; top: 68px; z-index: 99; }
-  .cust-concentration-outer { background: #1e2124; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 68px; z-index: 99; display: none; }
   .cust-col-header-outer { background: #0d0f10; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 108px; z-index: 98; display: none; }
   .sub-divider { width: 0.5px; height: 20px; background: #2c2c2a; flex-shrink: 0; }
 
@@ -175,10 +174,9 @@
     .qtr-drilldown { flex-direction: column; gap: 12px; }
     .qtr-drilldown-sep { display: none; }
 
-    /* Sub-bar / column headers / concentration outer — relax sticky tops so
-       they don't pile on top of each other on a phone where the app-bar shrank. */
+    /* Sub-bar / column header — relax sticky tops so they don't pile on top of
+       each other on a phone where the app-bar shrank. */
     .sub-bar-outer { top: 56px; }
-    .cust-concentration-outer { top: 56px; }
     .cust-col-header-outer { top: 96px; }
   }
 
@@ -364,10 +362,6 @@
   </div>
 </div>
 
-<!-- Customer concentration bar (sticky, shown only on customer overview) -->
-<div class="cust-concentration-outer" id="cust-concentration-outer">
-  <div id="cust-concentration-inner" style="max-width:1400px;margin:0 auto;width:100%;padding:0 1.5rem;"></div>
-</div>
 <!-- Sub-bar -->
 <div class="sub-bar-outer" id="sub-bar-outer">
   <div id="sub-bar" style="max-width:1400px;margin:0 auto;width:100%;display:flex;align-items:center;gap:8px;padding:.5rem 1.5rem;"></div>
@@ -3031,18 +3025,6 @@ function renderImpl() {
       if (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'quality') { mainSection = 'production'; }
       if (topView === 'detail') { topView = 'summary'; }
       if (subView === 'performance') { subView = 'today'; }
-    }
-    // Customer tab inserts the concentration bar between main nav and sub-nav.
-    // When it's visible, the sub-nav needs to stick below it instead of at the
-    // default top:68. Every other section hides the bar and restores top:68.
-    var _concOuter = document.getElementById('cust-concentration-outer');
-    var _subOuter  = document.getElementById('sub-bar-outer');
-    if (mainSection === 'customers') {
-      if (_concOuter) _concOuter.style.display = 'block';
-      if (_subOuter)  { _subOuter.style.display = ''; _subOuter.style.top = '120px'; }  // 68 (app-bar) + 52 (conc bar)
-    } else {
-      if (_concOuter) _concOuter.style.display = 'none';
-      if (_subOuter)  { _subOuter.style.top = ''; _subOuter.style.display = ''; }
     }
     if (mainSection === 'customers') {
       renderCustomers();
@@ -6267,30 +6249,28 @@ function renderCustomerOverview(healthData) {
     +'</div>';
   }
 
-  // ── Concentration summary bar ────────────────────────────────────
-  // Rendered into the outer #cust-concentration-inner container (outside
-  // #content), which is sticky at top:68 — sits between the main nav and the
-  // sub-nav on the customer tab. See renderImpl for the visibility toggle.
-  var concentrationInner = document.getElementById('cust-concentration-inner');
-  if (concentrationInner) {
-    if (totalYtdAll > 0) {
-      concentrationInner.innerHTML = '<div class="concentration-strip" style="height:52px;display:flex;align-items:center;gap:20px;">'
+  // ── Concentration summary banner ─────────────────────────────────
+  // Rendered inline at the top of #content (scrolls with the page). Kept out
+  // of the sticky nav band so the Sales sub-nav stays fixed at top:68 no
+  // matter which half (Open Orders / Customers) is active.
+  var concentrationHTML = '';
+  if (totalYtdAll > 0) {
+    concentrationHTML = '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;padding:0 16px;margin-bottom:16px;">'
+      +'<div class="concentration-strip" style="height:52px;display:flex;align-items:center;gap:20px;">'
         +'<span style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Customer concentration &middot; '+nowYr+' YTD</span>'
         +_concStat('top 5',  top5CurPct,  top5PriorPct)
         +'<span style="width:1px;height:24px;background:#2c2c2a;"></span>'
         +_concStat('top 10', top10CurPct, top10PriorPct)
         +'<span style="margin-left:auto;font-size:10px;color:#5f5e5a;">Higher % = more concentrated in fewer customers</span>'
-      +'</div>';
-    } else {
-      concentrationInner.innerHTML = '';
-    }
+      +'</div>'
+    +'</div>';
   }
 
-  // ── Column header row (sticky, top:108 + 52 = 160) ────────────────
+  // ── Column header row (sticky directly under the sub-bar: 68 + 40 = 108) ─
   // Shared 8-column grid template: rank | customer | bars | units | lots | avg | %prod | sparkline.
   var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px';
   var _thStyle  = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;';
-  var columnHeaderHTML = '<div class="customer-row" style="position:sticky;top:160px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;margin-top:-16px;">'
+  var columnHeaderHTML = '<div class="customer-row" style="position:sticky;top:108px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;">'
     +'<div></div>'
     +'<div style="'+_thStyle+'">Customer</div>'
     +'<div style="'+_thStyle+'">'+prevYr+' &middot; '+nowYr+'</div>'
@@ -6629,11 +6609,11 @@ function renderCustomerOverview(healthData) {
 
   // No-match state when a search returns nothing.
   if (_searchTerm && visibleCustomers.length === 0) {
-    return columnHeaderHTML
+    return concentrationHTML + columnHeaderHTML
       + '<div class="cust-empty">No customers match &ldquo;' + esc(customerSearchQuery) + '&rdquo;</div>';
   }
 
-  return columnHeaderHTML + rows;
+  return concentrationHTML + columnHeaderHTML + rows;
 }
 
 function _triggerExpandedSynopses() {
