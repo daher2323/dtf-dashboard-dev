@@ -344,17 +344,13 @@
         <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#85B7EB" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="3" height="8" rx="1"/><rect x="6" y="6" width="3" height="6" rx="1"/><rect x="11" y="2" width="3" height="10" rx="1"/><line x1="1" y1="14" x2="15" y2="14"/></svg></div>
         <span class="main-tab-name">Production</span>
       </div>
-      <div class="main-tab" id="mtab-orders" onclick="setMainSection('orders')">
-        <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5"/><line x1="5.5" y1="8" x2="10.5" y2="8"/><line x1="5.5" y1="11" x2="9" y2="11"/></svg></div>
-        <span class="main-tab-name">Open Orders</span>
+      <div class="main-tab" id="mtab-sales" onclick="setMainSection('sales')">
+        <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 1.5H2.5a1 1 0 0 0-1 1v6l6.5 6.5 7-7L8.5 1.5z"/><circle cx="5" cy="5" r="1"/></svg></div>
+        <span class="main-tab-name">Sales</span>
       </div>
       <div class="main-tab" id="mtab-procurement" onclick="setMainSection('procurement')">
         <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><line x1="8" y1="8" x2="8" y2="15"/></svg></div>
         <span class="main-tab-name">Procurement</span>
-      </div>
-      <div class="main-tab" id="mtab-customers" onclick="setMainSection('customers')">
-        <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="5" r="2.2"/><path d="M1 14c0-2.2 2.2-3.8 5-3.8"/><path d="M15 14c0-2.2-1.8-3.8-4-3.8"/><path d="M6 10.2c2.5-.5 5 .5 5 3.8"/></svg></div>
-        <span class="main-tab-name">Customers</span>
       </div>
       <div class="main-tab" id="mtab-quality" onclick="setMainSection('quality')">
         <div class="main-tab-icon"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#444441" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l5.5 2v4c0 3.4-2.3 6-5.5 7-3.2-1-5.5-3.6-5.5-7v-4z"/><path d="M5.8 8l1.6 1.6L10.4 6.4"/></svg></div>
@@ -647,6 +643,7 @@ function renderAgingStatusBar(agingOrders) {
 
 var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets = {};
 var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders' | 'quality'
+                                // ('customers' and 'orders' are the two halves of the "Sales" top tab)
 var qualitySubTab = 'recall';   // Quality sub-tab; 'recall' is the only option today
 var topView = 'summary', subView = 'today';
 // Recall Tracking (transient view state). recallResult persists across re-renders
@@ -1153,14 +1150,12 @@ function closeRoleMenu() {
 
 function applyRole() {
   var isAdmin = userRole === 'admin';
-  // Customers and Procurement tabs
-  var ct = document.getElementById('mtab-customers');
+  // Sales (Open Orders + Customers), Procurement and Quality tabs are admin-only
+  var st = document.getElementById('mtab-sales');
   var pt = document.getElementById('mtab-procurement');
-  var ot = document.getElementById('mtab-orders');
   var rt = document.getElementById('mtab-quality');
-  if (ct) ct.style.display = isAdmin ? '' : 'none';
+  if (st) st.style.display = isAdmin ? '' : 'none';
   if (pt) pt.style.display = isAdmin ? '' : 'none';
-  if (ot) ot.style.display = isAdmin ? '' : 'none';
   if (rt) rt.style.display = isAdmin ? '' : 'none';
   // If viewer lands on a restricted section, redirect to production/today
   if (!isAdmin && (mainSection === 'customers' || mainSection === 'procurement' || mainSection === 'orders' || mainSection === 'quality')) {
@@ -2331,24 +2326,32 @@ function hideColTip() {
 
 function setMainSection(s) {
   closeMsPanel();
+  // 'sales' is a virtual umbrella tab over the internal 'orders' and 'customers'
+  // sections. Clicking it lands on Open Orders → Summary, unless you're already
+  // inside Sales — in which case keep whichever sub-view you were on.
+  if (s === 'sales') {
+    if (mainSection === 'orders' || mainSection === 'customers') { renderSubBar(); render(); return; }
+    s = 'orders';
+    ordersView = 'summary';
+  }
   mainSection = s;
   trackEvent('tab_view', { tab_name: s === 'orders' ? 'open_orders' : s });
   // Hide customer col header when not on customers
   var hdrOuter = document.getElementById('cust-col-header-outer');
   if(hdrOuter && s !== 'customers') hdrOuter.style.display = 'none';
-  ['production','customers','procurement','orders','quality'].forEach(function(k) {
+  // 'orders' and 'customers' both light up the single Sales tab.
+  ['production','sales','procurement','quality'].forEach(function(k) {
     var t = document.getElementById('mtab-' + k);
     if (!t) return;
-    var isOn = k === s;
+    var isOn = (k === 'sales') ? (s === 'orders' || s === 'customers') : (k === s);
     t.className = 'main-tab' + (isOn ? ' on' : '');
     var ico = t.querySelector('.main-tab-icon');
     if (ico) {
       var onColor = '#85B7EB';
       var svgs = {
         production:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="3" height="8" rx="1"/><rect x="6" y="6" width="3" height="6" rx="1"/><rect x="11" y="2" width="3" height="10" rx="1"/><line x1="1" y1="14" x2="15" y2="14"/></svg>',
-        customers:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="11" cy="5" r="2.2"/><path d="M1 14c0-2.2 2.2-3.8 5-3.8"/><path d="M15 14c0-2.2-1.8-3.8-4-3.8"/><path d="M6 10.2c2.5-.5 5 .5 5 3.8"/></svg>',
+        sales:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 1.5H2.5a1 1 0 0 0-1 1v6l6.5 6.5 7-7L8.5 1.5z"/><circle cx="5" cy="5" r="1"/></svg>',
         procurement:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><line x1="8" y1="8" x2="8" y2="15"/></svg>',
-        orders:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="10" height="12" rx="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5"/><line x1="5.5" y1="8" x2="10.5" y2="8"/><line x1="5.5" y1="11" x2="9" y2="11"/></svg>',
         quality:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="'+(isOn?onColor:'#444441')+'" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l5.5 2v4c0 3.4-2.3 6-5.5 7-3.2-1-5.5-3.6-5.5-7v-4z"/><path d="M5.8 8l1.6 1.6L10.4 6.4"/></svg>'
       };
       ico.innerHTML = svgs[k] || '';
@@ -2364,6 +2367,16 @@ function setMainSection(s) {
 function renderSubBar() {
   var sb = document.getElementById('sub-bar');
   if (!sb) return;
+
+  // Primary toggle shared by both halves of the Sales section (Open Orders /
+  // Customers). Switching flips the internal mainSection; each half then draws
+  // its own secondary controls after the divider.
+  var salesToggle =
+    '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+    + '<button onclick="setMainSection(\'orders\')" style="'+navBtnStyle(mainSection==='orders')+'">Open Orders</button>'
+    + '<button onclick="setMainSection(\'customers\')" style="'+navBtnStyle(mainSection==='customers')+'">Customers</button>'
+    + '</div>'
+    + '<div class="sub-divider"></div>';
 
   if (mainSection === 'production') {
     var isAdmin = userRole === 'admin';
@@ -2383,14 +2396,16 @@ function renderSubBar() {
   } else if (mainSection === 'customers') {
     if (selectedCustomer) {
       sb.innerHTML =
-        '<button onclick="selectCustomer(null)" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:12px;font-family:system-ui;" onmouseover="this.style.background=\'#1a1d20\'" onmouseout="this.style.background=\'transparent\'">'
+        salesToggle
+        + '<button onclick="selectCustomer(null)" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:12px;font-family:system-ui;" onmouseover="this.style.background=\'#1a1d20\'" onmouseout="this.style.background=\'transparent\'">'
         + '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="7,2 3,6 7,10" stroke="#888780" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
         + 'All customers</button>'
         + '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><polyline points="3,2 7,5 3,8" stroke="#444441" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
         + '<span style="font-size:12px;font-weight:500;color:#e8e6e0;">'+esc(selectedCustomer)+'</span>';
     } else {
       sb.innerHTML =
-        '<div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">'
+        salesToggle
+        + '<div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">'
         + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
         +   '<button onclick="setCustLimit(10)" style="'+navBtnStyle(custLimit===10)+'">Top 10</button>'
         +   '<button onclick="setCustLimit(25)" style="'+navBtnStyle(custLimit===25)+'">Top 25</button>'
@@ -2416,7 +2431,8 @@ function renderSubBar() {
       + '</div>';
   } else if (mainSection === 'orders') {
     sb.innerHTML =
-      '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      salesToggle
+      + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
       + '<button onclick="setOrdersView(\'summary\')"  style="'+navBtnStyle(ordersView==='summary')+'">Summary</button>'
       + '<button onclick="setOrdersView(\'labels\')"   style="'+navBtnStyle(ordersView==='labels')+'">Labels</button>'
       + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'

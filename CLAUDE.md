@@ -59,7 +59,7 @@ Load sequence (`loadDashboard` → `fetchData`):
 
 Client-side only. `CORRECT_PW` (viewer) and `ADMIN_PW` (admin) are SHA-256 hashes stored in the script. `checkPw` hashes the input via `crypto.subtle.digest` and compares. Session persists in `sessionStorage` (`dtf_auth`, `dtf_role`). This is obfuscation, not real security — the CSVs are public and the hashes are visible in source. Do not add features that assume this gates anything sensitive.
 
-`applyRole` hides the Customers and Procurement tabs for viewers and redirects them to Production if they land on a restricted section.
+`applyRole` hides the Sales, Procurement, and Quality tabs for viewers and redirects them to Production if they land on a restricted section.
 
 ## UI architecture
 
@@ -73,8 +73,12 @@ State is held in module-level `var`s at the top of `<script>` (`mainSection`, `t
 | Production → Weekly      | `renderWeekly`           |
 | Production → Trend       | `renderPerformance`      |
 | Production → Detail      | `renderDetail` + `updateOpsTable` |
-| Customers overview       | `renderCustomers` → `renderCustomerOverview` / `computeCustomerData` |
+| Sales → Open Orders      | `renderOrders` (`ordersView`: `summary` / `labels` / `planning`) |
+| Sales → Customers        | `renderCustomers` → `renderCustomerOverview` / `computeCustomerData` |
 | Procurement              | `renderProcurement` / `renderMaterials` |
+| Quality → Recall         | `renderQuality` (`qualitySubTab`) |
+
+**The "Sales" top tab is a virtual umbrella, not a stored value.** `mainSection` only ever holds `'orders'` or `'customers'` — the two halves of Sales — so all the logic keyed on those strings (dispatch, refresh timers, the customer concentration bar, viewer redirects) is unchanged. `setMainSection('sales')` resolves to `'orders'` (landing on Open Orders → Summary) unless you're already inside Sales, in which case it keeps the current half. The Sales tab lights up when `mainSection` is either value, and `renderSubBar` prepends a shared `[ Open Orders | Customers ]` toggle (`salesToggle`) to both halves' secondary controls — mirroring the Production sub-bar's toggle-plus-divider pattern.
 
 Renderers build HTML strings and assign to `#content.innerHTML`, then instantiate Chart.js charts into canvases they just wrote (tracked in the `charts` map so they can be destroyed on re-render). `renderSubBar` rebuilds the sticky secondary nav for the current `mainSection`.
 
