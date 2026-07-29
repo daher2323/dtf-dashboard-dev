@@ -1754,6 +1754,12 @@ var TREND_DAYS = 20;
    separately as "bulk servings". Add brands here as needed. */
 var BULK_SERVING_BRANDS = ['Twisted Dough'];
 
+/* Bulk-brand "units" are entered inconsistently: a small number is really a count
+   of bulk runs, a large number is servings. Below this threshold we label the
+   figure "bulk run(s)"; at/above it, "bulk serving(s)". (Data cleanup is planned;
+   this keeps the wording sane for existing rows.) */
+var BULK_RUN_THRESHOLD = 10;
+
 // Parse the logistics CSV into shipment records. Returns null on empty/parse
 // failure so callers can keep the previous good fetch. Two quirks handled here:
 //   1. Date forward-fill — only ~6% of rows carry a date; a blank Date inherits
@@ -3096,6 +3102,12 @@ function _logiIsBulkServing(customer) {
   for (var i = 0; i < BULK_SERVING_BRANDS.length; i++) if (c === BULK_SERVING_BRANDS[i].toLowerCase()) return true;
   return false;
 }
+// Bulk figure wording follows its magnitude (data-entry safety net): a small count
+// is "bulk run(s)", a large one is "bulk serving(s)". short=true drops the "bulk ".
+function _logiBulkNoun(n, short) {
+  var word = (n < BULK_RUN_THRESHOLD) ? 'run' : 'serving';
+  return (short ? '' : 'bulk ') + word + (n === 1 ? '' : 's');
+}
 function _logiBuildShipment(bucket) {
   var rows = bucket.rows, boxes = 0, pallets = 0, units = 0, stickUnits = 0, servingUnits = 0, boxesRecorded = false;
   var carrier = '', reference = '', eta = '', lots = [], firstStatus = '';
@@ -3245,7 +3257,7 @@ function _logiTilesHTML(cur, prev, prior) {
   // headline volume with a per-shipment note, plus a Units/business-day rate.
   var exNotes = [];
   if (cur.stickUnits > 0) exNotes.push(_logiInt(cur.stickUnits) + ' stick-pack');
-  if (cur.servingUnits > 0) exNotes.push(_logiInt(cur.servingUnits) + ' bulk servings');
+  if (cur.servingUnits > 0) exNotes.push(_logiInt(cur.servingUnits) + ' ' + _logiBulkNoun(cur.servingUnits));
   var unitsSub = exNotes.length
     ? '<span style="color:#C9A227;">' + exNotes.join(' · ') + '</span> excluded'
     : '<span style="color:#888780;">' + _logiInt(cur.unitsPerShipment) + ' units per shipment</span>';
@@ -3571,7 +3583,7 @@ function _logiLogHTML(shipments, bounds) {
     var unrecNote = (L.showBoxesNote && day.unrec) ? ' <span style="color:#5f5e5a;">(' + day.unrec + ' ' + (day.unrec === 1 ? L.unitOne : L.unitMany) + ', boxes not recorded)</span>' : '';
     var unitsSummary = showU ? (_logiInt(day.units) + ' units · '
       + (day.stick > 0 ? '<span style="color:#C9A227;">' + _logiInt(day.stick) + ' stick</span> · ' : '')
-      + (day.serving > 0 ? '<span style="color:#C9A227;">' + _logiInt(day.serving) + ' servings</span> · ' : '')) : '';
+      + (day.serving > 0 ? '<span style="color:#C9A227;">' + _logiInt(day.serving) + ' ' + _logiBulkNoun(day.serving, true) + '</span> · ' : '')) : '';
     html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;margin-bottom:12px;">'
       + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;padding:11px 16px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
       +   '<span style="font-size:15px;font-weight:500;color:#e8e6e0;">' + esc(hdrDate) + '</span>'
@@ -3593,7 +3605,7 @@ function _logiLogHTML(shipments, bounds) {
         parts.push('<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#cfcdc7;">' + esc(L.lineIdPrefix) + ' ' + esc(shownIds) + '</span>');
       }
       if (showU && s2.stickUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.stickUnits) + ' stick-pack units</span>');
-      if (showU && s2.servingUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.servingUnits) + ' bulk servings</span>');
+      if (showU && s2.servingUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.servingUnits) + ' ' + _logiBulkNoun(s2.servingUnits) + '</span>');
       if (L.showStatus && s2.status) parts.push(_logiStatusBadge(s2.status));
       parts.push(_logiCarrierBit(s2));
       if (s2.reference) parts.push(_logiRefCell(s2.reference));
@@ -3617,7 +3629,7 @@ function _logiLogHTML(shipments, bounds) {
           var dash = lt.product.indexOf('-');
           var prodName = (dash !== -1) ? lt.product.slice(dash + 1).trim() : lt.product;
           var lotTag = lt.stick ? ' <span style="font-size:9px;color:#C9A227;border:0.5px solid #6b5514;border-radius:4px;padding:0 4px;">STICK</span>'
-            : (lt.serving ? ' <span style="font-size:9px;color:#C9A227;border:0.5px solid #6b5514;border-radius:4px;padding:0 4px;">SERVINGS</span>' : '');
+            : (lt.serving ? ' <span style="font-size:9px;color:#C9A227;border:0.5px solid #6b5514;border-radius:4px;padding:0 4px;">' + (lt.units < BULK_RUN_THRESHOLD ? 'RUNS' : 'SERVINGS') + '</span>' : '');
           var lineLabel = (prodName ? '<span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + esc(lt.lotNo) + '</span> · ' + esc(prodName) : '<span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + esc(lt.lotNo) + '</span>') + lotTag;
           html += '<div style="display:grid;' + GCL + 'gap:10px;align-items:center;padding:5px 16px;border-bottom:0.5px solid #141618;background:#191c1f;">'
             + '<span></span>'
