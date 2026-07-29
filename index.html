@@ -2752,6 +2752,7 @@ function renderSubBar() {
 function setLogiDir(dir) {
   closeMsPanel(); closeLogiPicker();
   logiDir = dir;
+  if (dir === 'inbound' && logiTrendMetric === 'units') logiTrendMetric = 'shipments';  // no units toggle inbound
   logiSearch = '';              // search terms don't carry across outbound/inbound
   _logiShipmentsCache = null;   // force a regroup of the newly-active dataset
   _logiFetchActive();           // lazy-load the direction's feed on first switch
@@ -2962,11 +2963,11 @@ function _logiLabels() {
   if (logiDir === 'inbound') {
     return { unit:'Deliveries', unitOne:'delivery', unitMany:'deliveries', line:'POs received', lineShort:'POs', per:'POs per delivery',
       entity:'Vendor', pickup:false, search:'Search PO, vendor, carrier, tracking…', pickupWord:'self-pickup', lineIdPrefix:'PO',
-      showStatus:true, showBoxesNote:false };
+      showStatus:true, showBoxesNote:false, showUnits:false };
   }
   return { unit:'Shipments', unitOne:'shipment', unitMany:'shipments', line:'Lots shipped', lineShort:'Lots', per:'lots per shipment',
     entity:'Customer', pickup:true, search:'Search product, lot, carrier, tracking…', pickupWord:'customer pickup', lineIdPrefix:'Lot',
-    showStatus:false, showBoxesNote:true };
+    showStatus:false, showBoxesNote:true, showUnits:true };
 }
 
 // 2.1 — business day: weekday in DTF_SHIP_DAYS and not a holiday.
@@ -3087,13 +3088,13 @@ function groupLotsToShipments(recs) {
   return out;
 }
 function _logiBuildShipment(bucket) {
-  var rows = bucket.rows, boxes = 0, pallets = 0, boxesRecorded = false;
+  var rows = bucket.rows, boxes = 0, pallets = 0, units = 0, boxesRecorded = false;
   var carrier = '', reference = '', eta = '', lots = [], firstStatus = '';
   var anyPickup = false, firstParcel = false, firstFreight = false;
   var inTransit = false, pendingPickup = false, canceled = false, i;
   for (i = 0; i < rows.length; i++) {
     var r = rows[i];
-    boxes += (r.boxes || 0); pallets += (r.pallets || 0);
+    boxes += (r.boxes || 0); pallets += (r.pallets || 0); units += (r.units || 0);
     if (_boxRecorded(r)) boxesRecorded = true;
     if (!carrier && r.carrier) carrier = r.carrier;
     if (!reference && (r.tracking || r.bol)) reference = r.tracking || r.bol;
@@ -3103,7 +3104,7 @@ function _logiBuildShipment(bucket) {
     if (su.indexOf('transit') !== -1) inTransit = true;
     else if (su.indexOf('pending') !== -1 || su.indexOf('pickup') !== -1) pendingPickup = true;
     else if (su.indexOf('cancel') !== -1) canceled = true;
-    lots.push({ lotNo: lotKey(r), product: r.product, boxes: r.boxes || 0, pallets: r.pallets || 0 });
+    lots.push({ lotNo: lotKey(r), product: r.product, boxes: r.boxes || 0, pallets: r.pallets || 0, units: r.units || 0 });
     var cc = carrierClass(r.carrier, r.broker);
     if (cc === 'pickup') anyPickup = true;
     else if (cc === 'parcel') firstParcel = true;
@@ -3114,34 +3115,36 @@ function _logiBuildShipment(bucket) {
   // Pickup) if any member line has one; otherwise fall back to the first status.
   var status = inTransit ? 'In Transit' : pendingPickup ? 'Pending Pickup' : (firstStatus || (canceled ? 'Canceled' : ''));
   return { key: bucket.key, date: bucket.date, customer: bucket.customer, lots: lots,
-    boxes: boxes, pallets: pallets, boxesRecorded: boxesRecorded,
+    boxes: boxes, pallets: pallets, units: units, boxesRecorded: boxesRecorded,
     carrier: carrier, carrierClass: klass, reference: reference, eta: eta, status: status };
 }
 
 // 3.1 — throughput over shipments within bounds.
 function computeThroughput(shipments, bounds) {
-  var n = 0, lots = 0, boxes = 0, pallets = 0, pickup = 0, i, entSet = {};
+  var n = 0, lots = 0, boxes = 0, pallets = 0, units = 0, pickup = 0, i, entSet = {};
   for (i = 0; i < shipments.length; i++) {
     var s = shipments[i];
     if (!s.date || s.date < bounds.start || s.date > bounds.end) continue;
-    n++; lots += s.lots.length; boxes += s.boxes; pallets += s.pallets;
+    n++; lots += s.lots.length; boxes += s.boxes; pallets += s.pallets; units += (s.units || 0);
     if (s.carrierClass === 'pickup') pickup++;
     entSet[(s.customer || '').toUpperCase()] = true;
   }
   var entities = 0, ek; for (ek in entSet) if (entSet.hasOwnProperty(ek)) entities++;
   var bd = bounds.businessDays || 0;
-  return { shipments: n, lots: lots, boxes: boxes, pallets: pallets, entities: entities,
+  return { shipments: n, lots: lots, boxes: boxes, pallets: pallets, units: units, entities: entities,
     lotsPerShipment: n ? (lots / n) : 0,
+    unitsPerShipment: n ? (units / n) : 0,
     shipmentsPerDay: bd ? (n / bd) : 0,
     palletsPerDay: bd ? (pallets / bd) : 0,
     boxesPerDay: bd ? (boxes / bd) : 0,
+    unitsPerDay: bd ? (units / bd) : 0,
     pickupShipments: pickup,
     pickupPct: n ? (pickup / n * 100) : 0 };
 }
 function _logiAggRange(shipments, start, end) {
-  var n = 0, lots = 0, boxes = 0, pallets = 0, i;
-  for (i = 0; i < shipments.length; i++) { var s = shipments[i]; if (s.date && s.date >= start && s.date <= end) { n++; lots += s.lots.length; boxes += s.boxes; pallets += s.pallets; } }
-  return { shipments: n, lots: lots, boxes: boxes, pallets: pallets };
+  var n = 0, lots = 0, boxes = 0, pallets = 0, units = 0, i;
+  for (i = 0; i < shipments.length; i++) { var s = shipments[i]; if (s.date && s.date >= start && s.date <= end) { n++; lots += s.lots.length; boxes += s.boxes; pallets += s.pallets; units += (s.units || 0); } }
+  return { shipments: n, lots: lots, boxes: boxes, pallets: pallets, units: units };
 }
 // 3.3 — trend series at the ACTIVE granularity (logiGran), showing the history
 // leading up to and including the selected period, which is the last (highlighted)
@@ -3150,8 +3153,8 @@ function computeTrendSeries(shipments, gran, anchor, today) {
   var t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   var a = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
   if (a > t0) a = new Date(t0);
-  var labels = [], sh = [], lt = [], bo = [], pa = [], i;
-  function push(s, e, label) { var g = _logiAggRange(shipments, s, e); labels.push(label); sh.push(g.shipments); lt.push(g.lots); bo.push(g.boxes); pa.push(g.pallets); }
+  var labels = [], sh = [], lt = [], bo = [], pa = [], un = [], i;
+  function push(s, e, label) { var g = _logiAggRange(shipments, s, e); labels.push(label); sh.push(g.shipments); lt.push(g.lots); bo.push(g.boxes); pa.push(g.pallets); un.push(g.units); }
   if (gran === 'daily') {
     var days = [], d = new Date(a), guard = 0;
     while (days.length < TREND_DAYS && guard < 500) { if (isBusinessDay(d)) days.unshift(new Date(d)); d.setDate(d.getDate() - 1); guard++; }
@@ -3176,7 +3179,7 @@ function computeTrendSeries(shipments, gran, anchor, today) {
       push(s1, e1, _LOGI_MONTHS[list[i].m]);
     }
   }
-  return { labels: labels, shipments: sh, lots: lt, boxes: bo, pallets: pa, selectedIndex: labels.length - 1 };
+  return { labels: labels, shipments: sh, lots: lt, boxes: bo, pallets: pa, units: un, selectedIndex: labels.length - 1 };
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────────
@@ -3224,8 +3227,14 @@ function _logiTilesHTML(cur, prev, prior) {
   var L = _logiLabels();
   var priorHas = prev.shipments > 0;
   var GRID = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;';
+  // Units are outbound-only (inbound has no units column). When present, Units is a
+  // headline volume with a per-shipment note, plus a Units/business-day rate.
+  var unitsTile = L.showUnits
+    ? _ordersCard('Units', _logiInt(cur.units), '<span style="color:#888780;">' + _logiInt(cur.unitsPerShipment) + ' units per shipment</span>', '#85B7EB')
+    : '';
   var row1 = '<div style="' + GRID + 'margin-bottom:10px;">'
     + _ordersCard(L.unit, _logiInt(cur.shipments), _logiDelta(cur.shipments, prev.shipments, priorHas, prior.label))
+    + unitsTile
     + _ordersCard(L.line, _logiInt(cur.lots), '<span style="color:#888780;">' + cur.lotsPerShipment.toFixed(2) + ' ' + L.per + '</span>')
     + _ordersCard('Boxes', _logiInt(cur.boxes), _logiDelta(cur.boxes, prev.boxes, priorHas, prior.label))
     + _ordersCard('Pallets', _logiInt(cur.pallets), _logiDelta(cur.pallets, prev.pallets, priorHas, prior.label))
@@ -3233,8 +3242,12 @@ function _logiTilesHTML(cur, prev, prior) {
   var fourth = L.pickup
     ? _ordersCard('Customer pickup', Math.round(cur.pickupPct) + '%', '<span style="color:#5f5e5a;">' + cur.pickupShipments + ' of ' + cur.shipments + ' shipments</span>')
     : _ordersCard('Vendors', _logiInt(cur.entities), '<span style="color:#5f5e5a;">supplying this period</span>');
+  var unitsRate = L.showUnits
+    ? _ordersCard('Units / business day', _logiInt(cur.unitsPerDay), '<span style="color:#5f5e5a;">prior ' + _logiInt(prev.unitsPerDay) + '/day</span>')
+    : '';
   var row2 = '<div style="' + GRID + 'margin-bottom:18px;">'
     + _ordersCard(L.unit + ' / business day', cur.shipmentsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.shipmentsPerDay.toFixed(1) + '/day</span>')
+    + unitsRate
     + _ordersCard('Boxes / business day', _logiInt(cur.boxesPerDay), '<span style="color:#5f5e5a;">prior ' + _logiInt(prev.boxesPerDay) + '/day</span>')
     + _ordersCard('Pallets / business day', cur.palletsPerDay.toFixed(1), '<span style="color:#5f5e5a;">prior ' + prev.palletsPerDay.toFixed(1) + '/day</span>')
     + fourth
@@ -3336,12 +3349,12 @@ function pickLogiMonth(yr, m) { logiAnchor = new Date(yr, m, 1); closeLogiPicker
 function _logiTrendTogglesHTML() {
   var L = _logiLabels();
   function grp(items) { var h = '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'; for (var i = 0; i < items.length; i++) h += items[i]; return h + '</div>'; }
-  return grp([
-    '<button onclick="setLogiTrendMetric(\'shipments\')" style="' + navBtnStyle(logiTrendMetric === 'shipments') + '">' + esc(L.unit) + '</button>',
-    '<button onclick="setLogiTrendMetric(\'lots\')" style="' + navBtnStyle(logiTrendMetric === 'lots') + '">' + esc(L.lineShort) + '</button>',
-    '<button onclick="setLogiTrendMetric(\'boxes\')" style="' + navBtnStyle(logiTrendMetric === 'boxes') + '">Boxes</button>',
-    '<button onclick="setLogiTrendMetric(\'pallets\')" style="' + navBtnStyle(logiTrendMetric === 'pallets') + '">Pallets</button>'
-  ]);
+  var items = ['<button onclick="setLogiTrendMetric(\'shipments\')" style="' + navBtnStyle(logiTrendMetric === 'shipments') + '">' + esc(L.unit) + '</button>'];
+  if (L.showUnits) items.push('<button onclick="setLogiTrendMetric(\'units\')" style="' + navBtnStyle(logiTrendMetric === 'units') + '">Units</button>');
+  items.push('<button onclick="setLogiTrendMetric(\'lots\')" style="' + navBtnStyle(logiTrendMetric === 'lots') + '">' + esc(L.lineShort) + '</button>');
+  items.push('<button onclick="setLogiTrendMetric(\'boxes\')" style="' + navBtnStyle(logiTrendMetric === 'boxes') + '">Boxes</button>');
+  items.push('<button onclick="setLogiTrendMetric(\'pallets\')" style="' + navBtnStyle(logiTrendMetric === 'pallets') + '">Pallets</button>');
+  return grp(items);
 }
 function _logiGranNoun() { return logiGran === 'daily' ? 'day' : logiGran === 'weekly' ? 'week' : 'month'; }
 function _logiChartAria(trend) { return 'Throughput by ' + _logiGranNoun() + ', metric ' + logiTrendMetric + '. ' + trend.labels.length + ' buckets ending at the selected period.'; }
@@ -3359,7 +3372,10 @@ function _logiTrendHTML(trend) {
     + '</div>'
     + '</div>';
 }
-function _logiAxisTick(metric) { if (metric === 'boxes') return function(v){ return v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v; }; return function(v){ return v; }; }
+function _logiAxisTick(metric) {
+  if (metric === 'boxes' || metric === 'units') return function(v){ if (v >= 1000000) return (v / 1000000).toFixed(1).replace(/\.0$/, '') + 'M'; if (v >= 1000) return (v / 1000).toFixed(0) + 'k'; return v; };
+  return function(v){ return v; };
+}
 // Average of the non-zero buckets (empty buckets shouldn't drag the mean down),
 // rounded — matches the Weekly Output chart's 8-week-average convention.
 function _logiTrendAvg(data) {
@@ -3499,24 +3515,33 @@ function _logiLogHTML(shipments, bounds) {
   var days = [], dmap = {};
   for (i = 0; i < inRange.length; i++) {
     var sp = inRange[i], dk = _logiYMD(sp.date);
-    if (!dmap[dk]) { dmap[dk] = { date: sp.date, list: [], ships: 0, lots: 0, boxes: 0, pallets: 0, unrec: 0 }; days.push(dmap[dk]); }
+    if (!dmap[dk]) { dmap[dk] = { date: sp.date, list: [], ships: 0, lots: 0, boxes: 0, pallets: 0, units: 0, unrec: 0 }; days.push(dmap[dk]); }
     var g = dmap[dk];
-    g.list.push(sp); g.ships++; g.lots += sp.lots.length; g.pallets += sp.pallets;
+    g.list.push(sp); g.ships++; g.lots += sp.lots.length; g.pallets += sp.pallets; g.units += (sp.units || 0);
     if (sp.boxesRecorded) g.boxes += sp.boxes; else g.unrec++;
   }
-  var GC = 'grid-template-columns:18px 1fr 74px 74px;';
-  var GCL = 'grid-template-columns:28px 1fr 74px 74px;';
+  // Outbound adds a Units column; column headers keep the numeric triple unambiguous.
+  var showU = L.showUnits;
+  var GC = showU ? 'grid-template-columns:18px 1fr 66px 66px 66px;' : 'grid-template-columns:18px 1fr 74px 74px;';
+  var GCL = showU ? 'grid-template-columns:28px 1fr 66px 66px 66px;' : 'grid-template-columns:28px 1fr 74px 74px;';
+  var thN = 'font-size:9px;color:#5f5e5a;text-align:right;text-transform:uppercase;letter-spacing:.04em;';
+  var colHeader = '<div style="display:grid;' + GC + 'gap:10px;padding:6px 16px 4px;">'
+    + '<span></span><span style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">' + esc(L.entity) + '</span>'
+    + (showU ? '<span style="' + thN + '">Units</span>' : '')
+    + '<span style="' + thN + '">Boxes</span><span style="' + thN + '">Pallets</span></div>';
   var html = '', shown = 0, truncated = false, d, k;
   for (d = 0; d < days.length; d++) {
     if (shown >= LOGI_LOG_CAP) { truncated = true; break; }
     var day = days[d];
     var hdrDate = day.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     var unrecNote = (L.showBoxesNote && day.unrec) ? ' <span style="color:#5f5e5a;">(' + day.unrec + ' ' + (day.unrec === 1 ? L.unitOne : L.unitMany) + ', boxes not recorded)</span>' : '';
+    var unitsSummary = showU ? _logiInt(day.units) + ' units · ' : '';
     html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;margin-bottom:12px;">'
       + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;padding:11px 16px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
       +   '<span style="font-size:15px;font-weight:500;color:#e8e6e0;">' + esc(hdrDate) + '</span>'
-      +   '<span style="font-size:11px;color:#888780;font-variant-numeric:tabular-nums;">' + day.ships + ' ' + (day.ships === 1 ? L.unitOne : L.unitMany) + ' · ' + _logiInt(day.lots) + ' ' + L.lineShort.toLowerCase() + ' · ' + _logiInt(day.boxes) + ' boxes · ' + _logiInt(day.pallets) + ' pallets' + unrecNote + '</span>'
-      + '</div>';
+      +   '<span style="font-size:11px;color:#888780;font-variant-numeric:tabular-nums;">' + day.ships + ' ' + (day.ships === 1 ? L.unitOne : L.unitMany) + ' · ' + unitsSummary + _logiInt(day.lots) + ' ' + L.lineShort.toLowerCase() + ' · ' + _logiInt(day.boxes) + ' boxes · ' + _logiInt(day.pallets) + ' pallets' + unrecNote + '</span>'
+      + '</div>'
+      + colHeader;
     for (k = 0; k < day.list.length; k++) {
       if (shown >= LOGI_LOG_CAP) { truncated = true; break; }
       var s2 = day.list[k]; shown++;
@@ -3541,6 +3566,7 @@ function _logiLogHTML(shipments, bounds) {
         + '<div style="display:grid;' + GC + 'gap:10px;align-items:center;">'
         +   '<span style="color:#888780;display:inline-block;' + (open ? 'transform:rotate(90deg);' : '') + '">▸</span>'
         +   '<span style="font-size:13.5px;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s2.customer || '—') + '</span>'
+        +   (showU ? '<span style="font-size:12px;color:#e8e6e0;font-weight:500;text-align:right;font-variant-numeric:tabular-nums;">' + (s2.units ? _logiInt(s2.units) : '<span style="color:#5f5e5a;font-weight:400;">—</span>') + '</span>' : '')
         +   '<span style="font-size:12px;color:#cfcdc7;text-align:right;font-variant-numeric:tabular-nums;">' + boxCell + '</span>'
         +   '<span style="font-size:12px;color:#cfcdc7;text-align:right;font-variant-numeric:tabular-nums;">' + (s2.pallets ? _logiInt(s2.pallets) : '<span style="color:#5f5e5a;">—</span>') + '</span>'
         + '</div>'
@@ -3556,6 +3582,7 @@ function _logiLogHTML(shipments, bounds) {
           html += '<div style="display:grid;' + GCL + 'gap:10px;align-items:center;padding:5px 16px;border-bottom:0.5px solid #141618;background:#191c1f;">'
             + '<span></span>'
             + '<span style="font-size:12px;color:#888780;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + lineLabel + '</span>'
+            + (showU ? '<span style="font-size:12px;color:#cfcdc7;text-align:right;font-variant-numeric:tabular-nums;">' + (lt.units ? _logiInt(lt.units) : '<span style="color:#5f5e5a;">—</span>') + '</span>' : '')
             + '<span style="font-size:12px;color:#888780;text-align:right;font-variant-numeric:tabular-nums;">' + (lt.boxes ? _logiInt(lt.boxes) : '<span style="color:#5f5e5a;">—</span>') + '</span>'
             + '<span style="font-size:12px;color:#888780;text-align:right;font-variant-numeric:tabular-nums;">' + (lt.pallets ? _logiInt(lt.pallets) : '<span style="color:#5f5e5a;">—</span>') + '</span>'
             + '</div>';
