@@ -3430,7 +3430,7 @@ function _updateLogiTrend() {
   ch.update();
 }
 
-var LOGI_LOG_CAP = 50;
+var LOGI_LOG_CAP = 100;  // only caps an all-dates SEARCH; the period view is uncapped (a day/week/month is bounded)
 function _logiPickupIcon() { return '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="#888780" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><path d="M2 9v4h12V9"/><path d="M8 2v7"/><path d="M5 6l3 3 3-3"/></svg>'; }
 function _logiCarrierBit(s) {
   if (s.carrierClass === 'pickup') return _logiPickupIcon() + _logiLabels().pickupWord;
@@ -3544,9 +3544,12 @@ function _logiLogHTML(shipments, bounds) {
     + '<span></span><span style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">' + esc(L.entity) + '</span>'
     + (showU ? '<span style="' + thN + '">Units</span>' : '')
     + '<span style="' + thN + '">Boxes</span><span style="' + thN + '">Pallets</span></div>';
+  // No cap on the period-scoped view (a day/week/month is bounded); only an
+  // all-dates search can be large, so cap that.
+  var cap = q ? LOGI_LOG_CAP : Infinity;
   var html = '', shown = 0, truncated = false, d, k;
   for (d = 0; d < days.length; d++) {
-    if (shown >= LOGI_LOG_CAP) { truncated = true; break; }
+    if (shown >= cap) { truncated = true; break; }
     var day = days[d];
     var hdrDate = day.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     var unrecNote = (L.showBoxesNote && day.unrec) ? ' <span style="color:#5f5e5a;">(' + day.unrec + ' ' + (day.unrec === 1 ? L.unitOne : L.unitMany) + ', boxes not recorded)</span>' : '';
@@ -3558,7 +3561,7 @@ function _logiLogHTML(shipments, bounds) {
       + '</div>'
       + colHeader;
     for (k = 0; k < day.list.length; k++) {
-      if (shown >= LOGI_LOG_CAP) { truncated = true; break; }
+      if (shown >= cap) { truncated = true; break; }
       var s2 = day.list[k]; shown++;
       var open = !!logiExpanded[s2.key];
       var bx = boxesForShipment(s2);
