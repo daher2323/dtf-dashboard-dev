@@ -3122,7 +3122,7 @@ function _logiBuildShipment(bucket) {
     boxes += (r.boxes || 0); pallets += (r.pallets || 0);
     if (_boxRecorded(r)) boxesRecorded = true;
     if (!carrier && r.carrier) carrier = r.carrier;
-    if (!reference) { if (r.tracking) { reference = r.tracking; referenceKind = 'Track'; } else if (r.bol) { reference = r.bol; referenceKind = 'BOL'; } }
+    if (!reference) { if (r.tracking) { reference = r.tracking; referenceKind = 'Tracking #'; } else if (r.bol) { reference = r.bol; referenceKind = 'BOL'; } }
     if (!eta && r.eta) eta = r.eta;
     if (!firstStatus && r.status) firstStatus = r.status;
     var su = (r.status || '').toLowerCase();
