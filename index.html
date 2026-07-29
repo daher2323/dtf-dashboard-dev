@@ -714,6 +714,7 @@ var logiGran = 'monthly';           // 'daily' | 'weekly' | 'monthly' — scopes
 var logiAnchor = null;              // Date within the selected period; null = current period (mirrors Production nav)
 var logiSearch = '';                // case-insensitive filter (product / customer / lot / carrier / tracking / BOL)
 var logiTrendMetric = 'shipments';  // 'shipments' | 'lots' | 'boxes' | 'pallets' — trend chart metric (granularity follows logiGran)
+var logiStatusFilter = 'all';       // 'all' | 'open' (in transit + pending pickup) | 'received' — inbound log filter
 var logiExpanded = {};              // shipmentKey -> true; expanded shipments in the log (persists across re-renders)
 var _logiShipmentsCache = null;     // last grouped shipments, reused by chart-toggle + log-expand without re-grouping
 
@@ -3206,6 +3207,7 @@ function renderLogistics() {
   content.innerHTML = _logiNavHTML(bounds)
     + _logiTilesHTML(cur, prev, prior)
     + _logiTrendHTML(trend)
+    + (logiDir === 'inbound' ? '<div id="logi-status-filter-wrap">' + _logiStatusFilterHTML() + '</div>' : '')
     + '<div id="logi-log-host">' + _logiLogHTML(ships, bounds) + '</div>';
   _drawLogiTrendChart(trend);
 }
@@ -3439,9 +3441,35 @@ function _logiRefCell(text) {
   return '<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#a8c7e8;font-variant-numeric:tabular-nums;">' + esc(text) + '</span>'
     + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(text) + ',this)" title="Copy tracking / BOL" style="margin-left:4px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
 }
+// Inbound status filter (above the log): All / Open (in transit + pending) / Received.
+function _logiStatusFilterHTML() {
+  function btn(v, label, title) { return '<button onclick="setLogiStatusFilter(\'' + v + '\')" title="' + esc(title) + '" style="' + navBtnStyle(logiStatusFilter === v) + '">' + label + '</button>'; }
+  return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
+    + '<span style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">Status</span>'
+    + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+    +   btn('all', 'All', 'All statuses')
+    +   btn('open', 'Open', 'In transit or pending pickup')
+    +   btn('received', 'Received', 'Already received')
+    + '</div></div>';
+}
+function setLogiStatusFilter(v) {
+  logiStatusFilter = v;
+  var wrap = document.getElementById('logi-status-filter-wrap');
+  if (wrap) wrap.innerHTML = _logiStatusFilterHTML();
+  var host = document.getElementById('logi-log-host');
+  if (host) host.innerHTML = _logiLogHTML(_logiShipmentsCache || groupLotsToShipments(_logiActiveData() || []), periodBounds(logiGran, _logiAnchorDate(), new Date()));
+  else render();
+}
+function _logiStatusMatch(status, filter) {
+  var u = (status || '').toLowerCase();
+  if (filter === 'received') return u.indexOf('receiv') !== -1;
+  if (filter === 'open') return u.indexOf('transit') !== -1 || u.indexOf('pending') !== -1 || u.indexOf('pickup') !== -1;
+  return true;
+}
 function _logiLogHTML(shipments, bounds) {
   var L = _logiLabels();
   var q = (logiSearch || '').toLowerCase().trim();
+  var statusF = (L.showStatus && logiStatusFilter !== 'all') ? logiStatusFilter : null;
   var inRange = [], i;
   for (i = 0; i < shipments.length; i++) {
     var s = shipments[i];
@@ -3449,6 +3477,7 @@ function _logiLogHTML(shipments, bounds) {
     // A search spans ALL dates (locate a PO/tracking regardless of the selected
     // period); with no search, respect the period bounds.
     if (!q && (s.date < bounds.start || s.date > bounds.end)) continue;
+    if (statusF && !_logiStatusMatch(s.status, statusF)) continue;
     if (q) {
       var hay = (s.customer + ' ' + s.carrier + ' ' + s.reference + ' ' + s.eta).toLowerCase();
       for (var j = 0; j < s.lots.length; j++) hay += ' ' + (s.lots[j].product + ' ' + s.lots[j].lotNo).toLowerCase();
@@ -3457,7 +3486,8 @@ function _logiLogHTML(shipments, bounds) {
     inRange.push(s);
   }
   if (!inRange.length) {
-    var msg = q ? 'No ' + L.unitMany + ' match “' + esc(logiSearch) + '”.' : 'No ' + L.unitMany + ' in this period.';
+    var fdesc = statusF === 'open' ? ' open' : statusF === 'received' ? ' received' : '';
+    var msg = q ? 'No' + fdesc + ' ' + L.unitMany + ' match “' + esc(logiSearch) + '”.' : 'No' + fdesc + ' ' + L.unitMany + ' in this period.';
     return '<div style="padding:2.5rem;text-align:center;color:#5f5e5a;font-size:13px;font-family:system-ui;">' + msg + '</div>';
   }
   inRange.sort(function(a, b) {
