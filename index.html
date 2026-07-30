@@ -3517,6 +3517,32 @@ function _logiCopy(text, btn) {
   try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch(e) {}
   if (btn) { var o = btn.innerHTML; btn.innerHTML = '<span style="color:#1D9E75;font-size:11px;">&#10003;</span>'; setTimeout(function(){ try { btn.innerHTML = o; } catch(e){} }, 1000); }
 }
+
+// Generic click-to-copy for inline text (e.g. a part #): copies the value and
+// flashes the clicked element green with a transient checkmark. Guarded so a
+// rapid double-click doesn't stack checkmarks.
+function copyText(text, el) {
+  try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch(e) {}
+  if (el && !el.getAttribute('data-cp')) {
+    el.setAttribute('data-cp', '1');
+    var oldColor = el.style.color;
+    el.style.color = '#1D9E75';
+    var chk = document.createElement('span'); chk.textContent = ' ✓'; chk.style.color = '#1D9E75';
+    el.appendChild(chk);
+    setTimeout(function(){ try { el.style.color = oldColor; if (chk.parentNode) chk.parentNode.removeChild(chk); el.removeAttribute('data-cp'); } catch(e){} }, 900);
+  }
+}
+
+// Render a list of part #s as individually copyable, readable chips for the
+// materials-row subline. Each number copies itself on click (stopPropagation so
+// it doesn't toggle the row's expand); separated by a dim middot.
+function _partNumsHTML(partNums) {
+  return partNums.map(function(p) {
+    return '<span onclick="event.stopPropagation();copyText(' + jsStr(p) + ',this)" title="Copy part #" '
+      + 'style="cursor:pointer;color:#8FB6DE;user-select:text;-webkit-user-select:text;" '
+      + 'onmouseover="this.style.color=\'#AFCDF0\'" onmouseout="this.style.color=\'#8FB6DE\'">' + esc(p) + '</span>';
+  }).join('<span style="color:#4a4d4a;"> \xb7 </span>');
+}
 // Build a carrier tracking link for a reference, or null if the carrier has no
 // entry in CARRIER_TRACK_URL. Keys matched case-insensitively; trailing "."
 // ignored (so "Central T" / "Central T." / "CENTRAL T" all match one entry).
@@ -9212,8 +9238,8 @@ function renderMaterials() {
           +(m.isGroup?'<span style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C2240;color:#85B7EB;flex-shrink:0;">'+m.partNums.length+' parts</span>':'')
         +'</div>'
         +(m.isGroup
-          ?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:1px;">'+esc(m.partNums.join(' \xb7 '))+'</div>'
-          :(m.partNums.length?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(m.partNums.join(' \xb7 '))+'</div>':''))
+          ?'<div style="font-size:10px;font-family:system-ui;margin-top:1px;">'+_partNumsHTML(m.partNums)+'</div>'
+          :(m.partNums.length?'<div style="font-size:10px;font-family:system-ui;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+_partNumsHTML(m.partNums)+'</div>':''))
       +'</td>'
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#85B7EB;white-space:nowrap;">'+(invLoading?'<span class="inv-skel" style="width:46px;"></span>':fmtStock(m.stock,unit))+'</td>'
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+(demLoading?'<span class="inv-skel" style="width:42px;"></span>':fmtDemand(m.demand,unit))+'</td>'
