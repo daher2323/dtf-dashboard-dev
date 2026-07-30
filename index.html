@@ -11369,13 +11369,22 @@ function _blendCopyCell(text) {
     + '<button onclick="_logiCopy('+jsStr(text)+',this)" title="Copy" style="margin-left:4px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
 }
 
-// Flat components table: one row per (ingredient, part #, material lot). Sorted by
-// ingredient then T#. Part #s and T#s are click-to-copy.
+// Components table, one row per (part #, ingredient) with its distinct material
+// lots (T#s) collected in the last column. Columns: Part # · Ingredient · T#s.
+// Sorted by part # then ingredient. Part #s and every T# are click-to-copy.
 function renderBlendTableHTML(res) {
-  var rows = res.rows.slice().sort(function(a, b) {
-    var m = (a.material || '').toLowerCase().localeCompare((b.material || '').toLowerCase());
-    if (m !== 0) return m;
-    return String(a.t || '').localeCompare(String(b.t || ''));
+  // Group by (part #, ingredient); collect distinct T#s per group.
+  var groups = [], gIndex = {}, i, r, k;
+  for (i = 0; i < res.rows.length; i++) {
+    r = res.rows[i];
+    k = (r.part || '') + '|' + (r.material || '');
+    if (!gIndex.hasOwnProperty(k)) { gIndex[k] = groups.length; groups.push({ part: r.part, material: r.material, ts: [] }); }
+    if (r.t && groups[gIndex[k]].ts.indexOf(r.t) === -1) groups[gIndex[k]].ts.push(r.t);
+  }
+  groups.sort(function(a, b) {
+    var p = String(a.part || '').localeCompare(String(b.part || ''));
+    if (p !== 0) return p;
+    return (a.material || '').toLowerCase().localeCompare((b.material || '').toLowerCase());
   });
   var out = '';
   out += '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap;">'
@@ -11386,16 +11395,20 @@ function renderBlendTableHTML(res) {
   out += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     + '<div style="overflow-x:auto;">'
     + '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;">'
-    + '<colgroup><col style="width:48%;"/><col style="width:24%;"/><col style="width:28%;"/></colgroup>'
+    + '<colgroup><col style="width:18%;"/><col style="width:44%;"/><col style="width:38%;"/></colgroup>'
     + '<thead><tr style="background:#141618;">'
-    +   recallTh('INGREDIENT', 'left') + recallTh('PART #', 'left') + recallTh('MATERIAL LOT (T#)', 'left')
+    +   recallTh('PART #', 'left') + recallTh('INGREDIENT', 'left') + recallTh('MATERIAL LOTS (T#)', 'left')
     + '</tr></thead><tbody>';
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i];
+  var tSep = '<span style="color:#4a4d4a;"> \xb7 </span>';
+  for (i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    var tCell = g.ts.length
+      ? g.ts.slice().sort().map(function(t){ return _blendCopyCell(t); }).join(tSep)
+      : '<span style="color:#5f5e5a;">—</span>';
     out += '<tr style="border-top:0.5px solid #232629;">'
-      + '<td title="'+esc(r.material || '')+'" style="padding:8px 14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#e8e6e0;">'+esc(r.material || '—')+'</td>'
-      + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+_blendCopyCell(r.part)+'</td>'
-      + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+_blendCopyCell(r.t)+'</td>'
+      + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;vertical-align:top;">'+_blendCopyCell(g.part)+'</td>'
+      + '<td title="'+esc(g.material || '')+'" style="padding:8px 14px;color:#e8e6e0;vertical-align:top;">'+esc(g.material || '—')+'</td>'
+      + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.9;vertical-align:top;">'+tCell+'</td>'
       + '</tr>';
   }
   out += '</tbody></table></div></div>';
@@ -11414,16 +11427,18 @@ function exportBlend() {
     ['Ingredients: ' + res.materials + ' · Part #s: ' + res.parts + ' · Material lots: ' + res.tnums],
     ['Exported: ' + dateStr],
     [],
-    ['Ingredient', 'Part #', 'Material Lot (T#)']
+    ['Part #', 'Ingredient', 'Material Lot (T#)']
   ];
   var sorted = res.rows.slice().sort(function(a, b) {
+    var p = String(a.part || '').localeCompare(String(b.part || ''));
+    if (p !== 0) return p;
     var m = (a.material || '').toLowerCase().localeCompare((b.material || '').toLowerCase());
     if (m !== 0) return m;
     return String(a.t || '').localeCompare(String(b.t || ''));
   });
-  sorted.forEach(function(r) { rows.push([r.material || '', r.part || '', r.t || '']); });
+  sorted.forEach(function(r) { rows.push([r.part || '', r.material || '', r.t || '']); });
   var ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:34},{wch:14},{wch:18}];
+  ws['!cols'] = [{wch:14},{wch:34},{wch:18}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Blend Components');
   var safe = String(res.lot || 'unknown').replace(/[^A-Za-z0-9]/g, '') || 'unknown';
