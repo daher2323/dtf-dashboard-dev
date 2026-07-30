@@ -11259,7 +11259,8 @@ function buildBlendResult(hits, lot) {
   var maps = buildLotResolution();
   var product = maps.productByLot[lot] || (lotMap[lot] && lotMap[lot].product)
     || (lotIndex[lot] && (lotIndex[lot].combined || lotIndex[lot].product)) || null;
-  return { rows: rows, lot: lot, product: product, parts: countKeys(partSet), materials: countKeys(matSet), tnums: countKeys(tSet) };
+  var units = maps.unitsByLot.hasOwnProperty(lot) ? maps.unitsByLot[lot] : null;   // total Final Units for the lot
+  return { rows: rows, lot: lot, product: product, units: units, parts: countKeys(partSet), materials: countKeys(matSet), tnums: countKeys(tSet) };
 }
 
 function onBlendInput(v) { blendQuery = v; }
@@ -11352,11 +11353,12 @@ function blendSummaryHTML(res) {
     +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#85B7EB;font-weight:700;">'+lotTxt+'</span>'
     +   '<span style="color:#d4d7db;font-size:13px;">'+prodText+'</span>'
     + '</div>'
-    // Ingredients and Part #s are 1:1 (each ingredient is one part #), so only
-    // Ingredients + Material lots are shown — Part #s would just repeat the count.
+    // Ingredients and Part #s are 1:1 (each ingredient is one part #), so Part #s
+    // is dropped; Units produced takes the rightmost slot (as on the recall card).
     + '<div style="display:flex;align-items:center;justify-content:center;border-top:0.5px solid rgba(53,138,221,0.2);padding-top:15px;">'
     +   recallMetricCell(res.materials.toLocaleString(), 'Ingredients') + divider
-    +   recallMetricCell(res.tnums.toLocaleString(), 'Material lots')
+    +   recallMetricCell(res.tnums.toLocaleString(), 'Material lots') + divider
+    +   recallMetricCell(res.units != null ? Math.round(res.units).toLocaleString() : '—', 'Units produced')
     + '</div>'
     + '</div>';
   return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:500px;">' + bubble + '</div>';
@@ -11425,7 +11427,8 @@ function exportBlend() {
   var rows = [
     ['DTF Blend Components — Lot #: ' + (res.lot || '')],
     ['Product: ' + (res.product || '(unavailable)')],
-    ['Ingredients: ' + res.materials + ' · Material lots: ' + res.tnums],
+    ['Ingredients: ' + res.materials + ' · Material lots: ' + res.tnums
+      + ' · Units produced: ' + (res.units != null ? Math.round(res.units) : 'n/a')],
     ['Exported: ' + dateStr],
     [],
     ['Part #', 'Ingredient', 'Material Lot (T#)']
