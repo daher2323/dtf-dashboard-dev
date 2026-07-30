@@ -11235,7 +11235,7 @@ function traceLotComponents(rows, query) {
   for (i = 0; i < rows.length; i++) {
     r = rows[i];
     if (normT(r.orderLot) !== q) continue;
-    for (j = 0; j < r.slots.length; j++) out.push({ part: r.part, material: r.material, t: r.slots[j].t });
+    for (j = 0; j < r.slots.length; j++) out.push({ part: r.part, material: r.material, t: r.slots[j].t, qty: r.slots[j].qty || 0 });
   }
   return out;
 }
@@ -11249,7 +11249,8 @@ function buildBlendResult(hits, lot) {
   for (i = 0; i < hits.length; i++) {
     h = hits[i];
     k = (h.part || '') + '|' + (h.material || '') + '|' + (h.t || '');
-    if (!seen[k]) { seen[k] = 1; rows.push({ part: h.part, material: h.material, t: h.t }); }
+    if (!seen[k]) { seen[k] = { part: h.part, material: h.material, t: h.t, qty: 0 }; rows.push(seen[k]); }
+    seen[k].qty += (h.qty || 0);   // kg pulled for this exact part/material/T#
     if (h.part) partSet[h.part] = 1;
     if (h.material) matSet[h.material] = 1;
     if (h.t) tSet[h.t] = 1;
@@ -11373,25 +11374,30 @@ function _blendCopyCell(text) {
 }
 
 // Components table, one row per (part #, ingredient) with its distinct material
-// lots (T#s) collected in the last column. Columns: Part # · Ingredient · T#s.
-// Sorted by part # then ingredient. Part #s and every T# are click-to-copy.
+// lots (T#s). Columns: Part # · Ingredient · T#s. Rows are ORDERED by total kg
+// pulled DESC (a rough dosage proxy — heaviest first, far better than
+// alphabetical), but the kg value itself is intentionally not shown. Part #s and
+// every T# are click-to-copy.
 function renderBlendTableHTML(res) {
-  // Group by (part #, ingredient); collect distinct T#s per group.
+  // Group by (part #, ingredient); collect distinct T#s and sum kg pulled (for
+  // ordering only).
   var groups = [], gIndex = {}, i, r, k;
   for (i = 0; i < res.rows.length; i++) {
     r = res.rows[i];
     k = (r.part || '') + '|' + (r.material || '');
-    if (!gIndex.hasOwnProperty(k)) { gIndex[k] = groups.length; groups.push({ part: r.part, material: r.material, ts: [] }); }
-    if (r.t && groups[gIndex[k]].ts.indexOf(r.t) === -1) groups[gIndex[k]].ts.push(r.t);
+    if (!gIndex.hasOwnProperty(k)) { gIndex[k] = groups.length; groups.push({ part: r.part, material: r.material, ts: [], qty: 0 }); }
+    var g0 = groups[gIndex[k]];
+    if (r.t && g0.ts.indexOf(r.t) === -1) g0.ts.push(r.t);
+    g0.qty += (r.qty || 0);
   }
+  // Heaviest pull first; ties fall back to ingredient name for stable order.
   groups.sort(function(a, b) {
-    var p = String(a.part || '').localeCompare(String(b.part || ''));
-    if (p !== 0) return p;
+    if ((b.qty || 0) !== (a.qty || 0)) return (b.qty || 0) - (a.qty || 0);
     return (a.material || '').toLowerCase().localeCompare((b.material || '').toLowerCase());
   });
   var out = '';
   out += '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap;">'
-    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Blend components</div>'
+    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Blend components <span style="text-transform:none;letter-spacing:0;color:#5f5e5a;">· ordered by approx. dosage</span></div>'
     + '<button onclick="exportBlend()" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
     +   '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>Export components</button>'
     + '</div>';
@@ -11433,9 +11439,13 @@ function exportBlend() {
     [],
     ['Part #', 'Ingredient', 'Material Lot (T#)']
   ];
+  // Order to match the on-screen table: heaviest total kg pulled first (dosage
+  // proxy), then ingredient, then T#. The kg value itself is not exported.
+  var gq = {};
+  res.rows.forEach(function(r) { var kk = (r.part || '') + '|' + (r.material || ''); gq[kk] = (gq[kk] || 0) + (r.qty || 0); });
   var sorted = res.rows.slice().sort(function(a, b) {
-    var p = String(a.part || '').localeCompare(String(b.part || ''));
-    if (p !== 0) return p;
+    var ka = (a.part || '') + '|' + (a.material || ''), kb = (b.part || '') + '|' + (b.material || '');
+    if ((gq[kb] || 0) !== (gq[ka] || 0)) return (gq[kb] || 0) - (gq[ka] || 0);
     var m = (a.material || '').toLowerCase().localeCompare((b.material || '').toLowerCase());
     if (m !== 0) return m;
     return String(a.t || '').localeCompare(String(b.t || ''));
