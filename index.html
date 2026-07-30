@@ -664,6 +664,7 @@ var topView = 'summary', subView = 'today';
 var recallQuery = '';
 var recallResult = null;  // null = no search yet; {} with rows:[] = searched, none found
 var recallPending = '';   // a T# traced before pickRows finished loading; runs on arrival
+var _recallJumpHighlight = null;  // lot # to highlight in the ops table after a recall Run-Date jump
 var selectedCustomer = null;
 var sortCol = 'date', sortDir = -1, page = 1, PAGE_SIZE = 50;
 var custLimit = 10;
@@ -759,7 +760,7 @@ var _refreshInFlight = false;
 // (operator reassigns a lot to a different line) overwrite naturally on
 // the next render where r['Line'] resolves.
 var _knownLineByLot = {};
-var filterState = { customer:[], product:[], status:[], bottle:[], jar:[] };
+var filterState = { customer:[], product:[], status:[], bottle:[], jar:[], line:[] };
 
 var _openMsId = null;
 
@@ -981,8 +982,8 @@ function toggleMsItem(id, val) {
 function rebuildMsTrigger(id) {
   var trig = document.getElementById('ms-trig-' + id); if (!trig) return;
   var count = (filterState[id] || []).length;
-  var labels    = {customer:'Customer', product:'Product', status:'Status', bottle:'Bottle', jar:'Jar size'};
-  var allLabels = {customer:'All customers', product:'All products', status:'All statuses', bottle:'All bottles', jar:'All jars'};
+  var labels    = {customer:'Customer', product:'Product', status:'Status', bottle:'Bottle', jar:'Jar size', line:'Line'};
+  var allLabels = {customer:'All customers', product:'All products', status:'All statuses', bottle:'All bottles', jar:'All jars', line:'All lines'};
   trig.className = 'ms-trigger' + (count > 0 ? ' active' : '');
   trig.innerHTML = (count > 0 ? labels[id] + ' <span class="ms-badge">' + count + '</span>' : allLabels[id])
     + ' <span style="font-size:9px;color:#5f5e5a;">&#x25BE;</span>';
@@ -1016,7 +1017,7 @@ function clearMsFilter(id) {
 
 function buildMultiSelect(id, label, options, selectedArr) {
   var count = selectedArr.length;
-  var allLabels = {customer:'All customers', product:'All products', status:'All statuses', bottle:'All bottles', jar:'All jars'};
+  var allLabels = {customer:'All customers', product:'All products', status:'All statuses', bottle:'All bottles', jar:'All jars', line:'All lines'};
   var triggerLabel = count > 0 ? label + ' <span class="ms-badge">' + count + '</span>' : allLabels[id];
   return '<div class="ms-wrap" id="ms-wrap-' + id + '">'
     + '<div class="ms-trigger' + (count > 0 ? ' active' : '') + '" onclick="toggleMsPanel(\'' + id + '\')" id="ms-trig-' + id + '">'
@@ -1040,13 +1041,15 @@ function getFilteredLots() {
     if (filterState.status.length && !filterState.status.some(function(s){ return l.status.toLowerCase().includes(s.toLowerCase()); })) return false;
     if (filterState.bottle.length && filterState.bottle.indexOf(l.bottleSize) === -1) return false;
     if (filterState.jar.length && filterState.jar.indexOf(l.jarSize) === -1) return false;
+    if (filterState.line && filterState.line.length && filterState.line.indexOf(canonicalLine(l.line)) === -1) return false;
     return true;
   });
 }
 
 function clearFilters() {
+  _recallJumpHighlight = null;
   var fs = document.getElementById('fSearch'); if (fs) fs.value = '';
-  ['customer','product','status','bottle','jar'].forEach(function(id){ filterState[id] = []; rebuildMsTrigger(id); });
+  ['customer','product','status','bottle','jar','line'].forEach(function(id){ filterState[id] = []; rebuildMsTrigger(id); });
   rebuildProductOptions();
   applyFilters();
 }
@@ -3762,23 +3765,27 @@ function setSub(v) {
 
 function navDay(dir) {
   selectedDayIdx = Math.max(0, Math.min(productionDays.length-1, selectedDayIdx+dir));
+  _recallJumpHighlight = null;
   trackEvent('date_filter_change', { view: 'daily', value: productionDays[selectedDayIdx] || '' });
   render();
 }
 
 function navToToday() {
   selectedDayIdx = productionDays.length - 1;
+  _recallJumpHighlight = null;
   trackEvent('date_filter_change', { view: 'daily', value: 'today' });
   render();
 }
 
 function goLive() {
   selectedDayIdx = productionDays.length - 1;
+  _recallJumpHighlight = null;
   trackEvent('date_filter_change', { view: 'daily', value: 'live' });
   render();
 }
 
 function pickDay(str) {
+  _recallJumpHighlight = null;
   var idx = productionDays.indexOf(str);
   if (idx !== -1) selectedDayIdx = idx;
   trackEvent('date_filter_change', { view: 'daily', value: str });
@@ -5363,8 +5370,10 @@ function renderDetail() {
   var products=Array.from(new Set(lots.map(function(l){ return l.product; }).filter(Boolean))).sort();
   var bottleSizes=Array.from(new Set(sourceRows.map(function(r){ return r['Bottle Size']; }).filter(Boolean))).sort();
   var jarSizes=Array.from(new Set(sourceRows.map(function(r){ return r['Jar Size']; }).filter(Boolean))).sort();
+  // Line options: canonical lines actually present in the scoped data, in ALL_LINES order.
+  var lineOpts=ALL_LINES.filter(function(ln){ return lots.some(function(l){ return canonicalLine(l.line)===ln; }); });
 
-  window._msOptions = {customer:customers, product:products, status:['Complete','Partial'], bottle:bottleSizes, jar:jarSizes};
+  window._msOptions = {customer:customers, product:products, status:['Complete','Partial'], bottle:bottleSizes, jar:jarSizes, line:lineOpts};
   if((filterState.customer||[]).length) rebuildProductOptions();
 
   document.getElementById('content').innerHTML =
@@ -5374,6 +5383,7 @@ function renderDetail() {
     +    '<input type="text" id="fSearch" placeholder="Search lot # or product\u2026" oninput="applyFilters()">'
     +    buildMultiSelect('customer','Customer',customers,filterState.customer)
     +    buildMultiSelect('product','Product',products,filterState.product)
+    +    buildMultiSelect('line','Line',lineOpts,filterState.line)
     +    buildMultiSelect('status','Status',['Complete','Partial'],filterState.status)
     +    buildMultiSelect('bottle','Bottle',bottleSizes,filterState.bottle)
     +    buildMultiSelect('jar','Jar size',jarSizes,filterState.jar)
@@ -5383,7 +5393,7 @@ function renderDetail() {
     +'</div>'
     +'<div id="ops-metrics" class="metrics" style="margin-bottom:1rem"></div>'
     +'<div class="full-card"><div class="tbl-wrap"><table style="min-width:600px"><thead><tr>'
-    +'<th onclick="sortBy(\'date\')" style="cursor:pointer">Date &#x21d5;</th><th onclick="sortBy(\'lot\')" style="cursor:pointer">Lot # &#x21d5;</th><th onclick="sortBy(\'product\')" style="cursor:pointer">Product &#x21d5;</th><th onclick="sortBy(\'line\')" style="cursor:pointer">Line &#x21d5;</th><th onclick="sortBy(\'bottleSize\')" style="cursor:pointer">Bottle &#x21d5;</th><th onclick="sortBy(\'jarSize\')" style="cursor:pointer">Jar &#x21d5;</th><th onclick="sortBy(\'projected\')" style="cursor:pointer">Projected &#x21d5;</th><th onclick="sortBy(\'dayUnits\')" style="cursor:pointer">'+esc(scopeUnitsLabel)+' &#x21d5;</th><th onclick="sortBy(\'finalUnits\')" style="cursor:pointer">Final units &#x21d5;</th><th onclick="sortBy(\'dev\')" style="cursor:pointer">Dev % &#x21d5;</th><th onclick="sortBy(\'status\')" style="cursor:pointer">Status &#x21d5;</th>'
+    +'<th onclick="sortBy(\'date\')" style="cursor:pointer">Date &#x21d5;</th><th onclick="sortBy(\'time\')" style="cursor:pointer">Start time &#x21d5;</th><th onclick="sortBy(\'lot\')" style="cursor:pointer">Lot # &#x21d5;</th><th onclick="sortBy(\'product\')" style="cursor:pointer">Product &#x21d5;</th><th onclick="sortBy(\'line\')" style="cursor:pointer">Line &#x21d5;</th><th onclick="sortBy(\'bottleSize\')" style="cursor:pointer">Bottle &#x21d5;</th><th onclick="sortBy(\'jarSize\')" style="cursor:pointer">Jar &#x21d5;</th><th onclick="sortBy(\'projected\')" style="cursor:pointer">Projected &#x21d5;</th><th onclick="sortBy(\'dayUnits\')" style="cursor:pointer">'+esc(scopeUnitsLabel)+' &#x21d5;</th><th onclick="sortBy(\'finalUnits\')" style="cursor:pointer">Final units &#x21d5;</th><th onclick="sortBy(\'dev\')" style="cursor:pointer">Dev % &#x21d5;</th><th onclick="sortBy(\'status\')" style="cursor:pointer">Status &#x21d5;</th>'
     +'</tr></thead><tbody id="ops-body"></tbody></table></div>'
     +'<div class="pagination"><button id="prevBtn" onclick="changePage(-1)">\u2190 Prev</button><span id="pageInfo"></span><button id="nextBtn" onclick="changePage(1)">Next \u2192</button><span id="rowCount" style="margin-left:auto"></span></div></div>';
 
@@ -5403,6 +5413,7 @@ function updateOpsTable() {
   var lots=getFilteredLots();
   if(sortCol){
     lots=lots.slice().sort(function(a,b){
+      if(sortCol==='time') return (lotSortKey(a)-lotSortKey(b))*sortDir;   // chronological by start time
       var av=a[sortCol]!=null?a[sortCol]:'', bv=b[sortCol]!=null?b[sortCol]:'';
       if(sortCol==='dev'){ av=lotDev(a)!=null?lotDev(a):-999; bv=lotDev(b)!=null?lotDev(b):-999; }
       if(sortCol==='date'){ var dd=(new Date(av)-new Date(bv))*sortDir; if(dd!==0) return dd; var sw=statusSortWeight(a)-statusSortWeight(b); return sw!==0?sw:lotSortKey(b)-lotSortKey(a); }
@@ -5428,7 +5439,7 @@ function updateOpsTable() {
   var om=document.getElementById('ops-metrics');
   if(om) om.innerHTML='<div class="metric info"><div class="label">Lots shown</div><div class="value">'+total.toLocaleString()+'</div></div><div class="metric"><div class="label">Units produced</div><div class="value">'+tF.toLocaleString()+'</div><div class="sub">vs '+tP.toLocaleString()+' projected</div></div><div class="metric"><div class="label">Avg deviation</div><div class="value" style="color:'+dc+'">'+(aD>0?'+':'')+aD.toFixed(1)+'%</div><div class="sub">lot by lot</div></div><div class="metric good"><div class="label">Complete lots</div><div class="value">'+comp+'</div><div class="sub">of '+total+' shown</div></div>';
   var body=document.getElementById('ops-body'); if(!body) return;
-  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; return '<tr><td>'+esc(l.date)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
+  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; var isHi=_recallJumpHighlight&&l.lot===_recallJumpHighlight; return '<tr'+(isHi?' id="ops-hi-row" style="background:rgba(245,166,35,0.10);box-shadow:inset 3px 0 0 #F5A623;"':'')+'><td>'+esc(l.date)+'</td><td style="color:#a8b0b8;">'+esc(l.startTime||'—')+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
   var pi=document.getElementById('pageInfo'),pb=document.getElementById('prevBtn'),nb=document.getElementById('nextBtn'),rc=document.getElementById('rowCount');
   if(pi) pi.textContent='Page '+page+' of '+totalPages;
   if(pb) pb.disabled=page<=1;
@@ -10801,6 +10812,31 @@ function recallFmtDate(d) {
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// Jump from a recall row's Run Date into Production > Detail for that day,
+// filtered to the lot's line and sorted chronologically (earliest first), with
+// the recalled lot highlighted — so you can see what ran on that line right
+// before/after it (cross-contamination check). Only wired when the run day
+// exists in productionDays (i.e. the lot actually ran and we can navigate there).
+function recallJumpToRun(lot, runTs) {
+  var d = new Date(runTs);
+  if (isNaN(d.getTime())) return;
+  var key = (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear();
+  var idx = productionDays.indexOf(key);
+  if (idx === -1) return;
+  var lm = lotMap[lot];
+  var ln = lm && lm.line ? canonicalLine(lm.line) : null;
+  topView = 'detail'; subView = 'today';
+  selectedDayIdx = idx;
+  filterState.customer = []; filterState.product = []; filterState.status = [];
+  filterState.bottle = []; filterState.jar = [];
+  filterState.line = ln ? [ln] : [];      // isolate the lot's line (all lines if unknown)
+  sortCol = 'time'; sortDir = 1; page = 1; // chronological, earliest run first
+  _recallJumpHighlight = lot;
+  _nextRenderScrollY = 0;                  // land at the top of the Detail view
+  trackEvent('recall_jump_to_run', { line: ln || 'all' });
+  setMainSection('production');            // sets tab chrome + renderSubBar + render
+}
+
 function renderRecall() {
   closeMsPanel();
   fetchMaterialsIfNeeded();   // idempotent; builds pickRows from the same fetch
@@ -11006,6 +11042,15 @@ function renderRecallTableHTML(res) {
     for (ri = 0; ri < grp.rows.length; ri++) {
       var r = grp.rows[ri];
       var noUnit = (r.units == null);
+      // Run Date is a jump into Production > Detail for that day + line, but only
+      // when the run day is a real production day we can navigate to.
+      var runCell = recallFmtDate(r.runDate);
+      if (r.runDate && typeof r.runDate.getTime === 'function') {
+        var dk = (r.runDate.getMonth()+1)+'/'+r.runDate.getDate()+'/'+r.runDate.getFullYear();
+        if (productionDays.indexOf(dk) !== -1) {
+          runCell = '<button onclick="recallJumpToRun(' + jsStr(r.lot) + ',' + r.runDate.getTime() + ')" title="See what ran on this line that day (cross-contamination check)" style="background:transparent;border:none;padding:0;margin:0;font:inherit;cursor:pointer;color:#85B7EB;display:inline-flex;align-items:center;gap:4px;" onmouseover="this.firstChild.style.textDecoration=\'underline\'" onmouseout="this.firstChild.style.textDecoration=\'none\'"><span>' + recallFmtDate(r.runDate) + '</span><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h8"/><path d="M8.5 4.5 12 8l-3.5 3.5"/></svg></button>';
+        }
+      }
       var prodName = r.resolved ? displayProduct(r.product, r.customer) : r.product;
       var prodCell = r.resolved
         ? '<span style="color:#e8e6e0;">'+esc(prodName)+'</span>'
@@ -11019,7 +11064,7 @@ function renderRecallTableHTML(res) {
       out += '<tr style="'+rowStyle+'">'
         + '<td title="'+esc(prodName)+'" style="padding:8px 14px 8px 28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+prodCell+'</td>'
         + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c7cbcf;overflow:hidden;text-overflow:ellipsis;">'+esc(r.lot)+'</td>'
-        + '<td style="padding:8px 14px;color:#888780;">'+recallFmtDate(r.runDate)+'</td>'
+        + '<td style="padding:8px 14px;color:#888780;">'+runCell+'</td>'
         + '<td style="padding:8px 14px;text-align:right;">'+unitsCell+'</td>'
         + '</tr>';
     }

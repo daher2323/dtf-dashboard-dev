@@ -87,6 +87,8 @@ Renderers build HTML strings and assign to `#content.innerHTML`, then instantiat
 
 If you *do* want to override scroll (e.g. reset-to-top), assign to the module-level `_nextRenderScrollY` before triggering render. `resetDashboard` is the only existing user of this hook.
 
+**Recall → Detail cross-contamination jump.** A Run Date in the Recall table (`renderRecallTableHTML`) renders as a link when its day exists in `productionDays`; `recallJumpToRun(lot, runTs)` switches to Production → Detail → Daily for that day, presets the **Line filter** to the lot's line, sorts chronologically (`sortCol='time'`, ascending), and highlights the lot via `_recallJumpHighlight` (cleared on day-nav / `clearFilters`). Supporting pieces: the Detail ops table has a **Start time** column (`l.startTime`, sortable via the `'time'` key → `lotSortKey`), and `filterState.line` is now a full multi-select filter — `getFilteredLots` matches `canonicalLine(l.line)`, options come from `_msOptions.line` (canonical lines present in scope), and it's wired through `buildMultiSelect`/`rebuildMsTrigger`/`clearFilters` like the other filters.
+
 Pop-ups (multi-select filter panels, date/week pickers, export popovers, role menu) are rendered into `document.body` with fixed positioning and managed by paired `open*`/`close*` functions that attach a capture-phase outside-click listener. When adding a new popup, follow the same pattern — existing ones call `closeMsPanel()` defensively on most nav actions to avoid orphaned panels.
 
 ## Domain concepts
