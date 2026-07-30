@@ -1770,25 +1770,25 @@ var BULK_RUN_THRESHOLD = 10;
 var CARRIER_TRACK_URL = {
   // Parcel
   'UPS': 'https://www.ups.com/track?tracknum={TRACKING}',
-  'FedEx Econ': 'https://www.fedex.com/fedextrack/?trknbr={TRACKING}',
-  'FedEx Priority': 'https://www.fedex.com/fedextrack/?trknbr={TRACKING}',
-  'FedEx Freight': 'https://www.fedex.com/fedextrack/?trknbr={TRACKING}',
+  'FedEx Econ': 'https://www.fedexfreight.com/fedextrack/?trknbr={TRACKING}',
+  'FedEx Priority': 'https://www.fedexfreight.com/fedextrack/?trknbr={TRACKING}',
+  'FedEx Freight': 'https://www.fedexfreight.com/fedextrack/?trknbr={TRACKING}',
   'DHL': 'https://www.dhl.com/us-en/home/tracking.html?tracking-id={TRACKING}',
   // LTL (track by PRO)
   'Old Dominion Freight Line': 'https://www.odfl.com/us/en/tools/trace-results.html?pro={TRACKING}',
   'SAIA': 'https://www.saia.com/track/details/{TRACKING}',
   'Estes': 'https://www.estes-express.com/myestes/shipment-tracking/?query={TRACKING}',
-  'XPO': 'https://ltl.xpo.com/tracking/?proNumbers={TRACKING}',
+  'XPO': 'https://ext-web.ltl-xpo.com/public-app/shipments?referenceNumber={TRACKING}',
   'ABF': 'https://arcb.com/tools/tracking#/{TRACKING}',
   'R&L': 'https://www.rlcarriers.com/shipping/tracking?pro={TRACKING}',
   'T Force': 'https://www.tforcefreight.com/ltl/apps/Tracking?proNumbers={TRACKING}',
-  'Averitt': 'https://www.averittexpress.com/tools/tracking?pro={TRACKING}',
+  'Averitt': 'https://tools.averitt.com/tracking/power-of-one/by-id',
   'AAA Cooper': 'https://www.aaacooper.com/Tracking/TrackingResults?pronumber={TRACKING}',
-  'Central T': 'https://www.centraltransport.com/tools/track-shipment?pronumber={TRACKING}',
+  'Central T': 'https://www.centraltransport.com/tools/track-shipment',
   // Regional LTL — UNVERIFIED best guesses; correct as you test
   'SEFL': 'https://www.sefl.com/webconnect/ProTrace?pro={TRACKING}',
   'Southeastern': 'https://www.sefl.com/webconnect/ProTrace?pro={TRACKING}',
-  'Day Light': 'https://mydaylight.dylt.com/tracking?pro={TRACKING}',
+  'Day Light': 'https://mydaylight.dylt.com/external/shipment?probill={TRACKING}',
   'Roadrunner': 'https://www.rrts.com/tools/tracking?pro={TRACKING}',
   'XGS': 'https://www.myxgs.com/tracking?pro={TRACKING}'
 };
