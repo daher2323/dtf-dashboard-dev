@@ -1760,6 +1760,39 @@ var BULK_SERVING_BRANDS = ['Twisted Dough'];
    this keeps the wording sane for existing rows.) */
 var BULK_RUN_THRESHOLD = 10;
 
+/* Carrier -> tracking-page URL. When a shipment's reference is a Tracking #
+   (not a BOL) and its carrier is listed here, the number renders as a link to
+   that carrier's tracking lookup ({TRACKING} is replaced with the number). Keys
+   are matched case-insensitively and a trailing "." is ignored, so "ABF"/"abf"
+   and "Central T"/"Central T." collapse to one entry. LTL sites expect the PRO
+   number. NOTE: several of these are best-guess and unverified — replace any
+   that don't resolve, and delete a carrier to make its number plain text. */
+var CARRIER_TRACK_URL = {
+  // Parcel
+  'UPS': 'https://www.ups.com/track?tracknum={TRACKING}',
+  'FedEx Econ': 'https://www.fedex.com/fedextrack/?trknbr={TRACKING}',
+  'FedEx Priority': 'https://www.fedex.com/fedextrack/?trknbr={TRACKING}',
+  'FedEx Freight': 'https://www.fedex.com/fedextrack/?trknbr={TRACKING}',
+  'DHL': 'https://www.dhl.com/us-en/home/tracking.html?tracking-id={TRACKING}',
+  // LTL (track by PRO)
+  'Old Dominion Freight Line': 'https://www.odfl.com/us/en/tools/trace-results.html?pro={TRACKING}',
+  'SAIA': 'https://www.saia.com/track/details/{TRACKING}',
+  'Estes': 'https://www.estes-express.com/myestes/shipment-tracking/?query={TRACKING}',
+  'XPO': 'https://ltl.xpo.com/tracking/?proNumbers={TRACKING}',
+  'ABF': 'https://arcb.com/tools/tracking#/{TRACKING}',
+  'R&L': 'https://www.rlcarriers.com/shipping/tracking?pro={TRACKING}',
+  'T Force': 'https://www.tforcefreight.com/ltl/apps/Tracking?proNumbers={TRACKING}',
+  'Averitt': 'https://www.averittexpress.com/tools/tracking?pro={TRACKING}',
+  'AAA Cooper': 'https://www.aaacooper.com/Tracking/TrackingResults?pronumber={TRACKING}',
+  'Central T': 'https://www.centraltransport.com/tools/track-shipment?pronumber={TRACKING}',
+  // Regional LTL — UNVERIFIED best guesses; correct as you test
+  'SEFL': 'https://www.sefl.com/webconnect/ProTrace?pro={TRACKING}',
+  'Southeastern': 'https://www.sefl.com/webconnect/ProTrace?pro={TRACKING}',
+  'Day Light': 'https://mydaylight.dylt.com/tracking?pro={TRACKING}',
+  'Roadrunner': 'https://www.rrts.com/tools/tracking?pro={TRACKING}',
+  'XGS': 'https://www.myxgs.com/tracking?pro={TRACKING}'
+};
+
 // Parse the logistics CSV into shipment records. Returns null on empty/parse
 // failure so callers can keep the previous good fetch. Two quirks handled here:
 //   1. Date forward-fill — only ~6% of rows carry a date; a blank Date inherits
@@ -3481,11 +3514,35 @@ function _logiCopy(text, btn) {
   try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch(e) {}
   if (btn) { var o = btn.innerHTML; btn.innerHTML = '<span style="color:#1D9E75;font-size:11px;">&#10003;</span>'; setTimeout(function(){ try { btn.innerHTML = o; } catch(e){} }, 1000); }
 }
+// Build a carrier tracking-page URL for a reference, or null if the carrier has
+// no entry in CARRIER_TRACK_URL. Keys matched case-insensitively; trailing "."
+// ignored (so "Central T" / "Central T." / "CENTRAL T" all match one entry).
+var _LOGI_TRACK_BY_KEY = null;
+function _logiTrackUrl(carrier, reference) {
+  if (!reference) return null;
+  if (!_LOGI_TRACK_BY_KEY) {
+    _LOGI_TRACK_BY_KEY = {};
+    for (var kk in CARRIER_TRACK_URL) {
+      if (CARRIER_TRACK_URL.hasOwnProperty(kk)) _LOGI_TRACK_BY_KEY[kk.trim().toLowerCase().replace(/\.$/, '')] = CARRIER_TRACK_URL[kk];
+    }
+  }
+  var k = (carrier == null ? '' : String(carrier)).trim().toLowerCase().replace(/\.$/, '');
+  var tpl = _LOGI_TRACK_BY_KEY[k];
+  if (!tpl) return null;
+  return tpl.replace('{TRACKING}', encodeURIComponent(reference));
+}
 // A reference (tracking/BOL) rendered as selectable text + a click-to-copy button.
-// stopPropagation so selecting/copying doesn't toggle the row's expand.
-function _logiRefCell(text, kind) {
+// If url is given, the value is a link to the carrier's tracking page (new tab).
+// stopPropagation so selecting/copying/clicking doesn't toggle the row's expand.
+function _logiRefCell(text, kind, url) {
   var tag = kind ? '<span style="color:#5f5e5a;">' + esc(kind) + '</span> ' : '';
-  return tag + '<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#a8c7e8;font-variant-numeric:tabular-nums;">' + esc(text) + '</span>'
+  var val;
+  if (url) {
+    val = '<a href="' + esc(url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="color:#85B7EB;text-decoration:none;font-variant-numeric:tabular-nums;" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">' + esc(text) + '</a>';
+  } else {
+    val = '<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#a8c7e8;font-variant-numeric:tabular-nums;">' + esc(text) + '</span>';
+  }
+  return tag + val
     + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(text) + ',this)" title="Copy tracking / BOL" style="margin-left:4px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
 }
 // Inbound status filter (lives in the log header): All / Open / Received.
@@ -3609,7 +3666,11 @@ function _logiLogHTML(shipments, bounds) {
       if (showU && s2.servingUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.servingUnits) + ' ' + _logiBulkNoun(s2.servingUnits) + '</span>');
       if (L.showStatus && s2.status) parts.push(_logiStatusBadge(s2.status));
       parts.push(_logiCarrierBit(s2));
-      if (s2.reference) parts.push(_logiRefCell(s2.reference, s2.referenceKind));
+      if (s2.reference) {
+        // Link only a Tracking # (not a BOL) — carrier pages expect the PRO/tracking value.
+        var refUrl = (s2.referenceKind === 'Tracking #') ? _logiTrackUrl(s2.carrier, s2.reference) : null;
+        parts.push(_logiRefCell(s2.reference, s2.referenceKind, refUrl));
+      }
       if (s2.eta) parts.push('ETA ' + esc(s2.eta));
       if (L.showBoxesNote && !bx.recorded) parts.push('<span style="color:#C9A227;">boxes not recorded</span>');
       var meta = parts.join(sep);
