@@ -665,6 +665,12 @@ var recallQuery = '';
 var recallResult = null;  // null = no search yet; {} with rows:[] = searched, none found
 var recallPending = '';   // a T# traced before pickRows finished loading; runs on arrival
 var _recallJumpHighlight = null;  // lot # to highlight in the ops table after a recall Run-Date jump
+// Blend Lookup (Quality sub-tab) — inverse of recall: a production Lot # -> its
+// components (part #s, ingredients, material lot T#s). Same persist-across-render
+// discipline as recall.
+var blendQuery = '';
+var blendResult = null;   // null = no search yet; { rows, lot, product, parts, materials, tnums } once searched
+var blendPending = '';    // a Lot # searched before pickRows finished loading; runs on arrival
 var selectedCustomer = null;
 var sortCol = 'date', sortDir = -1, page = 1, PAGE_SIZE = 50;
 var custLimit = 10;
@@ -1488,7 +1494,7 @@ function fetchMaterialsIfNeeded() {
       // Route through render() (not renderRecall directly) so the wrapper preserves
       // focus + caret — otherwise finishing the pick-sheet fetch mid-typing wipes
       // the input. recallQuery is kept live via onRecallInput, so the value survives.
-      if (mainSection === 'quality' && qualitySubTab === 'recall') render();
+      if (mainSection === 'quality') render();   // recall or blend: run any pending trace
     }
   });
 }
@@ -2781,9 +2787,11 @@ function renderSubBar() {
     // group so more sub-tabs (CoA, deviations, hold/release…) drop in later. The
     // small amber triangle identifies the recall tool inside the neutral Quality tab.
     var qr = qualitySubTab === 'recall';
+    var qb = qualitySubTab === 'blend';
     sb.innerHTML =
       '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
       + '<button onclick="setQualitySubTab(\'recall\')" style="'+navBtnStyle(qr)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>Recall Tracking</button>'
+      + '<button onclick="setQualitySubTab(\'blend\')" style="'+navBtnStyle(qb)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M6.2 2v3.8L2.6 12a1 1 0 0 0 .9 1.5h9a1 1 0 0 0 .9-1.5L9.8 5.8V2"/><line x1="5" y1="2" x2="11" y2="2"/><line x1="4.2" y1="9.5" x2="11.8" y2="9.5"/></svg>Blend Lookup</button>'
       + '</div>';
   } else {
     sb.innerHTML = '';
@@ -2983,8 +2991,9 @@ function setQualitySubTab(v) {
 
 // Quality view dispatcher — renders the active sub-tab's content into #content.
 function renderQuality() {
+  if (qualitySubTab === 'blend') { renderBlend(); return; }
   if (qualitySubTab === 'recall') { renderRecall(); return; }
-  renderRecall(); // default/fallback until more sub-tabs exist
+  renderRecall(); // default/fallback
 }
 
 // ══ Logistics — shipping throughput ═══════════════════════════════════════
@@ -3292,7 +3301,7 @@ function _logiTilesHTML(cur, prev, prior) {
   // Units are outbound-only (inbound has no units column). When present, Units is a
   // headline volume with a per-shipment note, plus a Units/business-day rate.
   var exNotes = [];
-  if (cur.stickUnits > 0) exNotes.push(_logiInt(cur.stickUnits) + ' stick-pack');
+  if (cur.stickUnits > 0) exNotes.push(_logiInt(cur.stickUnits) + ' stick packs');
   if (cur.servingUnits > 0) exNotes.push(_logiInt(cur.servingUnits) + ' ' + _logiBulkNoun(cur.servingUnits));
   var unitsSub = exNotes.length
     ? '<span style="color:#C9A227;">' + exNotes.join(' · ') + '</span> excluded'
@@ -3673,7 +3682,7 @@ function _logiLogHTML(shipments, bounds) {
     var hdrDate = day.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     var unrecNote = (L.showBoxesNote && day.unrec) ? ' <span style="color:#5f5e5a;">(' + day.unrec + ' ' + (day.unrec === 1 ? L.unitOne : L.unitMany) + ', boxes not recorded)</span>' : '';
     var unitsSummary = showU ? (_logiInt(day.units) + ' units · '
-      + (day.stick > 0 ? '<span style="color:#C9A227;">' + _logiInt(day.stick) + ' stick</span> · ' : '')
+      + (day.stick > 0 ? '<span style="color:#C9A227;">' + _logiInt(day.stick) + ' stick packs</span> · ' : '')
       + (day.serving > 0 ? '<span style="color:#C9A227;">' + _logiInt(day.serving) + ' ' + _logiBulkNoun(day.serving, true) + '</span> · ' : '')) : '';
     html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;margin-bottom:12px;">'
       + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;padding:11px 16px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
@@ -3695,7 +3704,7 @@ function _logiLogHTML(shipments, bounds) {
         var shownIds = ids.slice(0, 3).join(', ') + (ids.length > 3 ? ' +' + (ids.length - 3) : '');
         parts.push('<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#cfcdc7;">' + esc(L.lineIdPrefix) + ' ' + esc(shownIds) + '</span>');
       }
-      if (showU && s2.stickUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.stickUnits) + ' stick-pack units</span>');
+      if (showU && s2.stickUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.stickUnits) + ' stick packs</span>');
       if (showU && s2.servingUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.servingUnits) + ' ' + _logiBulkNoun(s2.servingUnits) + '</span>');
       if (L.showStatus && s2.status) parts.push(_logiStatusBadge(s2.status));
       parts.push(_logiCarrierBit(s2));
@@ -11208,6 +11217,217 @@ function exportRecall() {
   // Sanitize T# for a filename (drop anything that isn't alphanumeric).
   var safeT = String(tNum).replace(/[^A-Za-z0-9]/g, '') || 'unknown';
   XLSX.writeFile(wb, 'recall_' + safeT + '.xlsx');
+}
+
+
+// ── Blend Lookup view ─────────────────────────────────────────────────────
+// Inverse of the recall trace: given a production Lot #, list every component it
+// consumed — part #s, ingredient names, and material lot (T#) numbers — straight
+// off the pick sheet, so QA can identify a blend's inputs without pulling the
+// batch record.
+
+// Every component (part / material / T#) a production lot consumed, across all
+// pick lines whose Order Lot matches. One entry per T# slot.
+function traceLotComponents(rows, query) {
+  var q = normT(query);
+  if (q === '') return [];
+  var out = [], i, j, r;
+  for (i = 0; i < rows.length; i++) {
+    r = rows[i];
+    if (normT(r.orderLot) !== q) continue;
+    for (j = 0; j < r.slots.length; j++) out.push({ part: r.part, material: r.material, t: r.slots[j].t });
+  }
+  return out;
+}
+
+// Dedupe component hits by (part, material, T#) — a T# pulled on more than one
+// pick line for the same ingredient collapses to one row — and resolve the
+// finished-product name for the header (pick sheet is authoritative for the
+// components; product name is a nicety from production data / the Lot # index).
+function buildBlendResult(hits, lot) {
+  var seen = {}, rows = [], i, h, k, partSet = {}, matSet = {}, tSet = {};
+  for (i = 0; i < hits.length; i++) {
+    h = hits[i];
+    k = (h.part || '') + '|' + (h.material || '') + '|' + (h.t || '');
+    if (!seen[k]) { seen[k] = 1; rows.push({ part: h.part, material: h.material, t: h.t }); }
+    if (h.part) partSet[h.part] = 1;
+    if (h.material) matSet[h.material] = 1;
+    if (h.t) tSet[h.t] = 1;
+  }
+  // Resolve product name via the same chain the recall trace uses (both years'
+  // production data, then the Lot # index) so it agrees with those views.
+  var maps = buildLotResolution();
+  var product = maps.productByLot[lot] || (lotMap[lot] && lotMap[lot].product)
+    || (lotIndex[lot] && (lotIndex[lot].combined || lotIndex[lot].product)) || null;
+  return { rows: rows, lot: lot, product: product, parts: countKeys(partSet), materials: countKeys(matSet), tnums: countKeys(tSet) };
+}
+
+function onBlendInput(v) { blendQuery = v; }
+function onBlendKey(e) { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); runBlendTrace(); } }
+
+function runBlendTrace() {
+  var inp = document.getElementById('blend-input');
+  var raw = inp ? inp.value : blendQuery;
+  blendQuery = raw;
+  var qn = normT(raw);
+  if (qn === '') { blendResult = null; blendPending = ''; render(); return; }
+  if (pickRows.length === 0) {           // pick sheet not loaded yet — run on arrival
+    blendPending = qn; blendResult = null; fetchMaterialsIfNeeded(); render(); return;
+  }
+  trackEvent('blend_lookup', { lot: qn });
+  blendResult = buildBlendResult(traceLotComponents(pickRows, qn), raw.trim());
+  blendPending = '';
+  render();
+}
+
+function clearBlendTrace() {
+  blendQuery = ''; blendResult = null; blendPending = '';
+  render();
+  var inp = document.getElementById('blend-input');
+  if (inp) { try { inp.focus(); } catch(e){} }
+}
+
+function renderBlend() {
+  closeMsPanel();
+  fetchMaterialsIfNeeded();   // idempotent; builds pickRows from the same fetch
+  fetchLotIndexIfNeeded();    // so the product name can resolve via the Lot # index
+
+  if (blendPending && pickRows.length > 0) {
+    var pq = blendPending; blendPending = '';
+    trackEvent('blend_lookup', { lot: pq });
+    blendResult = buildBlendResult(traceLotComponents(pickRows, pq), pq);
+  }
+
+  var loading = pickRows.length === 0;
+  var q = esc(blendQuery);
+  var hasResult = blendResult && blendResult.rows;
+  var html = '';
+
+  html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:0;overflow:hidden;margin-bottom:1.25rem;">'
+    + '<div style="display:flex;flex-wrap:wrap;align-items:stretch;min-height:184px;">'
+    +   '<div style="flex:1 1 340px;padding:22px 24px;border-right:0.5px solid #2c3036;display:flex;align-items:flex-start;justify-content:center;box-sizing:border-box;">'
+    +     '<div style="width:100%;max-width:420px;">'
+    +       '<div style="font-size:15px;font-weight:600;color:#e8e6e0;">Look up a blend</div>'
+    +       '<div style="font-size:12px;color:#7d8288;margin:6px 0 14px;line-height:1.45;">Enter a product Lot # to see every component that went into it — part #s, ingredients and material lot (T#) numbers.</div>'
+    +       '<div style="display:flex;gap:8px;align-items:stretch;">'
+    +         '<input id="blend-input" type="text" value="'+q+'" placeholder="e.g. 2607105" autocomplete="off" spellcheck="false" oninput="onBlendInput(this.value)" onkeydown="onBlendKey(event)" onfocus="this.style.borderColor=\'rgba(53,138,221,0.6)\'" onblur="this.style.borderColor=\'#444441\'" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:10px 12px;min-width:160px;flex:1 1 160px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;box-sizing:border-box;" />'
+    +         '<button onclick="runBlendTrace()" style="box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;padding:0 18px;border-radius:8px;border:0.5px solid rgba(53,138,221,0.6);background:rgba(53,138,221,0.15);color:#85B7EB;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#85B7EB" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#85B7EB" stroke-width="1.3" stroke-linecap="round"/></svg>Look up</button>'
+    +         '<button onclick="clearBlendTrace()" title="Clear and start a new lookup" style="box-sizing:border-box;display:inline-flex;align-items:center;padding:0 14px;border-radius:8px;border:0.5px solid #444441;background:transparent;color:#888780;font-size:13px;font-weight:500;cursor:pointer;font-family:system-ui;visibility:'+((blendResult || blendQuery) ? 'visible' : 'hidden')+';" onmouseover="this.style.color=\'#e8e6e0\';this.style.borderColor=\'#5f5e5a\'" onmouseout="this.style.color=\'#888780\';this.style.borderColor=\'#444441\'">Clear</button>'
+    +       '</div>'
+    +       (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
+    +     '</div>'
+    +   '</div>'
+    +   '<div style="flex:1 1 340px;padding:24px 32px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">'
+    +     (hasResult ? blendSummaryHTML(blendResult)
+                     : '<div style="color:#5f5e5a;font-size:12px;text-align:center;">Enter a Lot # and look up to see the blend components here.</div>')
+    +   '</div>'
+    + '</div>'
+    + '</div>';
+
+  if (hasResult && blendResult.rows.length > 0) html += renderBlendTableHTML(blendResult);
+  document.getElementById('content').innerHTML = html;
+}
+
+// Right-pane result bubble — blue treatment (a lookup, not a recall alert):
+// Lot # + product header, then Ingredients / Part #s / Material lots metrics.
+function blendSummaryHTML(res) {
+  var lotTxt = esc(res.lot || '');
+  var flask = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#85B7EB" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M6.2 2v3.8L2.6 12a1 1 0 0 0 .9 1.5h9a1 1 0 0 0 .9-1.5L9.8 5.8V2"/><line x1="5" y1="2" x2="11" y2="2"/><line x1="4.2" y1="9.5" x2="11.8" y2="9.5"/></svg>';
+  var wellStyle = 'width:100%;max-width:500px;box-sizing:border-box;background:#0e1114;border:2px solid rgba(53,138,221,0.55);border-radius:12px;padding:18px 24px;text-align:center;box-shadow:0 0 26px rgba(53,138,221,0.07);';
+
+  if (res.rows.length === 0) {
+    return '<div style="'+wellStyle+'">'
+      + '<div style="display:inline-flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px;">'+flask
+      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#85B7EB;font-weight:700;">'+lotTxt+'</span></div>'
+      + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No components found</div>'
+      + '<div style="font-size:12px;color:#888780;">No pick-sheet records for this Lot #. Check the number and try again.</div>'
+      + '</div>';
+  }
+
+  var prodText = res.product ? esc(res.product) : '<span style="color:#888780;">(product name unavailable)</span>';
+  var divider = '<div style="width:0.5px;align-self:stretch;background:rgba(53,138,221,0.2);"></div>';
+  var bubble =
+    '<div style="'+wellStyle+'">'
+    + '<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:15px;">'+flask
+    +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#85B7EB;font-weight:700;">'+lotTxt+'</span>'
+    +   '<span style="color:#d4d7db;font-size:13px;">'+prodText+'</span>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:center;border-top:0.5px solid rgba(53,138,221,0.2);padding-top:15px;">'
+    +   recallMetricCell(res.materials.toLocaleString(), 'Ingredients') + divider
+    +   recallMetricCell(res.parts.toLocaleString(), 'Part #s') + divider
+    +   recallMetricCell(res.tnums.toLocaleString(), 'Material lots')
+    + '</div>'
+    + '</div>';
+  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:500px;">' + bubble + '</div>';
+}
+
+// A copyable value cell (readable value + copy icon) — same affordance as the
+// materials part #s and logistics tracking #.
+function _blendCopyCell(text) {
+  if (!text) return '<span style="color:#5f5e5a;">—</span>';
+  return '<span style="color:#a8c7e8;user-select:text;-webkit-user-select:text;">'+esc(text)+'</span>'
+    + '<button onclick="_logiCopy('+jsStr(text)+',this)" title="Copy" style="margin-left:4px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
+}
+
+// Flat components table: one row per (ingredient, part #, material lot). Sorted by
+// ingredient then T#. Part #s and T#s are click-to-copy.
+function renderBlendTableHTML(res) {
+  var rows = res.rows.slice().sort(function(a, b) {
+    var m = (a.material || '').toLowerCase().localeCompare((b.material || '').toLowerCase());
+    if (m !== 0) return m;
+    return String(a.t || '').localeCompare(String(b.t || ''));
+  });
+  var out = '';
+  out += '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap;">'
+    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Blend components</div>'
+    + '<button onclick="exportBlend()" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
+    +   '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>Export components</button>'
+    + '</div>';
+  out += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
+    + '<div style="overflow-x:auto;">'
+    + '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;">'
+    + '<colgroup><col style="width:48%;"/><col style="width:24%;"/><col style="width:28%;"/></colgroup>'
+    + '<thead><tr style="background:#141618;">'
+    +   recallTh('INGREDIENT', 'left') + recallTh('PART #', 'left') + recallTh('MATERIAL LOT (T#)', 'left')
+    + '</tr></thead><tbody>';
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    out += '<tr style="border-top:0.5px solid #232629;">'
+      + '<td title="'+esc(r.material || '')+'" style="padding:8px 14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#e8e6e0;">'+esc(r.material || '—')+'</td>'
+      + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+_blendCopyCell(r.part)+'</td>'
+      + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'+_blendCopyCell(r.t)+'</td>'
+      + '</tr>';
+  }
+  out += '</tbody></table></div></div>';
+  return out;
+}
+
+function exportBlend() {
+  if (typeof XLSX === 'undefined') { alert('Export library not loaded yet, please try again.'); return; }
+  if (!blendResult || !blendResult.rows.length) { alert('Nothing to export — look up a lot first.'); return; }
+  var res = blendResult;
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  var rows = [
+    ['DTF Blend Components — Lot #: ' + (res.lot || '')],
+    ['Product: ' + (res.product || '(unavailable)')],
+    ['Ingredients: ' + res.materials + ' · Part #s: ' + res.parts + ' · Material lots: ' + res.tnums],
+    ['Exported: ' + dateStr],
+    [],
+    ['Ingredient', 'Part #', 'Material Lot (T#)']
+  ];
+  var sorted = res.rows.slice().sort(function(a, b) {
+    var m = (a.material || '').toLowerCase().localeCompare((b.material || '').toLowerCase());
+    if (m !== 0) return m;
+    return String(a.t || '').localeCompare(String(b.t || ''));
+  });
+  sorted.forEach(function(r) { rows.push([r.material || '', r.part || '', r.t || '']); });
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:34},{wch:14},{wch:18}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Blend Components');
+  var safe = String(res.lot || 'unknown').replace(/[^A-Za-z0-9]/g, '') || 'unknown';
+  XLSX.writeFile(wb, 'blend_' + safe + '.xlsx');
 }
 
 
