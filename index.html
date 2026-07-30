@@ -3518,29 +3518,14 @@ function _logiCopy(text, btn) {
   if (btn) { var o = btn.innerHTML; btn.innerHTML = '<span style="color:#1D9E75;font-size:11px;">&#10003;</span>'; setTimeout(function(){ try { btn.innerHTML = o; } catch(e){} }, 1000); }
 }
 
-// Generic click-to-copy for inline text (e.g. a part #): copies the value and
-// flashes the clicked element green with a transient checkmark. Guarded so a
-// rapid double-click doesn't stack checkmarks.
-function copyText(text, el) {
-  try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch(e) {}
-  if (el && !el.getAttribute('data-cp')) {
-    el.setAttribute('data-cp', '1');
-    var oldColor = el.style.color;
-    el.style.color = '#1D9E75';
-    var chk = document.createElement('span'); chk.textContent = ' ✓'; chk.style.color = '#1D9E75';
-    el.appendChild(chk);
-    setTimeout(function(){ try { el.style.color = oldColor; if (chk.parentNode) chk.parentNode.removeChild(chk); el.removeAttribute('data-cp'); } catch(e){} }, 900);
-  }
-}
-
-// Render a list of part #s as individually copyable, readable chips for the
-// materials-row subline. Each number copies itself on click (stopPropagation so
-// it doesn't toggle the row's expand); separated by a dim middot.
+// Render a list of part #s as readable chips for the materials-row subline, each
+// followed by a click-to-copy icon button — mirrors the Logistics tracking-#
+// affordance (readable value + explicit copy icon that flashes a green check via
+// _logiCopy). stopPropagation so copying doesn't toggle the row's expand.
 function _partNumsHTML(partNums) {
   return partNums.map(function(p) {
-    return '<span onclick="event.stopPropagation();copyText(' + jsStr(p) + ',this)" title="Copy part #" '
-      + 'style="cursor:pointer;color:#8FB6DE;user-select:text;-webkit-user-select:text;" '
-      + 'onmouseover="this.style.color=\'#AFCDF0\'" onmouseout="this.style.color=\'#8FB6DE\'">' + esc(p) + '</span>';
+    return '<span style="color:#a8c7e8;user-select:text;-webkit-user-select:text;">' + esc(p) + '</span>'
+      + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(p) + ',this)" title="Copy part #" style="margin-left:3px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
   }).join('<span style="color:#4a4d4a;"> \xb7 </span>');
 }
 // Build a carrier tracking link for a reference, or null if the carrier has no
