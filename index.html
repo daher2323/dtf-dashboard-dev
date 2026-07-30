@@ -3514,9 +3514,12 @@ function _logiCopy(text, btn) {
   try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch(e) {}
   if (btn) { var o = btn.innerHTML; btn.innerHTML = '<span style="color:#1D9E75;font-size:11px;">&#10003;</span>'; setTimeout(function(){ try { btn.innerHTML = o; } catch(e){} }, 1000); }
 }
-// Build a carrier tracking-page URL for a reference, or null if the carrier has
-// no entry in CARRIER_TRACK_URL. Keys matched case-insensitively; trailing "."
+// Build a carrier tracking link for a reference, or null if the carrier has no
+// entry in CARRIER_TRACK_URL. Keys matched case-insensitively; trailing "."
 // ignored (so "Central T" / "Central T." / "CENTRAL T" all match one entry).
+// Returns { url, direct }: direct=true when the URL template carries the number
+// ({TRACKING} placeholder) and lands on the shipment; direct=false when it's a
+// static lookup page where the number must be pasted in.
 var _LOGI_TRACK_BY_KEY = null;
 function _logiTrackUrl(carrier, reference) {
   if (!reference) return null;
@@ -3529,16 +3532,32 @@ function _logiTrackUrl(carrier, reference) {
   var k = (carrier == null ? '' : String(carrier)).trim().toLowerCase().replace(/\.$/, '');
   var tpl = _LOGI_TRACK_BY_KEY[k];
   if (!tpl) return null;
-  return tpl.replace('{TRACKING}', encodeURIComponent(reference));
+  var direct = tpl.indexOf('{TRACKING}') !== -1;
+  return { url: tpl.replace('{TRACKING}', encodeURIComponent(reference)), direct: direct };
 }
+// Small external-link (arrow-out-of-box) glyph appended to tracking links.
+var _LOGI_EXT_ICON = '<svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="margin-left:3px;vertical-align:-1px;"><path d="M6.5 3H3v10h10V9.5"/><path d="M9.5 3H13v3.5"/><path d="M13 3 7.5 8.5"/></svg>';
 // A reference (tracking/BOL) rendered as selectable text + a click-to-copy button.
-// If url is given, the value is a link to the carrier's tracking page (new tab).
+// If link is given, the value becomes a tracking link (new tab):
+//   direct  -> lands on the shipment; solid, "track this shipment" tooltip.
+//   !direct -> opens a static lookup page; dotted underline flags "paste needed",
+//              and clicking auto-copies the number so it's ready to paste.
 // stopPropagation so selecting/copying/clicking doesn't toggle the row's expand.
-function _logiRefCell(text, kind, url) {
+function _logiRefCell(text, kind, link) {
   var tag = kind ? '<span style="color:#5f5e5a;">' + esc(kind) + '</span> ' : '';
   var val;
-  if (url) {
-    val = '<a href="' + esc(url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="color:#85B7EB;text-decoration:none;font-variant-numeric:tabular-nums;" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">' + esc(text) + '</a>';
+  if (link) {
+    var deco, tip, onclick;
+    if (link.direct) {
+      deco = 'text-decoration:none;';
+      tip = 'Track this shipment on the carrier site';
+      onclick = 'event.stopPropagation();';
+    } else {
+      deco = 'text-decoration:underline dotted;text-underline-offset:2px;';
+      tip = 'Opens the carrier tracking page and copies this number — paste it to track';
+      onclick = 'event.stopPropagation();_logiCopy(' + jsStr(text) + ');';
+    }
+    val = '<a href="' + esc(link.url) + '" target="_blank" rel="noopener" title="' + esc(tip) + '" onclick="' + onclick + '" style="color:#85B7EB;font-variant-numeric:tabular-nums;' + deco + '">' + esc(text) + _LOGI_EXT_ICON + '</a>';
   } else {
     val = '<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#a8c7e8;font-variant-numeric:tabular-nums;">' + esc(text) + '</span>';
   }
@@ -3668,8 +3687,8 @@ function _logiLogHTML(shipments, bounds) {
       parts.push(_logiCarrierBit(s2));
       if (s2.reference) {
         // Link only a Tracking # (not a BOL) — carrier pages expect the PRO/tracking value.
-        var refUrl = (s2.referenceKind === 'Tracking #') ? _logiTrackUrl(s2.carrier, s2.reference) : null;
-        parts.push(_logiRefCell(s2.reference, s2.referenceKind, refUrl));
+        var refLink = (s2.referenceKind === 'Tracking #') ? _logiTrackUrl(s2.carrier, s2.reference) : null;
+        parts.push(_logiRefCell(s2.reference, s2.referenceKind, refLink));
       }
       if (s2.eta) parts.push('ETA ' + esc(s2.eta));
       if (L.showBoxesNote && !bx.recorded) parts.push('<span style="color:#C9A227;">boxes not recorded</span>');
