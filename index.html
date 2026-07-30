@@ -5407,19 +5407,20 @@ function sortBy(col){ if(sortCol===col) sortDir*=-1; else{sortCol=col;sortDir=1;
 function changePage(dir){ page+=dir; updateOpsTable(); }
 
 function statusSortWeight(l){ var s=(l.status||'').toLowerCase(); if(!s||(!s.includes('complete')&&!s.includes('partial'))) return 0; return s.includes('partial')?1:2; }
-// The sheet's Start Time has NO AM/PM marker — it's a bare 12-hour "H:MM". DTF
-// runs a ~6 AM–6 PM day, so interpret hours 1–5 as PM (afternoon) and 6–12 as
-// morning/noon. Respects an explicit AM/PM if one is ever present, and passes
-// true 24-hour values (hour >= 13) through unchanged. Returns minutes-of-day, or
-// null if unparseable. (If evening runs past 6 PM ever start, source data would
-// need an explicit AM/PM to disambiguate.)
+// The sheet's Start Time has NO AM/PM marker — it's a bare 12-hour "H:MM". DTF's
+// day runs ~5:45 AM to ~4:30 PM (earliest start 5:45 AM, no evening runs), so
+// interpret hours 1–4 as PM (afternoon) and 5–12 as morning/noon — hour 5 is a
+// 5:45 AM start, not 5 PM. Respects an explicit AM/PM if one is ever present,
+// and passes true 24-hour values (hour >= 13) through unchanged. Returns
+// minutes-of-day, or null if unparseable. (If runs at 5 PM or later ever start,
+// source data would need an explicit AM/PM to disambiguate.)
 function parseStartMinutes(t){
   if(!t) return null;
   t=String(t).trim();
   var m12=t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
   if(m12){ var h=parseInt(m12[1]),min=parseInt(m12[2]),ap=m12[3].toUpperCase(); if(ap==='PM'&&h!==12)h+=12; if(ap==='AM'&&h===12)h=0; return h*60+min; }
   var m=t.match(/^(\d{1,2}):(\d{2})$/);
-  if(m){ var hh=parseInt(m[1]),mm=parseInt(m[2]); if(hh>=1&&hh<=5)hh+=12; return hh*60+mm; }
+  if(m){ var hh=parseInt(m[1]),mm=parseInt(m[2]); if(hh>=1&&hh<=4)hh+=12; return hh*60+mm; }
   return null;
 }
 // Format a bare/ambiguous Start Time for display with an explicit AM/PM so the
