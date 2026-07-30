@@ -5407,7 +5407,31 @@ function sortBy(col){ if(sortCol===col) sortDir*=-1; else{sortCol=col;sortDir=1;
 function changePage(dir){ page+=dir; updateOpsTable(); }
 
 function statusSortWeight(l){ var s=(l.status||'').toLowerCase(); if(!s||(!s.includes('complete')&&!s.includes('partial'))) return 0; return s.includes('partial')?1:2; }
-function lotSortKey(l){ if(l.startTime){ var t=l.startTime.trim(),m12=t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i); if(m12){ var h=parseInt(m12[1]),min=parseInt(m12[2]),ap=m12[3].toUpperCase(); if(ap==='PM'&&h!==12)h+=12; if(ap==='AM'&&h===12)h=0; return h*60+min; } var m24=t.match(/^(\d{1,2}):(\d{2})$/); if(m24) return parseInt(m24[1])*60+parseInt(m24[2]); } return 10000+(l.rowIdx||0); }
+// The sheet's Start Time has NO AM/PM marker — it's a bare 12-hour "H:MM". DTF
+// runs a ~6 AM–6 PM day, so interpret hours 1–5 as PM (afternoon) and 6–12 as
+// morning/noon. Respects an explicit AM/PM if one is ever present, and passes
+// true 24-hour values (hour >= 13) through unchanged. Returns minutes-of-day, or
+// null if unparseable. (If evening runs past 6 PM ever start, source data would
+// need an explicit AM/PM to disambiguate.)
+function parseStartMinutes(t){
+  if(!t) return null;
+  t=String(t).trim();
+  var m12=t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if(m12){ var h=parseInt(m12[1]),min=parseInt(m12[2]),ap=m12[3].toUpperCase(); if(ap==='PM'&&h!==12)h+=12; if(ap==='AM'&&h===12)h=0; return h*60+min; }
+  var m=t.match(/^(\d{1,2}):(\d{2})$/);
+  if(m){ var hh=parseInt(m[1]),mm=parseInt(m[2]); if(hh>=1&&hh<=5)hh+=12; return hh*60+mm; }
+  return null;
+}
+// Format a bare/ambiguous Start Time for display with an explicit AM/PM so the
+// chronological order reads correctly (e.g. "1:30" -> "1:30 PM").
+function fmtStartTime(t){
+  var mins=parseStartMinutes(t);
+  if(mins==null) return t ? esc(t) : '—';
+  var h=Math.floor(mins/60),mn=mins%60,ap=h>=12?'PM':'AM';
+  var h12=h%12; if(h12===0)h12=12;
+  return h12+':'+(mn<10?'0':'')+mn+' '+ap;
+}
+function lotSortKey(l){ var mins=parseStartMinutes(l.startTime); return mins!=null?mins:10000+(l.rowIdx||0); }
 
 function updateOpsTable() {
   var lots=getFilteredLots();
@@ -5439,7 +5463,7 @@ function updateOpsTable() {
   var om=document.getElementById('ops-metrics');
   if(om) om.innerHTML='<div class="metric info"><div class="label">Lots shown</div><div class="value">'+total.toLocaleString()+'</div></div><div class="metric"><div class="label">Units produced</div><div class="value">'+tF.toLocaleString()+'</div><div class="sub">vs '+tP.toLocaleString()+' projected</div></div><div class="metric"><div class="label">Avg deviation</div><div class="value" style="color:'+dc+'">'+(aD>0?'+':'')+aD.toFixed(1)+'%</div><div class="sub">lot by lot</div></div><div class="metric good"><div class="label">Complete lots</div><div class="value">'+comp+'</div><div class="sub">of '+total+' shown</div></div>';
   var body=document.getElementById('ops-body'); if(!body) return;
-  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; var isHi=_recallJumpHighlight&&l.lot===_recallJumpHighlight; return '<tr'+(isHi?' id="ops-hi-row" style="background:rgba(245,166,35,0.10);box-shadow:inset 3px 0 0 #F5A623;"':'')+'><td>'+esc(l.date)+'</td><td style="color:#a8b0b8;">'+esc(l.startTime||'—')+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
+  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; var isHi=_recallJumpHighlight&&l.lot===_recallJumpHighlight; return '<tr'+(isHi?' id="ops-hi-row" style="background:rgba(245,166,35,0.10);box-shadow:inset 3px 0 0 #F5A623;"':'')+'><td>'+esc(l.date)+'</td><td style="color:#a8b0b8;white-space:nowrap;">'+fmtStartTime(l.startTime)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
   var pi=document.getElementById('pageInfo'),pb=document.getElementById('prevBtn'),nb=document.getElementById('nextBtn'),rc=document.getElementById('rowCount');
   if(pi) pi.textContent='Page '+page+' of '+totalPages;
   if(pb) pb.disabled=page<=1;
