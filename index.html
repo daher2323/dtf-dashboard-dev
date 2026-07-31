@@ -154,6 +154,13 @@
     /* Production — Daily gauge cards stack */
     .daily-gauges { flex-direction: column; gap: 8px; }
 
+    /* Production — Daily "Currently running" line: let the product name wrap in
+       full (was ellipsis-truncated with no way to read it) and drop the
+       "Start · units projected" metadata to its own line beneath. */
+    .run-lot { flex-wrap: wrap; align-items: flex-start !important; }
+    .run-lot > span:nth-child(2) { white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
+    .run-lot > span:nth-child(3) { flex: 1 1 100%; margin-top: 2px; }
+
     /* Production — Daily "Completed today" and Weekly "Lots this week" per-line
        columns stack to one column (side-by-side, the lot cards squeeze and the
        deviation badge overlaps / units get cut off). */
@@ -4738,7 +4745,7 @@ function renderToday() {
       if(!items.length) return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap;background:'+bg+';color:'+txt+'">'+line+'</span><span style="color:#5f5e5a;font-style:italic">No active lots at this time</span></div>';
       return items.map(function(r){
         var tp=r.startTime?'Start: '+r.startTime+' \u00a0|\u00a0 ':'';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap;background:'+bg+';color:'+txt+'">'+line+'</span><span style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.product+'</span><span style="color:#888780;white-space:nowrap;font-size:11px">'+tp+(r.projected?r.projected.toLocaleString()+' units projected':'')+'</span></div>';
+        return '<div class="run-lot" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap;background:'+bg+';color:'+txt+'">'+line+'</span><span style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.product+'</span><span style="color:#888780;white-space:nowrap;font-size:11px">'+tp+(r.projected?r.projected.toLocaleString()+' units projected':'')+'</span></div>';
       }).join('');
     }).join(''):'<div style="padding:8px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px;color:#5f5e5a;font-style:italic">Live data not available for past days</div>')
     +'<div style="border-top:0.5px solid #2c2c2a;margin-top:.75rem;padding-top:.75rem">'
