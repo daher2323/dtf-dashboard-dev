@@ -123,10 +123,12 @@
        scrollable tab bar below. Single-row, the tabs get squeezed to ~0 width
        between the brand name and the controls and vanish in portrait. */
     .app-bar > div { flex-wrap: wrap; padding: 6px 10px !important; row-gap: 6px; align-items: center; }
-    .brand-wrap { order: 1; padding: 0 !important; margin: 0 !important; }
-    .brand-wrap > div { display: none; }              /* hide company name/subtitle; keep the DTF mark */
-    .brand-wrap svg { width: 36px; height: 36px; }
-    .app-bar > div > div:last-child { order: 2; }      /* Refresh / Admin controls stay on the top row */
+    .brand-wrap { order: 1; padding: 0 !important; margin: 0 10px 0 0 !important; border-right: none; flex: 1 1 auto; min-width: 0; gap: 8px; }
+    .brand-wrap > div { min-width: 0; }                /* keep the company name + subtitle; fills the free top-row space */
+    .brand-name { font-size: 12.5px; line-height: 1.15; }
+    .brand-sub { font-size: 9px; margin-top: 1px; }
+    .brand-wrap svg { width: 34px; height: 34px; }
+    .app-bar > div > div:last-child { order: 2; flex-shrink: 0; }   /* Refresh / Admin stay right on the top row */
     .main-tabs { order: 3; flex: 1 0 100%; width: 100%; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding: 2px 0 0; gap: 6px; }
     .main-tabs::-webkit-scrollbar { display: none; }
     .main-tab { flex-shrink: 0; padding: 6px 10px; }
