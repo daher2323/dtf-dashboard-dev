@@ -200,14 +200,41 @@
     .concentration-strip > span:last-child { display: none; } /* "Higher % = …" helper */
 
     /* Customers — table: hide bars (3rd), avg run (6th), sparkline (8th) */
+    /* Customers fleet row: keep rank | name | units | %prod (drop the bars,
+       lots, avg-run and sparkline columns) with wider number tracks so the
+       values + delta badges stop overlapping. */
     .customer-row {
-      grid-template-columns: 24px 1.5fr 70px 50px 48px !important;
+      grid-template-columns: 22px 1fr 92px 64px !important;
       gap: 8px !important;
       padding: 8px 10px !important;
     }
+    /* !important: children 3 (bars) and 8 (sparkline) carry inline display:flex,
+       which would otherwise win over this rule and leave them visible. */
     .customer-row > :nth-child(3),
+    .customer-row > :nth-child(5),
     .customer-row > :nth-child(6),
-    .customer-row > :nth-child(8) { display: none; }
+    .customer-row > :nth-child(8) { display: none !important; }
+
+    /* Open Orders → Summary: the two "on the books" cards stack; the aging
+       bucket tiles wrap 2-up instead of overflowing off-screen. */
+    .onbooks-row { flex-direction: column; }
+    .aging-tiles { flex-wrap: wrap; }
+    .aging-tiles > div { flex: 1 1 44% !important; }
+
+    /* Open Orders → Labels: the blocker grid keeps its columns and scrolls
+       horizontally instead of crushing the Product column to ~1 char wide. */
+    .labels-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .labels-scroll > div { min-width: 760px; }
+
+    /* Procurement (Jars/Bottles/Lids/…) rows reflow: name (+ chevron) on top,
+       the 2025/2026 bars full-width below, then Lots / % side by side; sparkline
+       dropped. Otherwise the fixed-width flex children overflow and overlap. */
+    .proc-row { flex-wrap: wrap; row-gap: 6px; }
+    .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; }
+    .proc-row > :nth-child(2) { flex: 1 1 100% !important; order: 2; min-width: 0; }
+    .proc-row > :nth-child(3) { width: auto !important; flex: 0 0 auto; order: 3; }
+    .proc-row > :nth-child(4) { width: auto !important; flex: 0 0 auto; order: 3; border-left: none !important; padding-left: 0 !important; margin-left: 16px; }
+    .proc-row > :nth-child(5) { display: none !important; }
 
     /* Customers — quarter drill-down KPI strip (5 chips) → 2-col grid;
        last chip ("Format mix") spans full width on its own row */
@@ -9660,7 +9687,7 @@ function renderOrdersSummary() {
       + '</div>'
       + '</div>';
   }
-  var weeksHTML = '<div style="display:flex;gap:12px;margin-bottom:16px;">'
+  var weeksHTML = '<div class="onbooks-row" style="display:flex;gap:12px;margin-bottom:16px;">'
     + typeCard({
         title: 'Powder on the books', weeks: pWeeksBooks, maxWeeks: POWDER_WEEKS_MAX,
         color: LINE_COLOR['line#1'], lineLabel: 'Line #1 + #4',
@@ -10014,7 +10041,7 @@ function renderOrdersSummary() {
       +   capsulePill
       + '</div>'
       + filterControls
-      + bodyHTML
+      + '<div class="labels-scroll">' + bodyHTML + '</div>'
       + '</div>';
   }
 
@@ -10252,7 +10279,7 @@ function renderOrdersSummary() {
       + '</div>'
       + '</div>';
   }
-  var agingCardsHTML = '<div style="display:flex;gap:10px;">' + agingOrder.map(agingCardHTML).join('') + '</div>';
+  var agingCardsHTML = '<div class="aging-tiles" style="display:flex;gap:10px;">' + agingOrder.map(agingCardHTML).join('') + '</div>';
 
   var agingDrillHTML = '';
   if (agingDrilldown && agingBuckets[agingDrilldown] && agingBuckets[agingDrilldown].rows.length) {
@@ -10519,7 +10546,7 @@ function renderProcurement() {
       return '<div style="width:7px;height:'+h+'px;background:'+col+';opacity:'+op+';border-radius:1px 1px 0 0;align-self:flex-end;"></div>';
     }).join('');
 
-    var header = '<div onclick="toggleProc(\''+sid+'\', '+jsStr(cd.sku)+')" '
+    var header = '<div onclick="toggleProc(\''+sid+'\', '+jsStr(cd.sku)+')" class="proc-row" '
       +'style="display:flex;align-items:center;gap:0;padding:11px 14px 11px 12px;cursor:pointer;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
       +'<div style="width:160px;flex-shrink:0;">'
         +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;margin-bottom:4px;">'+cd.sku+'</div>'
