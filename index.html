@@ -119,17 +119,31 @@
   @media (max-width: 768px) {
     .shell { padding: 8px; }
     .app-bar { padding: 0 8px; min-height: 56px; }
-    .brand-wrap { padding: 8px 12px 8px 4px; margin-right: 8px; }
-    .brand-name { font-size: 15px; }
-    .brand-sub { font-size: 10px; }
-
-    /* Top nav — scrollable horizontally */
-    .main-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding: 8px 0; }
+    /* App bar → two rows on phones: [logo · Refresh/Admin] on top, the full-width
+       scrollable tab bar below. Single-row, the tabs get squeezed to ~0 width
+       between the brand name and the controls and vanish in portrait. */
+    .app-bar > div { flex-wrap: wrap; padding: 6px 10px !important; row-gap: 6px; align-items: center; }
+    .brand-wrap { order: 1; padding: 0 !important; margin: 0 !important; }
+    .brand-wrap > div { display: none; }              /* hide company name/subtitle; keep the DTF mark */
+    .brand-wrap svg { width: 36px; height: 36px; }
+    .app-bar > div > div:last-child { order: 2; }      /* Refresh / Admin controls stay on the top row */
+    .main-tabs { order: 3; flex: 1 0 100%; width: 100%; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding: 2px 0 0; gap: 6px; }
     .main-tabs::-webkit-scrollbar { display: none; }
     .main-tab { flex-shrink: 0; padding: 6px 10px; }
-    .main-tab-icon { width: 26px; height: 26px; }
+    .main-tab-icon { width: 24px; height: 24px; }
 
-    .full-card { padding: 0.75rem; }
+    /* Production → Detail toolbar: the date-nav and the filter bar each take a
+       full-width row instead of a single row that overflows the viewport (which
+       used to push the whole page sideways). Filters wrap 2-up; search + export
+       span the full width. */
+    .detail-toolbar { flex-wrap: wrap; }
+    .detail-toolbar > div:first-child { flex: 1 1 100%; }
+    .detail-toolbar .filters { flex: 1 1 100% !important; flex-wrap: wrap; }
+    .detail-toolbar .filters input[type=text] { flex: 1 1 100%; }
+    .detail-toolbar .filters .ms-wrap { flex: 1 1 44%; }
+    .detail-toolbar .filters .filter-export-btn { margin-left: 0; }
+
+    .full-card { padding: 0.75rem; overflow-x: auto; }   /* wide inner tables scroll within the card, not the page */
     .full-card h3 { font-size: 11px; }
 
     /* Production — Daily gauge cards stack */
@@ -147,8 +161,12 @@
     .proj-kpi-divider { display: none; }
     .pace-comparison-panel { grid-column: 1 / -1; padding-left: 0 !important; }
 
-    /* Production — Product type split + Product mix two-column → single column */
+    /* Production — Product type split + Product mix two-column → single column.
+       min-width:0 lets the 1fr cells shrink below their content's min-width
+       (otherwise a wide inner table expands the track and forces the page wide;
+       the card's own overflow-x:auto then scrolls that table). */
     .pm-twocol { grid-template-columns: 1fr !important; }
+    .pm-twocol > * { min-width: 0; }
 
     /* Customers — concentration strip stacks */
     .concentration-strip { flex-direction: column; align-items: flex-start !important; gap: 8px !important; height: auto !important; padding: 8px 0; }
@@ -174,10 +192,12 @@
     .qtr-drilldown { flex-direction: column; gap: 12px; }
     .qtr-drilldown-sep { display: none; }
 
-    /* Sub-bar / column header — relax sticky tops so they don't pile on top of
-       each other on a phone where the app-bar shrank. */
-    .sub-bar-outer { top: 56px; }
-    .cust-col-header-outer { top: 96px; }
+    /* Sub-bar sticks below the now two-row app-bar (logo row + tab row = 95px).
+       The customers column header is un-stuck on mobile — the sub-bar's height
+       varies (its controls wrap), so a fixed offset would overlap; letting the
+       header scroll normally avoids the guesswork. */
+    .sub-bar-outer { top: 95px; }
+    .cust-col-header-outer { position: static; top: auto; }
   }
 
   /* Customer drill-down — "2026 pace vs 2025 full year" benchmark bar.
@@ -5397,7 +5417,7 @@ function renderDetail() {
   if((filterState.customer||[]).length) rebuildProductOptions();
 
   document.getElementById('content').innerHTML =
-    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:12px;">'
+    '<div class="detail-toolbar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:12px;">'
     +  '<div style="flex-shrink:0;">'+navHTML+'</div>'
     +  '<div class="filters" style="flex:1;margin-bottom:0;">'
     +    '<input type="text" id="fSearch" placeholder="Search lot # or product\u2026" oninput="applyFilters()">'
