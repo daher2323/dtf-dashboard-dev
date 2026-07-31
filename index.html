@@ -149,6 +149,24 @@
     /* Production — Daily gauge cards stack */
     .daily-gauges { flex-direction: column; gap: 8px; }
 
+    /* Production — Daily "Completed today" per-line columns stack to one column
+       (side-by-side, the lot cards squeeze and the deviation badge overlaps). */
+    #dailyCompletedGrid > div { grid-template-columns: 1fr !important; }
+
+    /* Production — Weekly per-line cards (Line #1/#2/#4) stack; each gets full
+       width so its day-chips and jar/container mix stop getting cut off. */
+    .weekly-line-cards { grid-template-columns: 1fr !important; }
+    /* Weekly top KPI strip → 2-up; drop the thin vertical divider cells (even
+       children) so the four stats don't leave dead grid gaps. */
+    .weekly-kpi-strip { grid-template-columns: repeat(2, 1fr) !important; gap: 14px 10px; }
+    .weekly-kpi-strip > div:nth-child(even) { display: none; }
+
+    /* Trend — the "% to target" bar's readout labels are absolutely positioned
+       and collide on a phone; the same three numbers already show in the KPI
+       cards above, so hide just the labels (keep the bar + the "% to target"
+       pill). */
+    .target-bar-readouts { display: none !important; }
+
     /* Production — Daily KPI strip (2-col grid, hide vertical dividers).
        !important needed because the inline style sets display:flex. */
     .today-kpi-strip { display: grid !important; grid-template-columns: repeat(2, 1fr); gap: 14px 10px; }
@@ -5072,7 +5090,7 @@ function renderWeekly() {
           +'<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#888780" stroke-width="1.2"/><line x1="6" y1="5" x2="6" y2="8.5" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><circle cx="6" cy="3.2" r=".7" fill="#888780"/></svg>'
           +'<span style="font-size:11px;color:#888780;font-family:system-ui;">'+weekNote+'</span></div>':'')
         // stat row
-        +'<div style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr 0.5px 1fr;margin-bottom:14px;">'
+        +'<div class="weekly-kpi-strip" style="display:grid;grid-template-columns:1fr 0.5px 1fr 0.5px 1fr 0.5px 1fr;margin-bottom:14px;">'
           +'<div style="text-align:center;padding:0 10px;">'
             +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;font-family:system-ui;">'+(isLiveWeek?'Total units · Week to date':'Total units')+'</div>'
             +'<div style="font-size:22px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+weekUnits.toLocaleString()+'</div>'
@@ -5123,7 +5141,7 @@ function renderWeekly() {
     })()
 
     // ── Line cards ──
-    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">'
+    +'<div class="weekly-line-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">'
     +ALL_LINES.map(function(line){
       var k2=lk(line),color=LINE_COLOR[k2]||'#888780',trackColor=LINE_TRACK[k2]||'#2c2c2a';
       var type=LINE_TYPE[k2]||'';
@@ -6130,7 +6148,7 @@ function renderPerformance() {
       // marker so the two labels don't overlap visually.
       +(function(){
         var _hideFill = Math.abs(actualPct - tOnBar) < 10;
-        return '<div style="position:relative;height:28px;margin-top:5px;">'
+        return '<div class="target-bar-readouts" style="position:relative;height:28px;margin-top:5px;">'
           // Left: anchored to gray-fill endpoint
           +'<div style="position:absolute;top:0;left:'+actualPct.toFixed(1)+'%;transform:translateX(-50%);text-align:center;white-space:nowrap;'+(_hideFill?'display:none;':'')+'">'
             +'<div style="font-size:11px;font-weight:500;color:#378ADD;font-variant-numeric:tabular-nums;">'+totalUnits.toLocaleString()+'</div>'
