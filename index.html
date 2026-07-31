@@ -233,13 +233,14 @@
        (+ chevron), the 2025/2026 bars full-width below, then Lots / % as two
        equal left-aligned columns; sparkline dropped. Otherwise the fixed-width
        flex children overflow, the badge overlaps the year, and Lots/% misalign. */
-    /* !important: the row's inline style sets gap:0 (shorthand → row-gap:0),
-       which otherwise wins over this rule and leaves no space between the
-       stacked lines. */
-    .proc-row { flex-wrap: wrap; gap: 12px 12px !important; }
-    .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; display: flex !important; align-items: center; gap: 8px; }
+    /* Spacing via explicit margins, NOT flex gap: the row's inline style sets
+       gap:0, and iOS Safari can drop the two-value `gap` shorthand override, so
+       margins are the reliable way to space the stacked lines (name → bars →
+       Lots/%). column-gap is a single-value property (safe) for the Lots/% pair. */
+    .proc-row { flex-wrap: wrap; column-gap: 12px; }
+    .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; display: flex !important; align-items: center; gap: 8px; margin-bottom: 10px; }
     .proc-row > :nth-child(1) > div:first-child { margin-bottom: 0 !important; }
-    .proc-row > :nth-child(2) { flex: 1 1 100% !important; order: 2; min-width: 0; }
+    .proc-row > :nth-child(2) { flex: 1 1 100% !important; order: 2; min-width: 0; margin-bottom: 6px; }
     .proc-row > :nth-child(3),
     .proc-row > :nth-child(4) { width: auto !important; flex: 1 1 0 !important; order: 3; text-align: left !important; border-left: none !important; padding-left: 0 !important; margin-left: 0 !important; }
     .proc-row > :nth-child(5) { display: none !important; }
