@@ -123,9 +123,12 @@
        scrollable tab bar below. Single-row, the tabs get squeezed to ~0 width
        between the brand name and the controls and vanish in portrait. */
     .app-bar > div { flex-wrap: wrap; padding: 6px 10px !important; row-gap: 6px; align-items: center; }
-    .brand-wrap { order: 1; padding: 0 !important; margin: 0 10px 0 0 !important; border-right: none; flex: 1 1 auto; min-width: 0; gap: 8px; }
+    /* flex-basis:0 (not auto) so the brand shrinks and shares the top row with
+       the Live/Admin controls (vertically centered) instead of taking the whole
+       width and pushing them onto a second line. */
+    .brand-wrap { order: 1; padding: 0 !important; margin: 0 10px 0 0 !important; border-right: none; flex: 1 1 0; min-width: 0; gap: 8px; }
     .brand-wrap > div { min-width: 0; }                /* keep the company name + subtitle; fills the free top-row space */
-    .brand-name { font-size: 12.5px; line-height: 1.15; }
+    .brand-name { font-size: 12px; line-height: 1.15; }
     .brand-sub { font-size: 9px; margin-top: 1px; }
     .brand-wrap svg { width: 34px; height: 34px; }
     .app-bar > div > div:last-child { order: 2; flex-shrink: 0; }   /* Refresh / Admin stay right on the top row */
@@ -230,13 +233,22 @@
        (+ chevron), the 2025/2026 bars full-width below, then Lots / % as two
        equal left-aligned columns; sparkline dropped. Otherwise the fixed-width
        flex children overflow, the badge overlaps the year, and Lots/% misalign. */
-    .proc-row { flex-wrap: wrap; row-gap: 8px; }
+    .proc-row { flex-wrap: wrap; row-gap: 12px; }
     .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; display: flex !important; align-items: center; gap: 8px; }
     .proc-row > :nth-child(1) > div:first-child { margin-bottom: 0 !important; }
     .proc-row > :nth-child(2) { flex: 1 1 100% !important; order: 2; min-width: 0; }
     .proc-row > :nth-child(3),
     .proc-row > :nth-child(4) { width: auto !important; flex: 1 1 0 !important; order: 3; text-align: left !important; border-left: none !important; padding-left: 0 !important; margin-left: 0 !important; }
     .proc-row > :nth-child(5) { display: none !important; }
+
+    /* Procurement toolbar stacks: the "… usage — Q1 … sorted by YTD" meta line
+       and the "Show …s with zero usage" checkbox each span the full width (no
+       more 3-4 line wraps), and the search + Export drop to their own row with
+       the search growing to fill it. */
+    .proc-toolbar { flex-direction: column; align-items: stretch !important; gap: 10px; }
+    .proc-toolbar > div:last-child { justify-content: flex-start; }
+    .proc-toolbar > div:last-child > div:first-child { flex: 1 1 auto; }
+    .proc-toolbar #procSearchInput { width: 100% !important; box-sizing: border-box; }
 
     /* Customers — quarter drill-down KPI strip (5 chips) → 2-col grid;
        last chip ("Format mix") spans full width on its own row */
@@ -10715,7 +10727,7 @@ function renderProcurement() {
     +'</button>'
   +'</div>';
   document.getElementById('content').innerHTML =
-    '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;gap:12px;">'
+    '<div class="proc-toolbar" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;gap:12px;">'
       +'<div>'
         +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">'+Label+' usage — Q1 2025 &#x2192; present &middot; sorted by YTD &middot; thru '+ytdLabelFull+'</div>'
         +((hiddenCount > 0 || showZeroDes)
