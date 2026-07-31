@@ -233,7 +233,10 @@
        (+ chevron), the 2025/2026 bars full-width below, then Lots / % as two
        equal left-aligned columns; sparkline dropped. Otherwise the fixed-width
        flex children overflow, the badge overlaps the year, and Lots/% misalign. */
-    .proc-row { flex-wrap: wrap; row-gap: 12px; }
+    /* !important: the row's inline style sets gap:0 (shorthand → row-gap:0),
+       which otherwise wins over this rule and leaves no space between the
+       stacked lines. */
+    .proc-row { flex-wrap: wrap; gap: 12px 12px !important; }
     .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; display: flex !important; align-items: center; gap: 8px; }
     .proc-row > :nth-child(1) > div:first-child { margin-bottom: 0 !important; }
     .proc-row > :nth-child(2) { flex: 1 1 100% !important; order: 2; min-width: 0; }
