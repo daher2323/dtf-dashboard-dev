@@ -226,14 +226,16 @@
     .labels-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .labels-scroll > div { min-width: 760px; }
 
-    /* Procurement (Jars/Bottles/Lids/…) rows reflow: name (+ chevron) on top,
-       the 2025/2026 bars full-width below, then Lots / % side by side; sparkline
-       dropped. Otherwise the fixed-width flex children overflow and overlap. */
-    .proc-row { flex-wrap: wrap; row-gap: 6px; }
-    .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; }
+    /* Procurement (Jars/Bottles/Lids/…) rows reflow: name + badge inline on top
+       (+ chevron), the 2025/2026 bars full-width below, then Lots / % as two
+       equal left-aligned columns; sparkline dropped. Otherwise the fixed-width
+       flex children overflow, the badge overlaps the year, and Lots/% misalign. */
+    .proc-row { flex-wrap: wrap; row-gap: 8px; }
+    .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; display: flex !important; align-items: center; gap: 8px; }
+    .proc-row > :nth-child(1) > div:first-child { margin-bottom: 0 !important; }
     .proc-row > :nth-child(2) { flex: 1 1 100% !important; order: 2; min-width: 0; }
-    .proc-row > :nth-child(3) { width: auto !important; flex: 0 0 auto; order: 3; }
-    .proc-row > :nth-child(4) { width: auto !important; flex: 0 0 auto; order: 3; border-left: none !important; padding-left: 0 !important; margin-left: 16px; }
+    .proc-row > :nth-child(3),
+    .proc-row > :nth-child(4) { width: auto !important; flex: 1 1 0 !important; order: 3; text-align: left !important; border-left: none !important; padding-left: 0 !important; margin-left: 0 !important; }
     .proc-row > :nth-child(5) { display: none !important; }
 
     /* Customers — quarter drill-down KPI strip (5 chips) → 2-col grid;
@@ -245,6 +247,13 @@
     /* Customers — quarter drill-down two-column section stacks */
     .qtr-drilldown { flex-direction: column; gap: 12px; }
     .qtr-drilldown-sep { display: none; }
+
+    /* Sub-bar controls wrap on phones instead of overflowing; the Customers
+       search drops to its own full-width row while the Top 10/25/All scope
+       stays inline with the Open Orders/Customers toggle. */
+    #sub-bar { flex-wrap: wrap; row-gap: 8px; }
+    #sub-bar .cust-search-wrap { flex: 1 1 100%; margin-left: 0 !important; min-width: 0; }
+    #sub-bar .cust-search-input { width: 100% !important; }
 
     /* Sub-bar sticks below the now two-row app-bar (logo row + tab row = 95px).
        The customers column header is un-stuck on mobile — the sub-bar's height
@@ -2805,19 +2814,20 @@ function renderSubBar() {
         + '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><polyline points="3,2 7,5 3,8" stroke="#444441" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
         + '<span style="font-size:12px;font-weight:500;color:#e8e6e0;">'+esc(selectedCustomer)+'</span>';
     } else {
+      // Flat siblings (toggle · scope · search) so mobile can put the scope
+      // inline with the Open Orders/Customers toggle and drop the search to its
+      // own full-width row. Desktop: search pushes right via margin-left:auto.
       sb.innerHTML =
         salesToggle
-        + '<div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">'
-        + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+        + '<div class="cust-scope" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;flex-shrink:0;">'
         +   '<button onclick="setCustLimit(10)" style="'+navBtnStyle(custLimit===10)+'">Top 10</button>'
         +   '<button onclick="setCustLimit(25)" style="'+navBtnStyle(custLimit===25)+'">Top 25</button>'
         +   '<button onclick="setCustLimit(0)" style="'+navBtnStyle(custLimit===0)+'">All</button>'
         + '</div>'
-        + '<div class="cust-search-wrap">'
+        + '<div class="cust-search-wrap" style="margin-left:auto;">'
         +   '<span class="cust-search-icon"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#888780" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#888780" stroke-width="1.3" stroke-linecap="round"/></svg></span>'
         +   '<input id="customerSearchInput" type="text" class="cust-search-input" placeholder="Search customers&hellip;" aria-label="Search customers" autocomplete="off" value="'+esc(customerSearchQuery)+'" oninput="onCustomerSearchInput(this.value)" onkeydown="onCustomerSearchKey(event)" />'
         +   '<button id="customerSearchClear" type="button" class="cust-search-clear" aria-label="Clear search" style="display:'+(customerSearchQuery?'inline-flex':'none')+';" onclick="clearCustomerSearch(true)">&times;</button>'
-        + '</div>'
         + '</div>';
     }
   } else if (mainSection === 'procurement') {
@@ -4266,6 +4276,7 @@ function render() {
   requestAnimationFrame(function() {
     requestAnimationFrame(function() {
       window.scrollTo(0, scrollY);
+      syncSubBarTop();
       if (focusId) {
         var el = document.getElementById(focusId);
         if (el && typeof el.focus === 'function') {
@@ -4278,6 +4289,21 @@ function render() {
     });
   });
 }
+
+// The app-bar is a fixed single row on desktop but wraps to two rows (and a
+// variable height, since the brand name wraps) on phones — so the sub-bar's
+// sticky `top` can't be a fixed px value or it slides under the app-bar. Pin it
+// to the app-bar's measured height on mobile; clear it on desktop so the CSS
+// value (68px) takes over.
+function syncSubBarTop() {
+  var sb = document.getElementById('sub-bar-outer');
+  var ab = document.querySelector('.app-bar');
+  if (!sb || !ab) return;
+  if (window.innerWidth <= 768) sb.style.top = Math.round(ab.getBoundingClientRect().height) + 'px';
+  else sb.style.top = '';
+}
+window.addEventListener('resize', syncSubBarTop);
+window.addEventListener('orientationchange', function(){ setTimeout(syncSubBarTop, 100); });
 
 function renderImpl() {
   closeMsPanel();
