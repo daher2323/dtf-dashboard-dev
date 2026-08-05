@@ -3694,15 +3694,40 @@ function _logiRefCell(text, kind, link) {
   return tag + val
     + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(text) + ',this)" title="Copy tracking / BOL" style="margin-left:4px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
 }
+// Open shipments across ALL dates for the active direction. Counted period-
+// independently on purpose: something in transit since last month is still
+// outstanding today, and the count is what tells you to go look.
+function _logiOpenShipments() {
+  var ships = _logiShipmentsCache || groupLotsToShipments(_logiActiveData() || []);
+  var out = [], i;
+  for (i = 0; i < ships.length; i++) if (ships[i].date && _logiStatusMatch(ships[i].status, 'open')) out.push(ships[i]);
+  return out;
+}
+// Whole days between a shipment date and today (0 = today, negative clamped off).
+function _logiDaysAgo(d) {
+  var t0 = new Date(), a = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  t0 = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate());
+  var n = Math.round((t0 - a) / 86400000);
+  return n > 0 ? n : 0;
+}
+// Age tag for an open shipment — amber past a week so stale ones stand out.
+function _logiAgeTag(d) {
+  var n = _logiDaysAgo(d);
+  if (!n) return '';
+  return '<span title="' + n + ' day' + (n === 1 ? '' : 's') + ' since this date" style="color:' + (n >= 7 ? '#C9A227' : '#5f5e5a') + ';font-variant-numeric:tabular-nums;">' + n + 'd</span>';
+}
 // Inbound status filter (lives in the log header): All / Open / Received.
+// Open carries an all-dates count so outstanding work is visible from any period.
 function _logiStatusFilterHTML() {
   function btn(v, label, title) { return '<button onclick="setLogiStatusFilter(\'' + v + '\')" title="' + esc(title) + '" style="' + navBtnStyle(logiStatusFilter === v) + '">' + label + '</button>'; }
+  var nOpen = _logiOpenShipments().length;
+  var openLabel = 'Open' + (nOpen ? ' <span style="font-variant-numeric:tabular-nums;opacity:.75;">(' + nOpen + ')</span>' : '');
   return '<div style="display:flex;align-items:center;gap:8px;">'
     + '<span style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">Status</span>'
     + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    +   btn('all', 'All', 'All statuses')
-    +   btn('open', 'Open', 'In transit or pending pickup')
-    +   btn('received', 'Received', 'Already received')
+    +   btn('all', 'All', 'All statuses in the selected period')
+    +   btn('open', openLabel, 'In transit or pending pickup — all dates, ignores the selected period')
+    +   btn('received', 'Received', 'Already received, in the selected period')
     + '</div></div>';
 }
 // Log header: inbound status filter (left) + search box (right, top of the table).
@@ -3736,13 +3761,16 @@ function _logiLogHTML(shipments, bounds) {
   var L = _logiLabels();
   var q = (logiSearch || '').toLowerCase().trim();
   var statusF = (L.showStatus && logiStatusFilter !== 'all') ? logiStatusFilter : null;
+  // "Open" is a state query, not a period query: a delivery still in transit from
+  // last week is outstanding no matter which month you're looking at, so the Open
+  // filter drops the period bounds the same way a search does. Received/All stay
+  // period-scoped — those are historical readings of a bounded window.
+  var allDates = !!q || statusF === 'open';
   var inRange = [], i;
   for (i = 0; i < shipments.length; i++) {
     var s = shipments[i];
     if (!s.date) continue;
-    // A search spans ALL dates (locate a PO/tracking regardless of the selected
-    // period); with no search, respect the period bounds.
-    if (!q && (s.date < bounds.start || s.date > bounds.end)) continue;
+    if (!allDates && (s.date < bounds.start || s.date > bounds.end)) continue;
     if (statusF && !_logiStatusMatch(s.status, statusF)) continue;
     if (q) {
       var hay = (s.customer + ' ' + s.carrier + ' ' + s.reference + ' ' + s.eta).toLowerCase();
@@ -3753,7 +3781,9 @@ function _logiLogHTML(shipments, bounds) {
   }
   if (!inRange.length) {
     var fdesc = statusF === 'open' ? ' open' : statusF === 'received' ? ' received' : '';
-    var msg = q ? 'No' + fdesc + ' ' + L.unitMany + ' match “' + esc(logiSearch) + '”.' : 'No' + fdesc + ' ' + L.unitMany + ' in this period.';
+    var msg = q ? 'No' + fdesc + ' ' + L.unitMany + ' match “' + esc(logiSearch) + '”.'
+      : (statusF === 'open' ? 'Nothing outstanding — every ' + L.unitOne + ' on record is received or closed.'
+                            : 'No' + fdesc + ' ' + L.unitMany + ' in this period.');
     return '<div style="padding:2.5rem;text-align:center;color:#5f5e5a;font-size:13px;font-family:system-ui;">' + msg + '</div>';
   }
   inRange.sort(function(a, b) {
@@ -3779,9 +3809,9 @@ function _logiLogHTML(shipments, bounds) {
     + '<span></span><span style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">' + esc(L.entity) + '</span>'
     + (showU ? '<span style="' + thN + '">Units</span>' : '')
     + '<span style="' + thN + '">Boxes</span><span style="' + thN + '">Pallets</span></div>';
-  // No cap on the period-scoped view (a day/week/month is bounded); only an
-  // all-dates search can be large, so cap that.
-  var cap = q ? LOGI_LOG_CAP : Infinity;
+  // No cap on the period-scoped view (a day/week/month is bounded); only the
+  // all-dates lists (search, open) can be large, so cap those.
+  var cap = allDates ? LOGI_LOG_CAP : Infinity;
   var html = '', shown = 0, truncated = false, d, k;
   for (d = 0; d < days.length; d++) {
     if (shown >= cap) { truncated = true; break; }
@@ -3813,7 +3843,12 @@ function _logiLogHTML(shipments, bounds) {
       }
       if (showU && s2.stickUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.stickUnits) + ' stick packs</span>');
       if (showU && s2.servingUnits > 0) parts.push('<span style="color:#C9A227;">' + _logiInt(s2.servingUnits) + ' ' + _logiBulkNoun(s2.servingUnits) + '</span>');
-      if (L.showStatus && s2.status) parts.push(_logiStatusBadge(s2.status));
+      if (L.showStatus && s2.status) {
+        parts.push(_logiStatusBadge(s2.status));
+        // Age sits with the badge for anything still open — how long it's been
+        // outstanding is the thing you want when reading an open list.
+        if (_logiStatusMatch(s2.status, 'open')) { var ageT = _logiAgeTag(s2.date); if (ageT) parts.push(ageT); }
+      }
       parts.push(_logiCarrierBit(s2));
       if (s2.reference) {
         // Link only a Tracking # (not a BOL) — carrier pages expect the PRO/tracking value.
@@ -3856,11 +3891,19 @@ function _logiLogHTML(shipments, bounds) {
   }
   if (truncated) {
     var remaining = inRange.length - shown;
-    html += '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">' + remaining + ' more ' + (remaining === 1 ? L.unitOne : L.unitMany) + ' — narrow the search to see them all.</div>';
+    html += '<div style="padding:12px;text-align:center;color:#5f5e5a;font-size:11px;font-family:system-ui;">' + remaining + ' more ' + (remaining === 1 ? L.unitOne : L.unitMany) + ' — ' + (q ? 'narrow the search' : 'search for a specific ' + L.lineIdPrefix + ' or vendor') + ' to see them all.</div>';
   }
-  // When searching, results span all dates (not just the selected period) so you
-  // can locate a shipment by PO/tracking from anywhere.
-  var note = q ? '<div style="font-size:11px;color:#5f5e5a;margin-bottom:10px;font-family:system-ui;">Searching all dates for &ldquo;' + esc(logiSearch) + '&rdquo; &middot; ' + inRange.length + ' ' + (inRange.length === 1 ? L.unitOne : L.unitMany) + '.</div>' : '';
+  // Both all-dates modes (search, open) say so explicitly — otherwise the list
+  // silently disagrees with the period navigator above it.
+  var note = '';
+  if (q) {
+    note = '<div style="font-size:11px;color:#5f5e5a;margin-bottom:10px;font-family:system-ui;">Searching all dates for &ldquo;' + esc(logiSearch) + '&rdquo; &middot; ' + inRange.length + ' ' + (inRange.length === 1 ? L.unitOne : L.unitMany) + '.</div>';
+  } else if (statusF === 'open') {
+    var oldest = inRange[inRange.length - 1], oldD = _logiDaysAgo(oldest.date);
+    note = '<div style="font-size:11px;color:#5f5e5a;margin-bottom:10px;font-family:system-ui;">Showing all ' + inRange.length + ' open ' + (inRange.length === 1 ? L.unitOne : L.unitMany)
+      + ' &middot; any date, ignoring the selected ' + _logiGranNoun()
+      + (oldD ? ' &middot; oldest <span style="color:' + (oldD >= 7 ? '#C9A227' : '#888780') + ';">' + oldD + ' day' + (oldD === 1 ? '' : 's') + ' ago</span>' : '') + '.</div>';
+  }
   return note + html;
 }
 
