@@ -8317,6 +8317,73 @@ function exportProcurement() {
 function isSoftgel(name) { return /softgel/i.test(name||''); }
 function matUnit(name) { return isSoftgel(name) ? 'softgels' : 'kg'; }
 
+// Sequential single-hue ramp for the on-hand composition bar. Segments are ordered
+// by size, so this encodes magnitude, not identity: steps are monotonic in lightness
+// and each segment is directly labelled in the legend, so nothing depends on color
+// alone. Runs deep→light as segments shrink — the dominant block stays the house
+// blue rather than a loud near-white slab, and thin slivers get the lightest steps,
+// where the extra brightness is what keeps them visible against the dark surface.
+// All six steps clear 3:1 against the panel background.
+var STOCK_MIX_COLORS = ['#2F7CC9','#4A93D8','#78ACDC','#A8C7E8','#C9DDF2','#E4EFFA'];
+
+// "On hand by part #" — the composition of a grouped row's On hand figure. Grouped
+// rows sum stock across every part # in the SKU group, so the total on its own
+// doesn't say which parts it came from; this breaks it out at the point the number
+// is read, instead of only in the usage-oriented table further down the panel.
+// Returns '' when there's nothing meaningful to split (ungrouped, no stock, or a
+// single contributing part).
+function _stockCompositionHTML(m, unit) {
+  if (!m || !m.isGroup || m.stock == null || m.stock <= 0) return '';
+  var parts = [], zero = [];
+  (m.stockParts || []).forEach(function(p){
+    var rec = inventoryByPart[p];
+    if (rec && rec.stock > 0) parts.push({ partNum: p, stock: rec.stock, material: rec.material || '' });
+    else zero.push(p);
+  });
+  if (parts.length < 2) return '';
+  parts.sort(function(a,b){ return b.stock - a.stock; });
+  // Beyond the ramp's length, fold the tail into one "Other" segment rather than
+  // inventing steps (keeps the ramp fixed and the legend readable).
+  if (parts.length > STOCK_MIX_COLORS.length) {
+    var keep = parts.slice(0, STOCK_MIX_COLORS.length - 1);
+    var rest = parts.slice(STOCK_MIX_COLORS.length - 1);
+    var restKg = rest.reduce(function(s,x){ return s + x.stock; }, 0);
+    keep.push({ partNum: 'Other', stock: restKg, material: rest.length + ' more part #s', isOther: true });
+    parts = keep;
+  }
+  var total = m.stock;
+  var pctOf = function(v){ return total ? (v / total * 100) : 0; };
+  // 2px gaps between fills per mark spec; a floor on flex-grow keeps a sub-1%
+  // sliver visible instead of collapsing to nothing.
+  var bar = parts.map(function(p, i){
+    var pct = pctOf(p.stock);
+    return '<div title="'+esc(p.partNum + ' — ' + fmtStockQty(p.stock) + ' ' + unit + ' (' + pct.toFixed(1) + '%)')+'" '
+      + 'style="flex:'+Math.max(pct, 0.8).toFixed(3)+' 1 0;background:'+STOCK_MIX_COLORS[i]+';border-radius:2px;"></div>';
+  }).join('');
+  var rows = parts.map(function(p, i){
+    var pct = pctOf(p.stock);
+    return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-family:system-ui;">'
+      + '<span style="width:8px;height:8px;border-radius:2px;background:'+STOCK_MIX_COLORS[i]+';flex-shrink:0;"></span>'
+      + '<span style="font-size:11px;font-weight:500;color:'+(p.isOther?'#888780':'#e8e6e0')+';width:64px;flex-shrink:0;">'+esc(p.partNum)+'</span>'
+      + '<span style="font-size:11px;color:#888780;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(p.material)+'</span>'
+      + '<span style="font-size:11px;color:#85B7EB;white-space:nowrap;text-align:right;width:88px;flex-shrink:0;">'+fmtStockQty(p.stock)+' '+esc(unit)+'</span>'
+      + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;text-align:right;width:42px;flex-shrink:0;">'+pct.toFixed(1)+'%</span>'
+      + '</div>';
+  }).join('');
+  var zeroNote = zero.length
+    ? '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:4px;">'
+        + esc(zero.join(', ')) + ' — no stock on hand</div>'
+    : '';
+  return '<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:0.5px solid #2c2c2a;">'
+    + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px;">'
+      + '<span style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">On hand by part #</span>'
+      + '<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">'+parts.length+' part'+(parts.length===1?'':'s')+' · '+fmtStockQty(total)+' '+esc(unit)+' total</span>'
+    + '</div>'
+    + '<div style="display:flex;gap:2px;height:8px;margin-bottom:8px;">'+bar+'</div>'
+    + rows + zeroNote
+  + '</div>';
+}
+
 function selectMaterial(idx) {
   var matList = window._matList;
   if (!matList || !matList[idx]) return;
@@ -9005,6 +9072,7 @@ function renderMatInline(m, idx) {
         + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Lots</div>'
           + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+m.lotCount+'</div></div>'
       + '</div>'
+      + _stockCompositionHTML(m, unit)
       + '<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+esc(unit)+' for '+esc(m.name)+'">Trend.</canvas></div>'
       + '<div id="mat-month-drill-'+idx+'" style="margin-top:0;"></div>'
       + summaryHTML
