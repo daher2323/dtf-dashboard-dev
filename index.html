@@ -3638,9 +3638,14 @@ function _logiCopy(text, btn) {
 // followed by a click-to-copy icon button — mirrors the Logistics tracking-#
 // affordance (readable value + explicit copy icon that flashes a green check via
 // _logiCopy). stopPropagation so copying doesn't toggle the row's expand.
-function _partNumsHTML(partNums) {
+// dimSet (optional) marks part #s belonging to the SKU group but with no usage in
+// the selected window — rendered muted so the subline can show the full group roster
+// without implying every part was consumed recently.
+function _partNumsHTML(partNums, dimSet) {
   return partNums.map(function(p) {
-    return '<span style="color:#a8c7e8;user-select:text;-webkit-user-select:text;">' + esc(p) + '</span>'
+    var dim = dimSet && dimSet[p];
+    return '<span style="color:' + (dim ? '#6f6e6a' : '#a8c7e8') + ';user-select:text;-webkit-user-select:text;"'
+      + (dim ? ' title="No usage in the selected window"' : '') + '>' + esc(p) + '</span>'
       + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(p) + ',this)" title="Copy part #" style="margin-left:3px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
   }).join('<span style="color:#4a4d4a;"> \xb7 </span>');
 }
@@ -8395,8 +8400,10 @@ function filterMaterials() {
   matList.forEach(function(m, i) {
     var row = document.getElementById('mat-row-'+i);
     var ir = document.getElementById('mat-inline-row-'+i);
+    // Search the full SKU-group roster (stockParts), not just parts consumed in the
+    // window — those dormant part #s are visible on the row, so they must be findable.
     var searchMatch = !q || m.name.toLowerCase().indexOf(q) !== -1
-      || m.partNums.some(function(p){ return p.toLowerCase().indexOf(q) !== -1; });
+      || (m.stockParts || m.partNums).some(function(p){ return p.toLowerCase().indexOf(q) !== -1; });
     var shortRow = matIsShort(m);
     if (searchMatch) { countAll++; if (shortRow) countShort++; }
     // Short gate stacks AFTER search: visible only if it passes search AND (short
@@ -8905,27 +8912,40 @@ function renderMatInline(m, idx) {
   // Per-part breakdown table (grouped SKUs only)
   var breakdownHTML = '';
   if (m.isGroup) {
-    var parts = Object.values(m.partBreakdown).sort(function(a,b){ return b.totalKg - a.totalKg; });
+    // Consumed parts first (ranked by window usage), then dormant group parts by
+    // on-hand. Dormant parts carry no usage figures but do contribute to the group's
+    // On hand / Committed, so they must be listed for the columns to reconcile.
+    var parts = Object.values(m.partBreakdown).sort(function(a,b){
+      if (!!a.noUsage !== !!b.noUsage) return a.noUsage ? 1 : -1;
+      return a.noUsage ? ((b.stock||0) - (a.stock||0)) : (b.totalKg - a.totalKg);
+    });
     var breakdownRows = parts.map(function(pb) {
       var pct = m.totalKg ? ((pb.totalKg / m.totalKg) * 100).toFixed(1) : '0';
       var bw2 = m.totalKg ? Math.round((pb.totalKg / m.totalKg) * 100) : 0;
+      // Usage cells read "—" (not 0) for dormant parts, so a part with stock but
+      // no recent consumption can't be misread as having been consumed at zero rate.
+      var dim = !!pb.noUsage;
       var matLabel = pb.label.indexOf(' \u2014 ') !== -1 ? pb.label.split(' \u2014 ')[1] : pb.label;
-      return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
-        + '<td style="padding:5px 10px;font-size:11px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+esc(pb.partNum)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(matLabel)+'</td>'
+      if (dim && matLabel === pb.partNum) matLabel = (pb.stock == null && !(pb.demand > 0)) ? 'not in inventory' : '';
+      return '<tr style="border-bottom:0.5px solid #2c2c2a;'+(dim?'background:#191b1d;':'')+'">'
+        + '<td style="padding:5px 10px;font-size:11px;font-weight:500;color:'+(dim?'#888780':'#e8e6e0')+';white-space:nowrap;">'+esc(pb.partNum)+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;color:'+(dim?'#5f5e5a':'#888780')+';max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(matLabel)
+          +(dim?' <span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#2c2c2a;color:#888780;">no usage</span>':'')+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#85B7EB;white-space:nowrap;">'+fmtStockI(pb.stock)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?fmtStockQty(pb.demand)+' '+unit:'—')+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+fmt(pb.lastMonth)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.avg3)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+fmt(pb.totalKg)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;">'+pb.lotCount+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:'+(dim?'#5f5e5a':'#e8e6e0')+';white-space:nowrap;">'+(dim?'—':fmt(pb.lastMonth))+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.avg3))+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.totalKg))+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;">'+(dim?'—':pb.lotCount)+'</td>'
         + '<td style="padding:5px 14px;width:120px;">'
-          + '<div style="display:flex;align-items:center;gap:6px;">'
-            + '<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
-              + '<div style="height:100%;width:'+bw2+'%;background:#378ADD;border-radius:2px;"></div>'
-            + '</div>'
-            + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
-          + '</div>'
+          + (dim
+            ? '<span style="font-size:10px;color:#5f5e5a;">—</span>'
+            : '<div style="display:flex;align-items:center;gap:6px;">'
+                + '<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
+                  + '<div style="height:100%;width:'+bw2+'%;background:#378ADD;border-radius:2px;"></div>'
+                + '</div>'
+                + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
+              + '</div>')
         + '</td>'
         + '</tr>';
     }).join('');
@@ -8944,7 +8964,15 @@ function renderMatInline(m, idx) {
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">% of group</th>'
       + '</tr></thead>'
       + '<tbody>'+breakdownRows+'</tbody>'
-      + '</table></div></div>';
+      + '</table></div>'
+      + (m.dormantParts && m.dormantParts.length
+        ? '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;">'
+            + m.dormantParts.length + ' part' + (m.dormantParts.length===1?'':'s')
+            + ' in this group had no usage in the selected window. '
+            + 'They are listed so On hand and Committed reconcile with the group total.'
+          + '</div>'
+        : '')
+      + '</div>';
   }
 
   var aft = m.afterDemand;
@@ -9271,6 +9299,33 @@ function renderMaterials() {
     if (GROUP_PARTS[m.name]) GROUP_PARTS[m.name].forEach(function(p){ if (stockParts.indexOf(p) === -1) stockParts.push(p); });
     m.stockParts = stockParts;
     m.stock = stockForParts(stockParts);
+    // Dormant group parts: in the SKU group but with no consumption in the current
+    // window. They still contribute to m.stock/m.demand above, so the expanded
+    // breakdown must list them or its columns won't sum to the row (a part with
+    // on-hand stock and no recent usage would silently vanish). Backfill a
+    // zero-usage partBreakdown entry for each, flagged noUsage so the renderer can
+    // dim it and skip the usage columns.
+    m.dormantParts = [];
+    if (m.isGroup) {
+      var consumedParts = {};
+      Object.keys(m.partBreakdown).forEach(function(k){ consumedParts[m.partBreakdown[k].partNum] = true; });
+      stockParts.forEach(function(p){
+        if (consumedParts[p]) return;
+        m.dormantParts.push(p);
+        var invRec = inventoryByPart[p];
+        m.partBreakdown[p] = {
+          partNum: p,
+          label: p + (invRec && invRec.material ? ' — ' + invRec.material : ''),
+          totalKg: 0, lots: new Set(), byMonth: {},
+          lastMonth: 0, avg3: 0, avg6: 0,
+          lotCount: 0,                     // usage lots, not inventory lots — 0 by definition here
+          stock: invRec ? invRec.stock : null,
+          demand: demandByPart[p] || 0,
+          noUsage: true
+        };
+      });
+      m.dormantParts.sort();
+    }
     // Forthcoming demand (KG committed/forecast on the books) joined by Part #, and
     // the net position after fulfilling it. Net is only meaningful when on-hand is
     // tracked; null stock → null net.
@@ -9390,6 +9445,20 @@ function renderMaterials() {
     function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unit:'—'; }
     // Months of supply = on-hand ÷ 3-mo avg burn. Null (no usage history) → em dash.
     var monthsCover = computeMonthsOfCover(m.stock, m.avg3);
+    // Grouped rows list the whole SKU-group roster on the subline, not just the parts
+    // consumed in this window — the kg columns already span every part in the group,
+    // so showing only consumed parts made the row look like it was missing parts.
+    // Dormant parts render muted, and the badge counts active-of-total.
+    var dormant = m.dormantParts || [];
+    var rosterParts = m.isGroup ? m.partNums.concat(dormant).sort() : m.partNums;
+    var dimSet = {};
+    dormant.forEach(function(p){ dimSet[p] = true; });
+    var partsBadge = dormant.length
+      ? (m.partNums.length ? m.partNums.length + ' of ' + rosterParts.length + ' active' : rosterParts.length + ' parts')
+      : m.partNums.length + ' parts';
+    var partsBadgeTitle = dormant.length
+      ? m.partNums.length + ' of ' + rosterParts.length + ' part #s in this group were consumed in the selected window; all ' + rosterParts.length + ' count toward On hand and Committed.'
+      : 'All ' + rosterParts.length + ' part #s in this group were consumed in the selected window.';
     return '<tr id="mat-row-'+i+'" onclick="selectMaterial('+i+')" '
       +'style="cursor:pointer;background:'+(isSelected?'#1a2535':'transparent')+';border-bottom:0.5px solid #2c2c2a;" '
       +'onmouseover="if(this.style.background!==\'rgb(26, 37, 53)\')this.style.background=\'#1a1d20\'" '
@@ -9399,10 +9468,13 @@ function renderMaterials() {
         +'<div class="mat-name" style="font-size:12px;font-weight:500;color:'+(isSelected?'#85B7EB':'#e8e6e0')+';font-family:system-ui;display:flex;align-items:center;gap:6px;overflow:hidden;">'
           +'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(m.name)+'</span>'
           +(sg?'<span style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#26215C;color:#AFA9EC;flex-shrink:0;">softgels</span>':'')
-          +(m.isGroup?'<span style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C2240;color:#85B7EB;flex-shrink:0;">'+m.partNums.length+' parts</span>':'')
+          +(m.isGroup?'<span title="'+esc(partsBadgeTitle)+'" style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C2240;color:#85B7EB;flex-shrink:0;">'+partsBadge+'</span>':'')
         +'</div>'
         +(m.isGroup
-          ?'<div style="font-size:10px;font-family:system-ui;margin-top:1px;">'+_partNumsHTML(m.partNums)+'</div>'
+          // Capped width + wrapping: the name cell is sticky with overflow:hidden, so a
+          // single long chip line got clipped mid-part-# under the On hand column. The
+          // cap also stops a big roster from widening the pinned column.
+          ?'<div style="font-size:10px;font-family:system-ui;margin-top:2px;max-width:250px;line-height:1.6;white-space:normal;">'+_partNumsHTML(rosterParts, dimSet)+'</div>'
           :(m.partNums.length?'<div style="font-size:10px;font-family:system-ui;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+_partNumsHTML(m.partNums)+'</div>':''))
       +'</td>'
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#85B7EB;white-space:nowrap;">'+(invLoading?'<span class="inv-skel" style="width:46px;"></span>':fmtStock(m.stock,unit))+'</td>'
@@ -10904,7 +10976,7 @@ function _filteredMatList() {
     if (materialsShortOnly && !matIsShort(m)) return false;
     if (!q) return true;
     return (m.name||'').toLowerCase().indexOf(q) !== -1
-        || (m.partNums||[]).some(function(p){ return (p||'').toLowerCase().indexOf(q) !== -1; });
+        || (m.stockParts || m.partNums || []).some(function(p){ return (p||'').toLowerCase().indexOf(q) !== -1; });
   });
 }
 
@@ -10981,7 +11053,9 @@ function exportMaterials() {
   matList.forEach(function(m) {
     s1Rows.push([
       m.name,
-      (m.partNums||[]).join(', '),
+      // Full SKU-group roster — On Hand / Committed on this row span every part in the
+      // group, so listing only window-consumed parts would misattribute those totals.
+      (m.stockParts || m.partNums || []).slice().sort().join(', '),
       matUnit(m.name),
       m.stock == null ? '' : Math.round(m.stock * 100) / 100,
       m.demand > 0 ? Math.round(m.demand * 100) / 100 : 0,
