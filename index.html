@@ -8317,6 +8317,31 @@ function exportProcurement() {
 function isSoftgel(name) { return /softgel/i.test(name||''); }
 function matUnit(name) { return isSoftgel(name) ? 'softgels' : 'kg'; }
 
+// Largest-remainder apportionment: shares that sum to EXACTLY 100 at the given
+// decimal precision. Rounding each share independently can total 100.1% on a skewed
+// split (e.g. 87.6 + 8.5 + 3.4 + 0.6), which reads as a bug — a composition cannot
+// exceed its own whole. So floor every share in integer units of 1/10^decimals of a
+// percent, then hand the leftover units to the largest fractional parts.
+// Returns numbers (not strings) in the same order as `values`.
+function _pctExact(values, decimals) {
+  var scale = Math.pow(10, decimals || 0);
+  var units = 100 * scale;
+  var sum = 0, i;
+  for (i = 0; i < values.length; i++) sum += (values[i] || 0);
+  if (!(sum > 0)) return values.map(function(){ return 0; });
+  var raw = values.map(function(v){ return (v || 0) / sum * units; });
+  var out = raw.map(function(r){ return Math.floor(r); });
+  var used = 0;
+  for (i = 0; i < out.length; i++) used += out[i];
+  // Ties break toward the earlier entry; callers pass values sorted descending, so
+  // a leftover unit lands on the larger share.
+  var order = raw.map(function(r, idx){ return { idx: idx, frac: r - Math.floor(r) }; })
+    .sort(function(a, b){ return (b.frac - a.frac) || (a.idx - b.idx); });
+  var left = Math.min(Math.max(units - used, 0), order.length);
+  for (i = 0; i < left; i++) out[order[i].idx] += 1;
+  return out.map(function(u){ return u / scale; });
+}
+
 // Sequential single-hue ramp for the on-hand composition bar. Segments are ordered
 // by size, so this encodes magnitude, not identity: steps are monotonic in lightness
 // and each segment is directly labelled in the legend, so nothing depends on color
@@ -8351,17 +8376,19 @@ function _stockCompositionHTML(m, unit) {
     keep.push({ partNum: 'Other', stock: restKg, material: rest.length + ' more part #s', isOther: true });
     parts = keep;
   }
-  var total = m.stock;
-  var pctOf = function(v){ return total ? (v / total * 100) : 0; };
+  // Denominator is the sum of the segments actually shown, so the shares always
+  // describe a whole that's on screen and can never total more than 100%.
+  var total = parts.reduce(function(s, p){ return s + p.stock; }, 0);
+  var pcts = _pctExact(parts.map(function(p){ return p.stock; }), 1);
   // 2px gaps between fills per mark spec; a floor on flex-grow keeps a sub-1%
   // sliver visible instead of collapsing to nothing.
   var bar = parts.map(function(p, i){
-    var pct = pctOf(p.stock);
+    var pct = pcts[i];
     return '<div title="'+esc(p.partNum + ' — ' + fmtStockQty(p.stock) + ' ' + unit + ' (' + pct.toFixed(1) + '%)')+'" '
       + 'style="flex:'+Math.max(pct, 0.8).toFixed(3)+' 1 0;background:'+STOCK_MIX_COLORS[i]+';border-radius:2px;"></div>';
   }).join('');
   var rows = parts.map(function(p, i){
-    var pct = pctOf(p.stock);
+    var pct = pcts[i];
     return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-family:system-ui;">'
       + '<span style="width:8px;height:8px;border-radius:2px;background:'+STOCK_MIX_COLORS[i]+';flex-shrink:0;"></span>'
       + '<span style="font-size:11px;font-weight:500;color:'+(p.isOther?'#888780':'#e8e6e0')+';width:64px;flex-shrink:0;">'+esc(p.partNum)+'</span>'
@@ -8986,9 +9013,19 @@ function renderMatInline(m, idx) {
       if (!!a.noUsage !== !!b.noUsage) return a.noUsage ? 1 : -1;
       return a.noUsage ? ((b.stock||0) - (a.stock||0)) : (b.totalKg - a.totalKg);
     });
+    // "% of group" apportioned so the column totals exactly 100 — same reason as the
+    // composition bar. Only parts with usage take a share; dormant rows show an em
+    // dash, so they're excluded from the split rather than absorbing leftover units.
+    var usagePct = {};
+    (function(){
+      var act = parts.filter(function(p){ return !p.noUsage && p.totalKg > 0; });
+      var ex = _pctExact(act.map(function(p){ return p.totalKg; }), 1);
+      act.forEach(function(p, i){ usagePct[p.label] = ex[i]; });
+    })();
     var breakdownRows = parts.map(function(pb) {
-      var pct = m.totalKg ? ((pb.totalKg / m.totalKg) * 100).toFixed(1) : '0';
-      var bw2 = m.totalKg ? Math.round((pb.totalKg / m.totalKg) * 100) : 0;
+      var pctNum = usagePct.hasOwnProperty(pb.label) ? usagePct[pb.label] : 0;
+      var pct = pctNum.toFixed(1);
+      var bw2 = Math.round(pctNum);
       // Usage cells read "—" (not 0) for dormant parts, so a part with stock but
       // no recent consumption can't be misread as having been consumed at zero rate.
       var dim = !!pb.noUsage;
