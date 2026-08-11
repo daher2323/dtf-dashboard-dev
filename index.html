@@ -3231,13 +3231,37 @@ function _boxRecorded(row) { var s = (row.boxesRaw == null ? '' : String(row.box
 // 2.5 — a shipment with pallets but no boxes recorded is NOT a zero-box shipment.
 function boxesForShipment(shipment) { return { boxes: shipment.boxes, recorded: shipment.boxesRecorded }; }
 
-// Grouping: date + customer -> one shipment object. Same rule as the working log.
+// A reference (Tracking # / BOL) only identifies a shipment if it actually looks
+// like a number: >= 6 alphanumerics with at least one digit. Placeholders the sheet
+// puts in the same columns ("FTL", a carrier name, a note) must NOT merge rows.
+// Tracking wins over BOL so both feeds agree on which value carries the identity.
+function _logiRefIdentity(row) {
+  var t = String(row.tracking || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (t.length >= 6 && /\d/.test(t)) return 'T' + t;
+  var b = String(row.bol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (b.length >= 6 && /\d/.test(b)) return 'B' + b;
+  return null;   // nothing identifying — can't prove two rows are the same shipment
+}
+// Grouping -> one shipment object per physical shipment. The rule differs by direction:
+//   Outbound: date + customer. One truck carries many lots and the sheet records the
+//     carrier/tracking on the first line only (following lines are blank), so rolling
+//     the day's lots up under the customer is the honest read.
+//   Inbound: date + vendor + reference. Every receiving row is its own delivery with
+//     its own carrier, tracking/BOL, ETA and status — two POs from one vendor on one
+//     day are normally two separate trucks/parcels, and merging them hid the second
+//     tracking # and let one row's "In Transit" speak for an already-received row.
+//     Rows merge only when they share a real reference (same tracking or BOL =
+//     provably one shipment carrying several POs); an unidentifiable reference
+//     (blank, "FTL") falls back to the row's own index, so the row stays its own
+//     shipment rather than absorbing an unrelated one.
 function groupLotsToShipments(recs) {
+  var perRef = (logiDir === 'inbound');
   var buckets = {}, order = [], i;
   for (i = 0; i < recs.length; i++) {
     var r = recs[i];
     if (!r.date) continue;
     var k = _logiYMD(r.date) + '' + (r.customer || '').toUpperCase();
+    if (perRef) k += '' + (_logiRefIdentity(r) || ('#' + (r._idx != null ? r._idx : i)));
     if (!buckets[k]) { buckets[k] = { key: k, date: r.date, customer: r.customer, rows: [] }; order.push(k); }
     buckets[k].rows.push(r);
   }
@@ -3265,6 +3289,10 @@ function _logiBuildShipment(bucket) {
   var carrier = '', reference = '', referenceKind = '', eta = '', lots = [], firstStatus = '';
   var anyPickup = false, firstParcel = false, firstFreight = false;
   var inTransit = false, pendingPickup = false, canceled = false, i;
+  // Every distinct reference in the bucket, so a grouped row never silently hides
+  // one. Outbound days still legitimately group several parcels/BOLs under one
+  // customer; the extras surface as a "+N more" hint next to the primary reference.
+  var refs = [], refSeen = {};
   var bulk = _logiIsBulkServing(bucket.customer);  // brand-level: its "units" are servings
   for (i = 0; i < rows.length; i++) {
     var r = rows[i];
@@ -3275,6 +3303,8 @@ function _logiBuildShipment(bucket) {
     if (_boxRecorded(r)) boxesRecorded = true;
     if (!carrier && r.carrier) carrier = r.carrier;
     if (!reference) { if (r.tracking) { reference = r.tracking; referenceKind = 'Tracking #'; } else if (r.bol) { reference = r.bol; referenceKind = 'BOL'; } }
+    var rv = r.tracking || r.bol, rk = r.tracking ? 'Tracking #' : 'BOL';
+    if (rv && !refSeen[rk + '|' + rv]) { refSeen[rk + '|' + rv] = true; refs.push({ value: rv, kind: rk, carrier: r.carrier || '' }); }
     if (!eta && r.eta) eta = r.eta;
     if (!firstStatus && r.status) firstStatus = r.status;
     var su = (r.status || '').toLowerCase();
@@ -3293,7 +3323,7 @@ function _logiBuildShipment(bucket) {
   var status = inTransit ? 'In Transit' : pendingPickup ? 'Pending Pickup' : (firstStatus || (canceled ? 'Canceled' : ''));
   return { key: bucket.key, date: bucket.date, customer: bucket.customer, lots: lots,
     boxes: boxes, pallets: pallets, units: units, stickUnits: stickUnits, servingUnits: servingUnits, boxesRecorded: boxesRecorded,
-    carrier: carrier, carrierClass: klass, reference: reference, referenceKind: referenceKind, eta: eta, status: status };
+    carrier: carrier, carrierClass: klass, reference: reference, referenceKind: referenceKind, references: refs, eta: eta, status: status };
 }
 
 // 3.1 — throughput over shipments within bounds.
@@ -3859,6 +3889,13 @@ function _logiLogHTML(shipments, bounds) {
         // Link only a Tracking # (not a BOL) — carrier pages expect the PRO/tracking value.
         var refLink = (s2.referenceKind === 'Tracking #') ? _logiTrackUrl(s2.carrier, s2.reference) : null;
         parts.push(_logiRefCell(s2.reference, s2.referenceKind, refLink));
+      }
+      // A grouped row can still cover several parcels/BOLs (outbound). Say so
+      // instead of showing the first reference as if it were the only one.
+      if (s2.references && s2.references.length > 1) {
+        var extra = [], xi;
+        for (xi = 1; xi < s2.references.length; xi++) extra.push(s2.references[xi].kind + ' ' + s2.references[xi].value + (s2.references[xi].carrier ? ' (' + s2.references[xi].carrier + ')' : ''));
+        parts.push('<span onclick="event.stopPropagation();" title="' + esc(extra.join('\n')) + '" style="color:#C9A227;cursor:help;border-bottom:1px dotted #6b5514;">+' + extra.length + ' more ' + (extra.length === 1 ? 'reference' : 'references') + '</span>');
       }
       if (s2.eta) parts.push('ETA ' + esc(s2.eta));
       if (L.showBoxesNote && !bx.recorded) parts.push('<span style="color:#C9A227;">boxes not recorded</span>');
