@@ -8290,7 +8290,9 @@ function exportProcurement() {
 
   // ── Sheet 1: Quarterly Summary ──
   var qtrLabels = displayQtrs.map(function(qk){ return quarterLabel(qk)+(qk===curQk?' (partial)':''); });
-  var s1Headers = [Label+' SKU','Trajectory'].concat(qtrLabels).concat(['FY '+PRIOR_YEAR,'YTD '+nowYr,'YTD Change','% of Usage']);
+  // 'Total since Q1 2025' mirrors the Total row now closing each card's quarterly
+  // table — it's the sum of the quarter columns to its left, partial quarter included.
+  var s1Headers = [Label+' SKU','Trajectory'].concat(qtrLabels).concat(['Total since Q1 2025','FY '+PRIOR_YEAR,'YTD '+nowYr,'YTD Change','% of Usage']);
   var s1Rows = [
     ['DTF Operations Center — Procurement Export'],
     [Label+' usage  ·  Q1 2025 → present  ·  Generated '+dateStr],
@@ -8300,6 +8302,7 @@ function exportProcurement() {
 
   summaryData.forEach(function(d) {
     var row = [d.sku, d.tag].concat(d.qVals).concat([
+      d.qVals.reduce(function(s,v){return s+v;}, 0),
       d.fy25,
       d.ytd,
       d.chg !== null ? d.chg : 'N/A',
@@ -8311,6 +8314,7 @@ function exportProcurement() {
   // Totals row
   var totQtrs = displayQtrs.map(function(qk){ return summaryData.reduce(function(s,d){ return s+(skuQtr[d.sku][qk]?skuQtr[d.sku][qk].units:0); },0); });
   s1Rows.push(['TOTAL',''].concat(totQtrs).concat([
+    totQtrs.reduce(function(s,v){return s+v;}, 0),
     summaryData.reduce(function(s,d){return s+d.fy25;},0),
     summaryData.reduce(function(s,d){return s+d.ytd;},0),
     '',
@@ -8320,7 +8324,7 @@ function exportProcurement() {
   var ws1 = XLSX.utils.aoa_to_sheet(s1Rows);
 
   // Column widths
-  var w1 = [{wch:30},{wch:13}].concat(displayQtrs.map(function(){return{wch:13};})).concat([{wch:14},{wch:12},{wch:12},{wch:12}]);
+  var w1 = [{wch:30},{wch:13}].concat(displayQtrs.map(function(){return{wch:13};})).concat([{wch:19},{wch:14},{wch:12},{wch:12},{wch:12}]);
   ws1['!cols'] = w1;
   ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:s1Headers.length-1}},{s:{r:1,c:0},e:{r:1,c:s1Headers.length-1}}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Quarterly Summary');
@@ -10768,6 +10772,23 @@ function renderProcurement() {
       return {key:qk, lots:d.lots.size, units:d.units, pctOfTotal:pct, avgPerUnit:avgPerUnit};
     });
 
+    // All-time rollup across every quarter in the table (Q1 2025 → the current,
+    // partial one), so a card answers "how many of these have we used, ever"
+    // without adding up the rows by hand. Lots are UNIONED, not summed: a lot that
+    // ran across a quarter boundary sits in two quarters' sets and summing the
+    // per-quarter counts would count it twice. The % denominator is the same
+    // totalQtrUnits the per-quarter column uses, summed over the same quarters.
+    var allLotSet = new Set(), allUnits = 0, allDenom = 0, firstQk = null;
+    displayQtrs.forEach(function(qk) {
+      allDenom += (totalQtrUnits[qk] || 0);
+      var dd = qmap[qk];
+      if (!dd) return;
+      allUnits += dd.units;
+      dd.lots.forEach(function(l){ allLotSet.add(l); });
+      if (!firstQk && dd.units > 0) firstQk = qk;
+    });
+    var allPct = allDenom > 0 ? parseFloat(((allUnits / allDenom) * 100).toFixed(1)) : null;
+
     // YTD this year
     var ytdLots = new Set(), ytdUnits = 0, ytdFinalUnits = 0;
     allRowsCombined.forEach(function(r) {
@@ -10817,6 +10838,7 @@ function renderProcurement() {
     return {sku:sku, qtrs:qtrs, tag:tag, ytdLots:ytdLots.size, ytdUnits:ytdUnits,
             ytd25Lots:ytd25Lots.size, ytd25Units:ytd25Units, ytdPct:ytdPct, ytdPct25:ytdPct25,
             ytdChg:ytdChg, ytdAvgPerUnit:ytdAvgPerUnit, ytd25AvgPerUnit:ytd25AvgPerUnit,
+            allUnits:allUnits, allLots:allLotSet.size, allPct:allPct, firstQk:firstQk,
             custBreakdown:custBreakdown};
   });
 
@@ -10972,6 +10994,27 @@ function renderProcurement() {
 
     var custSection = custRows;
 
+    // Closing total row: everything used since tracking began. Divider + tint +
+    // bold marks it as a rollup, matching the customer table's subtotal rows; the
+    // comparison cells and the volume bar stay em-dashed since a sum has no prior
+    // period to compare against and no place on the per-quarter scale.
+    var totalRow = '';
+    if (cd.allUnits > 0) {
+      var tdT = 'padding:7px 10px;border-top:1.5px solid #444441;white-space:nowrap;font-size:12px;background:#1e2124;';
+      var sinceLbl = cd.firstQk ? quarterLabel(cd.firstQk) : quarterLabel(displayQtrs[0]);
+      totalRow = '<tr>'
+        +'<td style="'+tdT+'padding-left:14px;color:#e8e6e0;font-weight:600;" title="All '+esc(label)+' usage from '+esc(sinceLbl)+' through today, including the current partial quarter.">Total'
+          +'<span style="font-size:10px;font-weight:500;letter-spacing:.04em;padding:1px 5px;border:0.5px solid #444441;border-radius:4px;color:#888780;margin-left:6px;vertical-align:1px;">since '+esc(sinceLbl)+'</span>'
+        +'</td>'
+        +'<td style="'+tdT+'text-align:right;color:#e8e6e0;font-weight:600;">'+cd.allUnits.toLocaleString()+'</td>'
+        +'<td style="'+tdT+'text-align:right;color:#5f5e5a;">&#x2014;</td>'
+        +'<td style="'+tdT+'text-align:right;color:#888780;">'+(cd.allLots||'&#x2014;')+'</td>'
+        +'<td style="'+tdT+'text-align:right;color:#888780;">'+(cd.allPct!==null?cd.allPct+'%':'&#x2014;')+'</td>'
+        +'<td style="'+tdT+'text-align:right;color:#5f5e5a;">&#x2014;</td>'
+        +'<td style="'+tdT+'padding-right:14px;"></td>'
+      +'</tr>';
+    }
+
     var qtrSection = '<table style="width:100%;border-collapse:collapse;">'
       +'<thead><tr>'
         +'<th style="'+thSL+'">Quarter</th>'
@@ -10982,7 +11025,7 @@ function renderProcurement() {
         +'<th style="'+thS+'width:70px;">vs prev</th>'
         +'<th style="'+thS+'padding-right:14px;width:110px;">Volume</th>'
       +'</tr></thead>'
-      +'<tbody>'+tableRows+'</tbody>'
+      +'<tbody>'+tableRows+totalRow+'</tbody>'
     +'</table>';
 
     var activeTab = _procTab[sid] || 'qtr';
