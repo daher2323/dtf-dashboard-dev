@@ -590,6 +590,7 @@ var materialsData = [];
 // columns entirely. Built once from the same fetch (fetchMaterialsIfNeeded).
 var pickRows = [];           // [{ date, orderLot, part, material, slots:[{t, qty}] }]
 var inventoryByPart = {};    // DTF Part # -> { partNum, stock, material, lots, lotRows[] } — summed on-hand plus the per-lot detail
+var inventoryLotIndex = {};  // T# (upper) -> { part, qty, exp, received } for EVERY lot incl. depleted — FEFO needs the picked lot's expiry
 var inventoryLoaded = false; // true once a successful inventory fetch has populated inventoryByPart
 var demandByPart = {};       // DTF Part # -> forthcoming demand in KG, summed across the demand sheet
 var demandLoaded = false;    // true once a successful demand fetch has populated demandByPart
@@ -597,7 +598,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v2';  // v2: lot-level rows (expiry/location/supplier)
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v3';  // v3: + inventoryLotIndex (all lots, incl. depleted)
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -796,6 +797,7 @@ var matYear = new Date().getFullYear(); // kept for renderMatInline compat
 var matWindow = 6; // lookback months: 6 | 12 | 0=all
 var matSearch = '';
 var matShowZeroUsage = false; // when true, also show on-hand ingredients with zero usage in the current window (mirrors showZeroDes on Jars/Bottles/etc.)
+var materialsFefoOnly = false;      // Materials toolbar "FEFO review" segment: only materials holding a lot that keeps getting picked past while at risk.
 var materialsExpiringOnly = false; // Materials toolbar "Expiring" segment: only rows with expired stock, stock dated within EXPIRY_SOON_DAYS, or FEFO risk.
 var materialsShortOnly = false; // Materials toolbar "Short only" toggle: hide rows whose Available is not Short (afterDemand >= 0). Persists across re-renders and sub-tab switches.
 var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
@@ -1660,6 +1662,7 @@ function parseInventory(text) {
   try {
     var rows = parseCSVMultiline(text);
     var byPart = {};
+    inventoryLotIndex = {};
     rows.forEach(function(r){
       var part = (r['DTF Part #'] || '').trim();
       if (!part) return;
@@ -1669,6 +1672,15 @@ function parseInventory(text) {
       p.stock += qty;
       var lotNo = (r['DTF Lot #'] || '').trim();
       if (lotNo) p.lots += 1;
+      // Every lot, depleted included: FEFO detection has to know the expiry of the
+      // lot that was actually picked, and that one is usually spent by now.
+      if (lotNo) {
+        var xd = parseInvDate(r['EXP. Date']);
+        inventoryLotIndex[lotNo.toUpperCase()] = {
+          part: part, qty: qty, exp: xd ? xd.getTime() : null,
+          received: (r['Receiving Date'] || '').trim()
+        };
+      }
       if (!p.material && r['Material Name']) p.material = (r['Material Name'] || '').trim();
       if (qty > 0) {
         var exp = parseInvDate(r['EXP. Date']);
@@ -1696,7 +1708,7 @@ function fetchInventoryIfNeeded() {
     if (Object.keys(parsed).length > 0) {
       inventoryByPart = parsed;
       inventoryLoaded = true;
-      try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, ts: Date.now() })); } catch(e) {}
+      try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     }
   });
@@ -1801,6 +1813,156 @@ function expiryPosition(parts, ratePerMonth) {
   }
   return out;
 }
+// ── FEFO review: lots that get walked past ────────────────────────────────
+// The pick sheet records which T# was actually pulled; inventory carries each lot's
+// expiry, receiving date and current stock. A lot's balance at any past date
+// reconstructs as (current stock + every pick after that date), so for each pick we
+// can ask whether a sibling lot of the same part existed with an EARLIER expiry,
+// already received, still in date, and still holding stock. If so, FEFO was missed.
+//
+// Two exclusions keep this honest rather than noisy:
+//   - a sibling already past its date at pick time is NOT a miss. You cannot use
+//     expired material, so skipping it was correct.
+//   - sub-kilo remnants are ignored; nobody picks 0.1 kg of dust.
+//
+// The reviewable unit is the LOT, not the pick: the same drum gets walked past over
+// and over, so 6,335 pick-level misses collapse to a few hundred stranded lots.
+// Reporting every one of those is still useless — the list is dominated by
+// high-turnover aminos (one L-Citrulline lot is skipped 250 times and will be
+// consumed 400 days before it expires). The review list therefore intersects
+// "gets skipped" with "actually at risk": expired or expiring inside
+// FEFO_REVIEW_HORIZON_DAYS, and at least FEFO_REVIEW_MIN_KG. That is ~39 lots
+// instead of 757, and every row is worth acting on.
+//
+// Known limits, stated because they bound what this can claim:
+//   - only ~52% of picked T#s are still in the inventory feed (depleted lots get
+//     archived upstream), so this UNDER-reports; it cannot invent misses.
+//   - no write-off/adjustment data, so a scrapped lot looks like it was available.
+//   - legitimate overrides exist (allergen segregation, customer-specific lots,
+//     holds). Hence "review", never "violation".
+var FEFO_MIN_KG = 1;                 // a sibling must have held at least this much to count
+var FEFO_REVIEW_MIN_KG = 25;         // review list floor — keeps flavour dust out
+var FEFO_REVIEW_HORIZON_DAYS = 90;   // expired, or expiring inside this window
+var _fefoCache = null, _fefoCacheKey = '';
+// Pick-sheet dates are Google Form timestamps ("1/5/2026 14:32:05"); the time part
+// has to come off before parsing or every row is rejected.
+function _fefoPickDate(v) {
+  var s = (v == null ? '' : String(v)).trim();
+  if (!s) return null;
+  return parseInvDate(s.split(' ')[0]);
+}
+function computeFefoMisses() {
+  var rows = pickRows || [];
+  var key = rows.length + ':' + Object.keys(inventoryLotIndex || {}).length;
+  if (_fefoCache && _fefoCacheKey === key) return _fefoCache;
+
+  var idx = inventoryLotIndex || {}, byPart = {}, k, i, j;
+  // part -> its lots, and lot -> its picks (ascending, with suffix sums so a
+  // balance-at-date lookup is a binary search instead of a rescan).
+  for (k in idx) { if (!idx.hasOwnProperty(k)) continue;
+    var pt = idx[k].part; if (!pt) continue;
+    if (!byPart[pt]) byPart[pt] = [];
+    byPart[pt].push(k);
+  }
+  var picksByLot = {};
+  for (i = 0; i < rows.length; i++) {
+    var d = _fefoPickDate(rows[i].date);
+    if (!d) continue;
+    var t = d.getTime(), slots = rows[i].slots || [];
+    for (j = 0; j < slots.length; j++) {
+      var tn = normT(slots[j].t);
+      if (!tn || !idx[tn]) continue;
+      if (!picksByLot[tn]) picksByLot[tn] = [];
+      picksByLot[tn].push({ t: t, qty: slots[j].qty || 0, orderLot: rows[i].orderLot });
+    }
+  }
+  for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
+    var arr = picksByLot[k];
+    arr.sort(function(a, b){ return a.t - b.t; });
+    var suf = new Array(arr.length + 1); suf[arr.length] = 0;
+    for (i = arr.length - 1; i >= 0; i--) suf[i] = suf[i+1] + arr[i].qty;
+    arr.suffix = suf;
+  }
+  function balanceAt(lotNo, t) {
+    var rec = idx[lotNo], arr = picksByLot[lotNo];
+    var base = rec ? rec.qty : 0;
+    if (!arr || !arr.length) return base;
+    var lo = 0, hi = arr.length;               // first pick strictly after t
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (arr[mid].t > t) hi = mid; else lo = mid + 1; }
+    return base + arr.suffix[lo];
+  }
+  var strand = {}, events = 0;
+  for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
+    var used = idx[k];
+    if (!used || used.exp == null || !used.part) continue;
+    var siblings = byPart[used.part] || [];
+    var mine = picksByLot[k];
+    for (i = 0; i < mine.length; i++) {
+      var when = mine[i].t, hit = false;
+      for (j = 0; j < siblings.length; j++) {
+        var sn = siblings[j];
+        if (sn === k) continue;
+        var sib = idx[sn];
+        if (!sib || sib.exp == null) continue;
+        if (sib.exp >= used.exp) continue;            // not earlier-expiring
+        if (sib.exp < when) continue;                 // already expired then — skipping was right
+        var rd = parseInvDate(sib.received);
+        if (rd && rd.getTime() > when) continue;      // not received yet
+        if (balanceAt(sn, when) < FEFO_MIN_KG) continue;
+        hit = true;
+        if (!strand[sn]) strand[sn] = { skips: 0, last: null, alts: {} };
+        strand[sn].skips++;
+        strand[sn].alts[k] = true;
+        if (strand[sn].last == null || when > strand[sn].last) strand[sn].last = when;
+      }
+      if (hit) events++;
+    }
+  }
+  // Attach today's position from the in-stock lot rows, which carry location and
+  // supplier; a stranded lot with nothing left needs no review.
+  var live = {};
+  for (k in inventoryByPart) { if (!inventoryByPart.hasOwnProperty(k)) continue;
+    var lr = inventoryByPart[k].lotRows || [];
+    for (i = 0; i < lr.length; i++) live[(lr[i].lot || '').toUpperCase()] = { row: lr[i], material: inventoryByPart[k].material, part: k };
+  }
+  var today = _expiryToday(), all = [], byPartReview = {};
+  for (k in strand) { if (!strand[k].skips) continue;
+    var L = live[k];
+    if (!L || L.row.qty < FEFO_MIN_KG) continue;     // used up since — nothing to address
+    var exp = L.row.exp;
+    var days = exp == null ? null : Math.round((exp - today) / _EXPIRY_MS_PER_DAY);
+    var altN = 0, ak; for (ak in strand[k].alts) if (strand[k].alts.hasOwnProperty(ak)) altN++;
+    var rec2 = {
+      lot: L.row.lot, part: L.part, material: L.material || '', qty: L.row.qty,
+      exp: exp, days: days, loc: L.row.loc, supplier: L.row.supplier, batch: L.row.batch,
+      skips: strand[k].skips, lastSkip: strand[k].last, altLots: altN,
+      review: (days != null && days <= FEFO_REVIEW_HORIZON_DAYS && L.row.qty >= FEFO_REVIEW_MIN_KG)
+    };
+    all.push(rec2);
+    if (rec2.review) { if (!byPartReview[L.part]) byPartReview[L.part] = []; byPartReview[L.part].push(rec2); }
+  }
+  // Expired first (money already gone), then soonest, then biggest.
+  all.sort(function(a, b){
+    if (a.review !== b.review) return a.review ? -1 : 1;
+    if (a.days != null && b.days != null && a.days !== b.days) return a.days - b.days;
+    return b.qty - a.qty;
+  });
+  var review = all.filter(function(r){ return r.review; });
+  _fefoCacheKey = key;
+  _fefoCache = {
+    events: events, all: all, review: review, byPartReview: byPartReview,
+    reviewKg: review.reduce(function(t, r){ return t + r.qty; }, 0),
+    expiredKg: review.reduce(function(t, r){ return t + (r.days < 0 ? r.qty : 0); }, 0),
+    byLot: (function(){ var m = {}, z; for (z = 0; z < all.length; z++) m[(all[z].lot || '').toUpperCase()] = all[z]; return m; })()
+  };
+  return _fefoCache;
+}
+// Does this material hold any lot on the review list? Drives the FEFO segment.
+function matHasFefoReview(m) {
+  var f = computeFefoMisses(), parts = (m && (m.stockParts || m.partNums)) || [], i;
+  for (i = 0; i < parts.length; i++) if (f.byPartReview[parts[i]]) return true;
+  return false;
+}
 // Sum forthcoming demand (KG) across a list of part #s. Returns 0 when none have
 // demand — unlike stock, a missing entry genuinely means "nothing on the books".
 function demandForParts(parts) {
@@ -1894,7 +2056,7 @@ function fetchDemandIfNeeded() {
 function _loadStockCaches() {
   try {
     var ri = sessionStorage.getItem(INVENTORY_CACHE_KEY);
-    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL) { inventoryByPart = ci.byPart; inventoryLoaded = true; } }
+    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; } }
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
@@ -8780,6 +8942,13 @@ function shortBtnStyle(active, isShortBtn) {
 
 // Expiring segment, amber to match the at-risk badge and the Cover column's
 // tight state, so the three segments read All (blue) / Short (red) / Expiring (amber).
+// FEFO segment reuses the amber-on-dark treatment, one step warmer than Expiring
+// so the three risk segments read as a family rather than as unrelated filters.
+function fefoBtnStyle(active) {
+  var base = 'padding:4px 12px;border-radius:6px;font-weight:'+(active?'500':'400')+';font-size:12px;cursor:pointer;font-family:system-ui;transition:all .15s;display:inline-flex;align-items:center;gap:5px;';
+  if (!active) return base + 'border:1.5px solid transparent;background:transparent;color:#888780;';
+  return base + 'border:1.5px solid #8a5a10;background:#4a3410;color:#FAC775;';
+}
 function expiringBtnStyle(active) {
   var base = 'padding:4px 12px;border-radius:6px;font-weight:'+(active?'500':'400')+';font-size:12px;cursor:pointer;font-family:system-ui;transition:all .15s;display:inline-flex;align-items:center;gap:5px;';
   if (!active) return base + 'border:1.5px solid transparent;background:transparent;color:#888780;';
@@ -8795,12 +8964,14 @@ function paintShortToggle() {
   var i, b;
   for (i = 0; i < btns.length; i++) {
     b = btns[i];
-    if (b.getAttribute('data-expiring') === '1') {
+    if (b.getAttribute('data-fefo') === '1') {
+      b.style.cssText = fefoBtnStyle(materialsFefoOnly);
+    } else if (b.getAttribute('data-expiring') === '1') {
       b.style.cssText = expiringBtnStyle(materialsExpiringOnly);
     } else if (b.getAttribute('data-short') === '1') {
       b.style.cssText = shortBtnStyle(materialsShortOnly, true);
     } else {
-      b.style.cssText = shortBtnStyle(!materialsShortOnly && !materialsExpiringOnly, false);
+      b.style.cssText = shortBtnStyle(!materialsShortOnly && !materialsExpiringOnly && !materialsFefoOnly, false);
     }
   }
 }
@@ -8809,7 +8980,7 @@ function paintShortToggle() {
 // time-window buttons). Persists across sub-tab switches — never reset elsewhere.
 function setMaterialsShortOnly(v) {
   materialsShortOnly = !!v;
-  if (materialsShortOnly) materialsExpiringOnly = false;   // exclusive segments
+  if (materialsShortOnly) { materialsExpiringOnly = false; materialsFefoOnly = false; }   // exclusive segments
   trackEvent('materials_filter_change', { filter: 'short_only', value: materialsShortOnly ? 'short' : 'all' });
   window._selectedMaterial = null;
   renderMaterials();
@@ -8818,7 +8989,23 @@ function setMaterialsShortOnly(v) {
 function setMaterialsAllSegment() {
   materialsShortOnly = false;
   materialsExpiringOnly = false;
+  materialsFefoOnly = false;
   trackEvent('materials_filter_change', { filter: 'short_only', value: 'all' });
+  window._selectedMaterial = null;
+  renderMaterials();
+}
+
+function setMaterialsFefoOnly(v) {
+  materialsFefoOnly = !!v;
+  if (materialsFefoOnly) {
+    materialsShortOnly = false;
+    materialsExpiringOnly = false;
+    // Same reasoning as the Expiring segment: a stranded lot often belongs to a
+    // material nothing has drawn recently, and those rows live behind the
+    // zero-usage checkbox. Tick it visibly rather than filter past it.
+    matShowZeroUsage = true;
+  }
+  trackEvent('materials_filter_change', { filter: 'fefo_review', value: materialsFefoOnly ? 'fefo' : 'all' });
   window._selectedMaterial = null;
   renderMaterials();
 }
@@ -8826,7 +9013,7 @@ function setMaterialsAllSegment() {
 function setMaterialsExpiringOnly(v) {
   materialsExpiringOnly = !!v;
   if (materialsExpiringOnly) {
-    materialsShortOnly = false;   // exclusive segments
+    materialsShortOnly = false; materialsFefoOnly = false;   // exclusive segments
     // Reach the zero-usage rows too. Measured on the live feed: with them hidden the
     // page shows 11,185 kg expired / 3,143 kg at risk; with them shown it is 17,745
     // and 25,613 — 87% of the at-risk tonnage is material nothing has drawn in six
@@ -8848,7 +9035,7 @@ function filterMaterials() {
   // Segment badges reflect every OTHER filter (time window + zero-usage already
   // baked into matList, plus search) but never the short toggle itself, so toggling
   // it changes what's shown, not the counts.
-  var countAll = 0, countShort = 0, countExpiring = 0;
+  var countAll = 0, countShort = 0, countExpiring = 0, countFefo = 0;
   matList.forEach(function(m, i) {
     var row = document.getElementById('mat-row-'+i);
     var ir = document.getElementById('mat-inline-row-'+i);
@@ -8858,17 +9045,20 @@ function filterMaterials() {
       || (m.stockParts || m.partNums).some(function(p){ return p.toLowerCase().indexOf(q) !== -1; });
     var shortRow = matIsShort(m);
     var expiringRow = matIsExpiring(m);
-    if (searchMatch) { countAll++; if (shortRow) countShort++; if (expiringRow) countExpiring++; }
+    var fefoRow = matHasFefoReview(m);
+    if (searchMatch) { countAll++; if (shortRow) countShort++; if (expiringRow) countExpiring++; if (fefoRow) countFefo++; }
     // Short gate stacks AFTER search: visible only if it passes search AND (short
     // filter off OR the row is short). Rows stay in the DOM (just hidden), so the
     // rank numbers baked into each row are preserved.
-    var visible = searchMatch && (!materialsShortOnly || shortRow) && (!materialsExpiringOnly || expiringRow);
+    var visible = searchMatch && (!materialsShortOnly || shortRow) && (!materialsExpiringOnly || expiringRow) && (!materialsFefoOnly || fefoRow);
     if (row) row.style.display = visible ? '' : 'none';
     if (ir) ir.style.display = (visible && window._selectedMaterial===m.name) ? '' : 'none';
   });
   var elAll = document.getElementById('shortCountAll');
   var elShort = document.getElementById('shortCountShort');
   var elExp = document.getElementById('shortCountExpiring');
+  var elFefo = document.getElementById('shortCountFefo');
+  if (elFefo) elFefo.innerHTML = countFefo;
   if (elAll) elAll.innerHTML = countAll;
   if (elShort) elShort.innerHTML = countShort;
   if (elExp) elExp.innerHTML = countExpiring;
@@ -9340,6 +9530,7 @@ function matLotTableHTML(m, unit) {
     return a.exp - b.exp;
   });
   var shown = lots.slice(0, MAT_LOT_CAP), useFirstMarked = false, i;
+  var _fefo = computeFefoMisses();
   var multiPart = !!m.isGroup;
   var rows = shown.map(function(L){
     var expired = L.days != null && L.days < 0;
@@ -9365,9 +9556,22 @@ function matLotTableHTML(m, unit) {
       useFirstMarked = true;
       tag = ' <span title="Earliest expiry still in date — pick this one next." style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C447C;color:#85B7EB;white-space:nowrap;">USE FIRST</span>';
     }
+    // Was this lot picked past while it still had life? The count is the signal —
+    // one skip is a judgement call, thirty is a picking path that ignores the date.
+    var miss = _fefo.byLot[(L.lot || '').toUpperCase()], missTag = '';
+    if (miss && miss.skips > 0) {
+      var lastTxt = miss.lastSkip ? _matExpDateStr(miss.lastSkip) : '';
+      missTag = ' <span title="Passed over ' + miss.skips + ' time' + (miss.skips===1?'':'s')
+        + ' in favour of ' + miss.altLots + ' later-expiring lot' + (miss.altLots===1?'':'s')
+        + (lastTxt ? ', most recently ' + lastTxt : '')
+        + '. Reconstructed from the pick sheet — legitimate reasons exist (allergen segregation, a customer-specific lot, a hold), so treat it as a prompt to look, not a verdict."'
+        + ' style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:'
+        + (miss.review ? '#4a3410;color:#FAC775' : '#2c2c2a;color:#888780') + ';cursor:help;white-space:nowrap;">skipped '
+        + miss.skips + '\u00d7</span>';
+    }
     var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
     return '<tr style="border-bottom:0.5px solid #2c2c2a;' + (expired ? 'background:#1e1414;' : '') + '">'
-      + '<td style="' + td + '">' + _blendCopyCell(L.lot) + tag + '</td>'
+      + '<td style="' + td + '">' + _blendCopyCell(L.lot) + tag + missTag + '</td>'
       + (multiPart ? '<td style="' + td + 'color:#888780;">' + esc(L.part) + '</td>' : '')
       + '<td style="' + td + 'text-align:right;color:#85B7EB;font-weight:500;">' + fmtStockQty(L.qty) + ' ' + unit + '</td>'
       + '<td style="' + td + 'text-align:right;">' + dateTxt + '</td>'
@@ -10110,6 +10314,7 @@ function renderMaterials() {
         +'<div id="materialsShortToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
           +'<button type="button" class="seg-btn" data-short="0" onclick="setMaterialsAllSegment()" style="'+shortBtnStyle(!materialsShortOnly,false)+'">All <span class="seg-count" id="shortCountAll" style="font-size:10px;opacity:.75;">0</span></button>'
           +'<button type="button" class="seg-btn" data-short="1" onclick="setMaterialsShortOnly(true)" style="'+shortBtnStyle(materialsShortOnly,true)+'">Short only <span class="seg-count" id="shortCountShort" style="font-size:10px;opacity:.75;">0</span></button>'
+          +'<button type="button" class="seg-btn" data-fefo="1" onclick="setMaterialsFefoOnly(true)" title="Materials holding a lot that was picked past while an earlier-expiring lot was still usable, and that lot is now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days with at least '+FEFO_REVIEW_MIN_KG+' kg left." style="'+fefoBtnStyle(materialsFefoOnly)+'">FEFO review <span class="seg-count" id="shortCountFefo" style="font-size:10px;opacity:.75;">0</span></button>'
           +'<button type="button" class="seg-btn" data-expiring="1" onclick="setMaterialsExpiringOnly(true)" title="Materials holding stock that is already past date, expires within '+EXPIRY_SOON_DAYS+' days, or that first-expiry-first-out says will not be used in time." style="'+expiringBtnStyle(materialsExpiringOnly)+'">Expiring <span class="seg-count" id="shortCountExpiring" style="font-size:10px;opacity:.75;">0</span></button>'
         +'</div>'
       +'</div>'
@@ -11901,6 +12106,7 @@ function _filteredMatList() {
   return list.filter(function(m){
     if (materialsShortOnly && !matIsShort(m)) return false;
     if (materialsExpiringOnly && !matIsExpiring(m)) return false;
+    if (materialsFefoOnly && !matHasFefoReview(m)) return false;
     if (!q) return true;
     return (m.name||'').toLowerCase().indexOf(q) !== -1
         || (m.stockParts || m.partNums || []).some(function(p){ return (p||'').toLowerCase().indexOf(q) !== -1; });
@@ -11921,6 +12127,7 @@ function toggleMatExportPopover(e) {
   var filterBits = [];
   if (materialsShortOnly) filterBits.push('Short only');
   if (materialsExpiringOnly) filterBits.push('Expiring only');
+  if (materialsFefoOnly) filterBits.push('FEFO review only');
   if (matSearch) filterBits.push('"'+esc(matSearch)+'"');
   var filterLabel = (filterBits.length && filtered.length < allList.length)
     ? ' &middot; <span style="color:#85B7EB;">filtered &middot; '+filterBits.join(' &middot; ')+'</span>'
@@ -11967,6 +12174,7 @@ function exportMaterials() {
   // it's a subset (e.g. "Short only") and not the full material list.
   if (materialsShortOnly) windowLabel += ' · Short only';
   if (materialsExpiringOnly) windowLabel += ' · Expiring only';
+  if (materialsFefoOnly) windowLabel += ' · FEFO review only';
   if (matSearch) windowLabel += ' · Search "' + matSearch + '"';
 
   var wb = XLSX.utils.book_new();
@@ -12063,6 +12271,39 @@ function exportMaterials() {
     ws3['!cols'] = [{wch:42},{wch:10},{wch:12},{wch:11},{wch:8},{wch:12},{wch:10},{wch:16},{wch:34},{wch:22},{wch:20},{wch:12}];
     ws3['!merges'] = [{s:{r:0,c:0},e:{r:0,c:s3Headers.length-1}},{s:{r:1,c:0},e:{r:1,c:s3Headers.length-1}}];
     XLSX.utils.book_append_sheet(wb, ws3, 'Lots By Expiry');
+  }
+
+  // Sheet 4: the FEFO review list — the floor walk. Always the tight definition
+  // (expired or expiring within the horizon, at least the kg floor), never the full
+  // stranded set, which is 757 lots of mostly harmless high-turnover churn.
+  var _fefoX = computeFefoMisses();
+  if (_fefoX.review.length) {
+    var s4Headers = ['Material','Part #','Lot #','On Hand','Expires','Days Left','State','Times Skipped','Last Skipped','Location','Supplier','Supplier Batch'];
+    var s4Rows = [
+      ['FEFO review — lots picked past while still usable'],
+      ['Exported: '+dateStr+' · '+_fefoX.review.length+' lots · '+Math.round(_fefoX.reviewKg).toLocaleString()+' kg'
+        + ' · expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days with at least '+FEFO_REVIEW_MIN_KG+' kg remaining'],
+      ['Reconstructed from the pick sheet: a lot counts as skipped when a later-expiring lot of the same part was picked while this one was received, in date and in stock.'
+        + ' Under-reports (only lots still in the inventory feed can be compared) and does not know about write-offs or holds. Legitimate reasons to skip a lot exist — review, do not assume.'],
+      [],
+      s4Headers
+    ];
+    _fefoX.review.forEach(function(r){
+      s4Rows.push([
+        r.material, r.part, r.lot,
+        Math.round(r.qty * 100) / 100,
+        r.exp == null ? '' : _matExpDateStr(r.exp),
+        r.days == null ? '' : r.days,
+        r.days == null ? '' : (r.days < 0 ? 'EXPIRED' : r.days <= 30 ? 'Within 30 days' : 'Within 90 days'),
+        r.skips,
+        r.lastSkip ? _matExpDateStr(r.lastSkip) : '',
+        r.loc, r.supplier, r.batch
+      ]);
+    });
+    var ws4 = XLSX.utils.aoa_to_sheet(s4Rows);
+    ws4['!cols'] = [{wch:42},{wch:10},{wch:12},{wch:11},{wch:12},{wch:10},{wch:15},{wch:14},{wch:13},{wch:30},{wch:22},{wch:20}];
+    ws4['!merges'] = [{s:{r:0,c:0},e:{r:0,c:s4Headers.length-1}},{s:{r:1,c:0},e:{r:1,c:s4Headers.length-1}},{s:{r:2,c:0},e:{r:2,c:s4Headers.length-1}}];
+    XLSX.utils.book_append_sheet(wb, ws4, 'FEFO Review');
   }
 
   var fileName = 'DTF_Materials_'+now.toISOString().split('T')[0]+'.xlsx';
