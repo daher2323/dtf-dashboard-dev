@@ -10494,22 +10494,44 @@ function renderMaterials() {
     }
     return t;
   })();
+  // Two audiences, so two forms. The FULL line belongs where someone is doing expiry
+  // work — the Expiring / FEFO segments — or where coverage is bad enough that a quiet
+  // Expiry column would mislead (it read 44% before the sheet's QUERY was replaced with
+  // FILTER, and that regression must not be able to hide again).
+  //
+  // On the default view the coverage recital is noise: the exposure is already on the
+  // Expiry column and the segment counts. What survives there is only the part with
+  // nowhere else to live — dates the sheet holds but nothing can read. That badge shows
+  // on the affected material's row, which you would have to know to look for. The line
+  // is self-extinguishing: fix the 24 typos and it disappears on its own.
   var _covHTML = '';
   if (_cov.lots) {
     var _pct = (_cov.dated / _cov.lots * 100);
-    var _bits = [];
-    _bits.push('<span style="color:#cfcdc7;">' + _cov.dated.toLocaleString() + ' of ' + _cov.lots.toLocaleString()
-      + '</span> in-stock lots carry a usable expiry date (' + _pct.toFixed(1) + '%)');
-    if (_cov.expiredKg > 0) _bits.push('<span style="color:#F09595;font-weight:500;">' + Math.round(_cov.expiredKg).toLocaleString()
-      + ' kg past date</span> in ' + _cov.expiredLots + ' lot' + (_cov.expiredLots===1?'':'s'));
-    if (_cov.kg90 > 0) _bits.push('<span style="color:#FAC775;">' + Math.round(_cov.kg90).toLocaleString() + ' kg</span> expiring within 90 days');
-    if (_cov.badLots > 0) _bits.push('<span title="The inventory sheet holds something unreadable in EXP. Date for these lots — a typo, not a missing entry. Expand a material to see the offending value." style="color:#F09595;border-bottom:1px dotted #6b2020;cursor:help;">'
-      + _cov.badLots + ' lot' + (_cov.badLots===1?'':'s') + ' with an unreadable date</span>');
-    if (_cov.undatedLots - _cov.badLots > 0) _bits.push((_cov.undatedLots - _cov.badLots) + ' with none recorded');
-    _covHTML = '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:11px;color:#888780;font-family:system-ui;">'
-      + '<span style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Expiry coverage</span>'
-      + '<span>' + _bits.join(' <span style="color:#3a3a38;">&middot;</span> ') + '</span>'
-      + '</div>';
+    var _poorCoverage = _pct < 95;
+    var _full = materialsExpiringOnly || materialsFefoOnly || _poorCoverage;
+    var _badBits = [];
+    if (_cov.badLots > 0) _badBits.push('<span title="The inventory sheet holds something unreadable in EXP. Date for these lots — a typo, not a missing entry. Filter to the material and expand it to see the offending value." style="color:#F09595;border-bottom:1px dotted #6b2020;cursor:help;">'
+      + _cov.badLots + ' lot' + (_cov.badLots===1?'':'s') + ' with an unreadable expiry date</span>');
+    if (_cov.undatedLots - _cov.badLots > 0) _badBits.push((_cov.undatedLots - _cov.badLots) + ' with none recorded');
+    var _bits = [], _label;
+    if (_full) {
+      _label = 'Expiry coverage';
+      _bits.push('<span style="color:#cfcdc7;">' + _cov.dated.toLocaleString() + ' of ' + _cov.lots.toLocaleString()
+        + '</span> in-stock lots carry a usable expiry date (' + _pct.toFixed(1) + '%)');
+      if (_cov.expiredKg > 0) _bits.push('<span style="color:#F09595;font-weight:500;">' + Math.round(_cov.expiredKg).toLocaleString()
+        + ' kg past date</span> in ' + _cov.expiredLots + ' lot' + (_cov.expiredLots===1?'':'s'));
+      if (_cov.kg90 > 0) _bits.push('<span style="color:#FAC775;">' + Math.round(_cov.kg90).toLocaleString() + ' kg</span> expiring within 90 days');
+      _bits = _bits.concat(_badBits);
+    } else {
+      _label = 'Expiry data';
+      _bits = _badBits;                 // nothing wrong to report -> no line at all
+    }
+    if (_bits.length) {
+      _covHTML = '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:11px;color:#888780;font-family:system-ui;">'
+        + '<span style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">' + _label + '</span>'
+        + '<span>' + _bits.join(' <span style="color:#3a3a38;">&middot;</span> ') + '</span>'
+        + '</div>';
+    }
   }
   content.innerHTML = pickerHTML + _covHTML
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
