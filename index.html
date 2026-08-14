@@ -1754,7 +1754,7 @@ function expiryPosition(parts, ratePerMonth) {
   }
   var out = {
     lots: lots, dated: 0, undated: 0,
-    expiredKg: 0, expiredLots: 0, noExpiryKg: 0, noExpiryLots: 0,
+    expiredKg: 0, expiredLots: 0, noExpiryKg: 0, noExpiryLots: 0, badDateLots: 0, badDateKg: 0, badDateSample: '',
     kg30: 0, kg60: 0, kg90: 0, kg180: 0,
     soonest: null, soonestDays: null, soonestLot: null,
     riskKg: 0, riskLots: 0, rate: ratePerMonth || 0, hasRate: !!(ratePerMonth > 0)
@@ -1762,7 +1762,17 @@ function expiryPosition(parts, ratePerMonth) {
   if (!lots.length) return out;
   var dated = [];
   for (i = 0; i < lots.length; i++) {
-    if (lots[i].exp == null) { out.undated++; out.noExpiryLots++; out.noExpiryKg += lots[i].qty; }
+    if (lots[i].exp == null) {
+      out.undated++; out.noExpiryLots++; out.noExpiryKg += lots[i].qty;
+      // A cell with something unreadable in it ("03/15//2028", "Not Found") is a data
+      // error, not a missing entry — worth telling apart, because one needs a typo
+      // fixed and the other needs a date entered. Never guessed at: inventing an
+      // expiry date is the one failure mode this whole feature cannot afford.
+      if (lots[i].expRaw) {
+        out.badDateLots++; out.badDateKg += lots[i].qty;
+        if (!out.badDateSample) out.badDateSample = lots[i].expRaw;
+      }
+    }
     else dated.push(lots[i]);
   }
   out.dated = dated.length;
@@ -8705,9 +8715,14 @@ function renderExpiryCell(m, unit) {
   // Stock on hand but not one lot carries a date: say so plainly. This is 40% of
   // lot rows, so it gets its own state instead of masquerading as "fine".
   if (!e.dated) {
-    return '<td style="' + pad + '"><span title="' + e.noExpiryLots + ' lot' + (e.noExpiryLots===1?'':'s')
-      + ' holding ' + Math.round(e.noExpiryKg).toLocaleString() + ' ' + unit + ' — no expiry date recorded on the inventory sheet, so nothing can be projected."'
-      + ' style="font-size:11px;color:#888780;border-bottom:1px dotted #5f5e5a;cursor:help;">no date</span></td>';
+    var allBad = e.badDateLots > 0 && e.badDateLots === e.noExpiryLots;
+    var tip = e.noExpiryLots + ' lot' + (e.noExpiryLots===1?'':'s') + ' holding ' + Math.round(e.noExpiryKg).toLocaleString() + ' ' + unit
+      + (allBad
+          ? ' — the expiry value on the inventory sheet cannot be read (\u201c' + esc(e.badDateSample) + '\u201d). A typo, not a missing date.'
+          : ' — no expiry date recorded on the inventory sheet, so nothing can be projected.');
+    return '<td style="' + pad + '"><span title="' + tip + '"'
+      + ' style="font-size:11px;color:' + (allBad ? '#F09595' : '#888780') + ';border-bottom:1px dotted #5f5e5a;cursor:help;">'
+      + (allBad ? 'bad date' : 'no date') + '</span></td>';
   }
   var parts = [], line1;
   var d = new Date(e.soonest);
@@ -8733,6 +8748,10 @@ function renderExpiryCell(m, unit) {
       : ('No usage in the selected window, so nothing is burning this down — every dated kg is exposed.');
     sub = '<span title="' + why + '" style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#4a3410;color:#FAC775;cursor:help;">'
       + Math.round(e.riskKg).toLocaleString() + ' ' + unit + ' at risk' + (e.hasRate ? '' : ' · no usage') + '</span>';
+  } else if (e.badDateLots > 0) {
+    sub = '<span title="' + e.badDateLots + ' lot' + (e.badDateLots===1?'':'s') + ' hold an expiry value that cannot be read (e.g. \u201c' + esc(e.badDateSample) + '\u201d) — a typo in the inventory sheet, not a missing date. Fix it there and it appears here."'
+      + ' style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#4a2020;color:#F09595;cursor:help;">'
+      + e.badDateLots + ' bad date' + (e.badDateLots===1?'':'s') + '</span>';
   } else if (e.noExpiryKg > 0) {
     sub = '<span title="' + e.noExpiryLots + ' more lot' + (e.noExpiryLots===1?'':'s') + ' (' + Math.round(e.noExpiryKg).toLocaleString() + ' ' + unit + ') carry no expiry date, so they are not included in this projection."'
       + ' style="font-size:9px;color:#5f5e5a;border-bottom:1px dotted #444441;cursor:help;">+' + e.noExpiryLots + ' undated</span>';
