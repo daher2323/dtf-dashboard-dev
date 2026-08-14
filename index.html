@@ -4056,13 +4056,36 @@ function _logiCopy(text, btn) {
 // dimSet (optional) marks part #s belonging to the SKU group but with no usage in
 // the selected window — rendered muted so the subline can show the full group roster
 // without implying every part was consumed recently.
+// Part-# chips laid out in a balanced grid rather than left to wrap by width.
+// Width-wrapping gave WPC's six parts a lopsided 4/2 because 20-1194 is wider than
+// 20-092; a reader scanning a roster wants even rows. Rows are sized first from how
+// many chips physically fit (PART_CHIP_CAP), then the column count is derived from
+// the row count, so the last row is never left with a single orphan:
+//   6 parts -> 2 rows -> 3 cols -> 3/3      (was 4/2)
+//   5        -> 2      -> 3      -> 3/2
+//   4        -> 1      -> 4      -> 4
+//   9        -> 3      -> 3      -> 3/3/3
+// max-content columns keep each chip its natural width and stay left-aligned.
+var PART_CHIP_CAP = 4;   // chips that fit on one line in the 250px name-cell roster
+function _partNumsGridStyle(n) {
+  if (n < 2) return '';
+  var rows = Math.ceil(n / PART_CHIP_CAP);
+  var cols = Math.ceil(n / rows);
+  return 'display:inline-grid;grid-template-columns:repeat(' + cols + ',max-content);gap:1px 10px;';
+}
 function _partNumsHTML(partNums, dimSet) {
-  return partNums.map(function(p) {
+  // A single chip needs no grid, and the grid replaces the interpunct separators —
+  // aligned columns already do the visual separating.
+  var grid = _partNumsGridStyle(partNums.length);
+  var joined = grid ? '' : '<span style="color:#4a4d4a;"> \xb7 </span>';
+  var inner = partNums.map(function(p) {
     var dim = dimSet && dimSet[p];
-    return '<span style="color:' + (dim ? '#6f6e6a' : '#a8c7e8') + ';user-select:text;-webkit-user-select:text;"'
+    var chip = '<span style="color:' + (dim ? '#6f6e6a' : '#a8c7e8') + ';user-select:text;-webkit-user-select:text;"'
       + (dim ? ' title="No usage in the selected window"' : '') + '>' + esc(p) + '</span>'
       + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(p) + ',this)" title="Copy part #" style="margin-left:3px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
-  }).join('<span style="color:#4a4d4a;"> \xb7 </span>');
+    return grid ? '<span style="white-space:nowrap;">' + chip + '</span>' : chip;
+  }).join(joined);
+  return grid ? '<span style="' + grid + '">' + inner + '</span>' : inner;
 }
 // Build a carrier tracking link for a reference, or null if the carrier has no
 // entry in CARRIER_TRACK_URL. Keys matched case-insensitively; trailing "."
