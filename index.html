@@ -1843,6 +1843,8 @@ function expiryPosition(parts, ratePerMonth) {
 var FEFO_MIN_KG = 1;                 // a sibling must have held at least this much to count
 var FEFO_REVIEW_MIN_KG = 25;         // review list floor — keeps flavour dust out
 var FEFO_REVIEW_HORIZON_DAYS = 90;   // expired, or expiring inside this window
+var FEFO_EVENT_CAP = 25;             // per-lot evidence rows kept for the drill-down
+var _fefoOpenLot = null;             // T# whose skip detail is expanded, or null
 var _fefoCache = null, _fefoCacheKey = '';
 // Pick-sheet dates are Google Form timestamps ("1/5/2026 14:32:05"); the time part
 // has to come off before parsing or every row is rejected.
@@ -1910,9 +1912,17 @@ function computeFefoMisses() {
         if (rd && rd.getTime() > when) continue;      // not received yet
         if (balanceAt(sn, when) < FEFO_MIN_KG) continue;
         hit = true;
-        if (!strand[sn]) strand[sn] = { skips: 0, last: null, alts: {} };
+        if (!strand[sn]) strand[sn] = { skips: 0, last: null, alts: {}, events: [] };
         strand[sn].skips++;
         strand[sn].alts[k] = true;
+        // The evidence behind the count: what was pulled instead, on what
+        // production lot, and how much of this lot was sitting there at the time.
+        // Without it "skipped 35x" is an accusation with nothing to check.
+        strand[sn].events.push({
+          when: when, usedLot: k, usedExp: used.exp,
+          orderLot: mine[i].orderLot || '', qty: mine[i].qty || 0,
+          hadKg: balanceAt(sn, when)
+        });
         if (strand[sn].last == null || when > strand[sn].last) strand[sn].last = when;
       }
       if (hit) events++;
@@ -1932,10 +1942,14 @@ function computeFefoMisses() {
     var exp = L.row.exp;
     var days = exp == null ? null : Math.round((exp - today) / _EXPIRY_MS_PER_DAY);
     var altN = 0, ak; for (ak in strand[k].alts) if (strand[k].alts.hasOwnProperty(ak)) altN++;
+    // Newest first — the recent skips are the ones still worth asking about.
+    var evs = (strand[k].events || []).slice().sort(function(a, b){ return b.when - a.when; });
     var rec2 = {
       lot: L.row.lot, part: L.part, material: L.material || '', qty: L.row.qty,
       exp: exp, days: days, loc: L.row.loc, supplier: L.row.supplier, batch: L.row.batch,
       skips: strand[k].skips, lastSkip: strand[k].last, altLots: altN,
+      events: evs.slice(0, FEFO_EVENT_CAP), eventsTotal: evs.length,
+      received: L.row.received,
       review: (days != null && days <= FEFO_REVIEW_HORIZON_DAYS && L.row.qty >= FEFO_REVIEW_MIN_KG)
     };
     all.push(rec2);
@@ -9519,6 +9533,56 @@ function _matLocShort(loc) {
     + esc(bins.slice(0, MAT_LOC_SHOW).join(', '))
     + ' <span style="color:#5f5e5a;">+' + (bins.length - MAT_LOC_SHOW) + '</span></span>';
 }
+// Evidence for one "skipped N x" badge: every pick that went past this lot, what
+// was pulled instead and when. Receipt is proven two ways — the lot's own receiving
+// date precedes the pick, and its reconstructed balance was positive — so the
+// "had on hand" column is the answer to "were we sure we had it?".
+function _fefoDetailRowHTML(miss, unit, nCols) {
+  var evs = miss.events || [];
+  if (!evs.length) return '';
+  var th = 'text-align:left;padding:3px 8px;font-size:9px;color:#5f5e5a;font-weight:500;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;';
+  var thR = th.replace('text-align:left', 'text-align:right');
+  var rows = evs.map(function(ev){
+    var td = 'padding:3px 8px;font-size:11px;white-space:nowrap;';
+    // Days of life this lot still had when it was passed over — the crux of it.
+    var lifeLeft = (miss.exp != null) ? Math.round((miss.exp - ev.when) / _EXPIRY_MS_PER_DAY) : null;
+    return '<tr>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matExpDateStr(ev.when) + '</td>'
+      + '<td style="' + td + 'color:#888780;">' + (ev.orderLot ? esc(ev.orderLot) : '—') + '</td>'
+      + '<td style="' + td + '">' + _blendCopyCell(ev.usedLot) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (ev.usedExp != null ? _matExpDateStr(ev.usedExp) : '—') + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + (ev.qty ? fmtStockQty(ev.qty) + ' ' + unit : '—') + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(ev.hadKg) + ' ' + unit + '</td>'
+      + '<td style="' + td + 'text-align:right;color:' + (lifeLeft != null && lifeLeft <= 90 ? '#FAC775' : '#888780') + ';">'
+        + (lifeLeft == null ? '—' : (lifeLeft < 0 ? 'past date' : lifeLeft + 'd')) + '</td>'
+      + '</tr>';
+  }).join('');
+  var note = 'Reconstructed from the pick sheet. "We had" is this lot\u2019s balance that day (current stock plus everything picked from it since)'
+    + (miss.received ? '; it was received ' + esc(miss.received) : '')
+    + '. Skipping a lot can be legitimate — allergen segregation, a customer-specific lot, a hold — so read this as a prompt to look, not a verdict.';
+  if (miss.eventsTotal > evs.length) note = (miss.eventsTotal - evs.length) + ' earlier skips not shown. ' + note;
+  return '<tr><td colspan="' + nCols + '" style="padding:0;">'
+    + '<div style="background:#0f1012;border-left:2px solid #FAC775;padding:8px 12px 10px 12px;">'
+    + '<div style="font-size:10px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:5px;">'
+      + 'What was picked instead &middot; ' + miss.skips + ' skip' + (miss.skips===1?'':'s') + '</div>'
+    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<th style="' + th + '">Date</th><th style="' + th + '">Production lot</th><th style="' + th + '">Used instead</th>'
+      + '<th style="' + thR + '">Its expiry</th><th style="' + thR + '">Kg pulled</th>'
+      + '<th style="' + thR + '">We had</th><th style="' + thR + '">Life left</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+    + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">' + note + '</div>'
+    + '</div></td></tr>';
+}
+// Expand/collapse one lot's skip evidence, then repaint just the open material's
+// panel — the table lives inside it, so no full re-render is needed.
+function toggleFefoDetail(lotNo) {
+  _fefoOpenLot = (_fefoOpenLot === lotNo) ? null : lotNo;
+  var list = window._matList || [], i;
+  for (i = 0; i < list.length; i++) {
+    if (list[i].name === window._selectedMaterial) { renderMatInline(list[i], i); return; }
+  }
+}
 function matLotTableHTML(m, unit) {
   var e = m && m.expiry;
   if (!e || !e.lots.length) return '';
@@ -9565,9 +9629,11 @@ function matLotTableHTML(m, unit) {
         + ' in favour of ' + miss.altLots + ' later-expiring lot' + (miss.altLots===1?'':'s')
         + (lastTxt ? ', most recently ' + lastTxt : '')
         + '. Reconstructed from the pick sheet — legitimate reasons exist (allergen segregation, a customer-specific lot, a hold), so treat it as a prompt to look, not a verdict."'
+        + ' onclick="event.stopPropagation();toggleFefoDetail(' + jsStr(L.lot) + ')"'
         + ' style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:'
-        + (miss.review ? '#4a3410;color:#FAC775' : '#2c2c2a;color:#888780') + ';cursor:help;white-space:nowrap;">skipped '
-        + miss.skips + '\u00d7</span>';
+        + (miss.review ? '#4a3410;color:#FAC775' : '#2c2c2a;color:#888780')
+        + ';cursor:pointer;white-space:nowrap;border:0.5px solid ' + (_fefoOpenLot === L.lot ? '#FAC775' : 'transparent') + ';">skipped '
+        + miss.skips + '\u00d7' + (_fefoOpenLot === L.lot ? ' \u25b4' : '') + '</span>';
     }
     var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
     return '<tr style="border-bottom:0.5px solid #2c2c2a;' + (expired ? 'background:#1e1414;' : '') + '">'
@@ -9579,7 +9645,8 @@ function matLotTableHTML(m, unit) {
       + '<td style="' + td + 'color:#cfcdc7;max-width:260px;overflow:hidden;text-overflow:ellipsis;">' + _matLocShort(L.loc) + '</td>'
       + '<td style="' + td + 'color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;">' + (L.supplier ? esc(L.supplier) : '') + (L.batch ? ' <span style="color:#5f5e5a;">' + esc(L.batch) + '</span>' : '') + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (L.received ? esc(L.received) : '—') + '</td>'
-      + '</tr>';
+      + '</tr>'
+      + ((_fefoOpenLot === L.lot && miss) ? _fefoDetailRowHTML(miss, unit, multiPart ? 8 : 7) : '');
   }).join('');
   var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var thR = th.replace('text-align:left', 'text-align:right');
