@@ -1845,6 +1845,7 @@ var FEFO_REVIEW_MIN_KG = 25;         // review list floor — keeps flavour dust
 var FEFO_REVIEW_HORIZON_DAYS = 90;   // expired, or expiring inside this window
 var FEFO_EVENT_CAP = 25;             // per-lot evidence rows kept for the drill-down
 var _fefoOpenLot = null;             // T# whose skip detail is expanded, or null
+var _expiryIssuesOpen = false;       // the unreadable/missing-date list under the coverage line
 // Which section of an expanded material is showing. Sticky across materials on
 // purpose: auditing lots means opening five rows in a row and wanting Lots each time.
 var matInlineTab = 'usage';          // 'usage' | 'customers' | 'parts' | 'lots'
@@ -9704,6 +9705,63 @@ function setMatInlineTab(v) {
 // so the bar tells you there is something to look at without making you look. That
 // is strictly more than the old stacked layout gave you, where the same fact sat
 // 700px down the page.
+// Every in-stock lot whose expiry cannot be used, with the offending cell shown
+// verbatim so it can be found and corrected in the inventory sheet. Two problems
+// live here because they are fixed in the same place but need different actions:
+// "Unreadable" is a typo to correct, "Not recorded" is a date to enter.
+function expiryIssuesPanelHTML() {
+  var out = [], pn, i;
+  for (pn in inventoryByPart) {
+    if (!inventoryByPart.hasOwnProperty(pn)) continue;
+    var rec = inventoryByPart[pn], lr = rec.lotRows || [];
+    for (i = 0; i < lr.length; i++) {
+      if (lr[i].exp != null) continue;
+      out.push({ part: pn, material: rec.material || '', lot: lr[i].lot, qty: lr[i].qty,
+                 raw: lr[i].expRaw || '', loc: lr[i].loc || '', received: lr[i].received || '' });
+    }
+  }
+  if (!out.length) return '';
+  // Unreadable first (a typo is a two-second fix), then by quantity at stake.
+  out.sort(function(a, b){
+    var ab = a.raw ? 0 : 1, bb = b.raw ? 0 : 1;
+    if (ab !== bb) return ab - bb;
+    return b.qty - a.qty;
+  });
+  var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+  var rows = out.map(function(r){
+    var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
+    return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<td style="' + td + 'color:#e8e6e0;max-width:280px;overflow:hidden;text-overflow:ellipsis;">' + esc(r.material) + '</td>'
+      + '<td style="' + td + 'color:#888780;">' + esc(r.part) + '</td>'
+      + '<td style="' + td + '">' + _blendCopyCell(r.lot) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(r.qty) + '</td>'
+      + '<td style="' + td + '">' + (r.raw
+          ? '<span style="color:#F09595;font-weight:500;">' + esc(r.raw) + '</span> <span style="font-size:9px;color:#5f5e5a;">unreadable</span>'
+          : '<span style="color:#5f5e5a;">(empty)</span> <span style="font-size:9px;color:#5f5e5a;">not recorded</span>') + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc) + '</td>'
+      + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<div style="background:#1e1414;border:0.5px solid #4a2020;border-left:3px solid #F09595;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
+    + '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#241717;">'
+      + '<span style="font-size:11px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Expiry dates to fix</span>'
+      + '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + out.length + ' lot' + (out.length===1?'':'s')
+        + ' &middot; edit EXP. Date in the Raw Material Inventory sheet; the dashboard picks it up on the next refresh</span>'
+      + '<button onclick="toggleExpiryIssues()" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;">Hide</button>'
+    + '</div>'
+    + '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#1a1416;">'
+    + '<thead><tr style="border-bottom:0.5px solid #4a2020;">'
+      + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
+      + '<th style="' + th.replace('text-align:left','text-align:right') + '">On hand</th>'
+      + '<th style="' + th + '">EXP. Date cell</th><th style="' + th + '">Location</th>'
+      + '<th style="' + th.replace('text-align:left','text-align:right') + 'padding-right:14px;">Received</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+    + '</div>';
+}
+function toggleExpiryIssues() {
+  _expiryIssuesOpen = !_expiryIssuesOpen;
+  renderMaterials();
+}
 function matInlineTabBar(m, idx) {
   var e = m.expiry || null;
   var lotN = e ? e.lots.length : 0;
@@ -10510,9 +10568,13 @@ function renderMaterials() {
     var _poorCoverage = _pct < 95;
     var _full = materialsExpiringOnly || materialsFefoOnly || _poorCoverage;
     var _badBits = [];
-    if (_cov.badLots > 0) _badBits.push('<span title="The inventory sheet holds something unreadable in EXP. Date for these lots — a typo, not a missing entry. Filter to the material and expand it to see the offending value." style="color:#F09595;border-bottom:1px dotted #6b2020;cursor:help;">'
-      + _cov.badLots + ' lot' + (_cov.badLots===1?'':'s') + ' with an unreadable expiry date</span>');
-    if (_cov.undatedLots - _cov.badLots > 0) _badBits.push((_cov.undatedLots - _cov.badLots) + ' with none recorded');
+    // Both counts open the list. Naming a defect without a route to it just moves the
+    // hunt onto the reader — you would have to expand materials one at a time to find
+    // 24 lots among 2,656.
+    if (_cov.badLots > 0) _badBits.push('<span onclick="toggleExpiryIssues()" title="Show the offending cells so they can be fixed in the inventory sheet." style="color:#F09595;border-bottom:1px dotted #6b2020;cursor:pointer;">'
+      + _cov.badLots + ' lot' + (_cov.badLots===1?'':'s') + ' with an unreadable expiry date' + (_expiryIssuesOpen ? ' \u25b4' : ' \u25be') + '</span>');
+    if (_cov.undatedLots - _cov.badLots > 0) _badBits.push('<span onclick="toggleExpiryIssues()" style="border-bottom:1px dotted #444441;cursor:pointer;">'
+      + (_cov.undatedLots - _cov.badLots) + ' with none recorded</span>');
     var _bits = [], _label;
     if (_full) {
       _label = 'Expiry coverage';
@@ -10533,7 +10595,7 @@ function renderMaterials() {
         + '</div>';
     }
   }
-  content.innerHTML = pickerHTML + _covHTML
+  content.innerHTML = pickerHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     +'<div style="overflow-x:auto;"><table class="mat-table" style="width:100%;font-family:system-ui;table-layout:fixed;">'
     +'<colgroup>'
