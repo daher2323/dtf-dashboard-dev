@@ -812,6 +812,8 @@ var ordersDrilldownStatus = null;   // null | <status name> — which row is exp
 var customerChartView = 'all';      // 'all' | 'powder' | 'capsule'
 var customerChartLimit = '10';      // '10' | '25' | 'all'
 var customerDrilldown  = null;      // null | <brand name> — which customer row is expanded
+var ooCustSearch = '';              // Open Orders → Customer Breakdown name filter. A non-empty
+                                    // query overrides the Top 10/25/All limit (see renderOrdersSummary).
 var agingDrilldown     = null;      // null | '4-8' | '8-12' | '12+' — which aging bucket is expanded
 // Logistics (shipping tracker) state
 var logisticsData = null;           // null = not yet fetched; array of OUTBOUND shipment records once loaded
@@ -3034,6 +3036,57 @@ function toggleCustomerDrilldown(brand) {
   closeMsPanel();
   customerDrilldown = (customerDrilldown === brand) ? null : brand;
   render();
+}
+
+// ── Customer Breakdown name filter ────────────────────────────────────────
+// Purely a DOM pass over the already-rendered rows (every customer is in the
+// markup, hidden or not), so typing never re-renders the page, never rebuilds a
+// chart, and never moves the caret. Same approach as filterProcurement /
+// filterMaterials. ooCustSearch is kept in module state so a real re-render — a
+// drilldown click, or the 5-minute auto-refresh — repaints already filtered.
+function _ooMatchNote(shown, total, q) {
+  if (!shown) return '';
+  return 'Showing ' + shown + ' of ' + total + ' customers matching “' + (q||'').replace(/^\s+|\s+$/g,'') + '”';
+}
+function filterOOCustomers() {
+  var inp = document.getElementById('ooCustSearchInput');
+  if (inp) ooCustSearch = inp.value;
+  var q = (ooCustSearch || '').replace(/^\s+|\s+$/g,'').toLowerCase();
+  var clr = document.getElementById('ooCustSearchClear');
+  if (clr) clr.style.display = q ? 'inline-flex' : 'none';
+  // A query reaches the whole list — that's the point of searching, so it
+  // deliberately overrides Top 10/25 instead of intersecting with it.
+  var limit = customerChartLimit === 'all' ? Infinity : parseInt(customerChartLimit, 10);
+  var rows = document.querySelectorAll('.oo-cust-row'), shown = 0, i;
+  for (i = 0; i < rows.length; i++) {
+    var el = rows[i];
+    var vis = q
+      ? (el.getAttribute('data-oo-cust') || '').indexOf(q) !== -1
+      : parseInt(el.getAttribute('data-oo-rank'), 10) < limit;
+    el.style.display = vis ? 'block' : 'none';
+    if (vis) shown++;
+  }
+  var limitNote = document.getElementById('oo-cust-note-limit');
+  var searchNote = document.getElementById('oo-cust-note-search');
+  if (limitNote)  limitNote.style.display = (!q && limitNote.innerHTML) ? 'block' : 'none';
+  if (searchNote) {
+    searchNote.textContent = q ? _ooMatchNote(shown, rows.length, ooCustSearch) : '';
+    searchNote.style.display = (q && shown) ? 'block' : 'none';
+  }
+  var emptyEl = document.getElementById('oo-cust-empty');
+  if (emptyEl) {
+    emptyEl.textContent = (q && !shown) ? ('No customer matches “' + ooCustSearch.replace(/^\s+|\s+$/g,'') + '”.') : '';
+    emptyEl.style.display = (q && !shown) ? 'block' : 'none';
+  }
+}
+function onOOCustSearchKey(e) {
+  if (e.key === 'Escape' || e.key === 'Esc' || e.keyCode === 27) clearOOCustSearch();
+}
+function clearOOCustSearch() {
+  ooCustSearch = '';
+  var inp = document.getElementById('ooCustSearchInput');
+  if (inp) { inp.value = ''; inp.focus(); }
+  filterOOCustomers();
 }
 
 function toggleAgingDrilldown(bucket) {
@@ -10262,14 +10315,21 @@ function renderOrdersSummary() {
     .sort(function(a,b){ return b.total - a.total; });
   var maxCustomerTotal = customersAll.length ? customersAll[0].total : 0;
   var customerLimit = customerChartLimit === 'all' ? customersAll.length : parseInt(customerChartLimit, 10);
-  var customersVisible = customersAll.slice(0, customerLimit);
+  // EVERY customer is rendered, each tagged with its rank and lowercased name;
+  // Top 10/25/All and the name search then decide visibility in the DOM
+  // (filterOOCustomers), never by re-rendering. That's what lets you type in the
+  // search box without the page rebuilding under the caret — same trade the
+  // Procurement/Materials search boxes make. ~40 rows, so the cost is nothing.
   var customersHidden  = customersAll.slice(customerLimit);
-  // Collapse an orphan drilldown if the open customer is no longer visible
-  // (dropped from the data, type filter flipped, or limit shrank past it).
-  if (customerDrilldown && !customersVisible.some(function(c){ return c.name === customerDrilldown; })) {
+  // Collapse an orphan drilldown only when that customer left the list entirely
+  // (dropped from the data, or the type filter zeroed them out). A row hidden by
+  // the limit or the search keeps its open state and comes back expanded.
+  if (customerDrilldown && !customersAll.some(function(c){ return c.name === customerDrilldown; })) {
     customerDrilldown = null;
   }
   var hiddenUnits = customersHidden.reduce(function(a,c){ return a + c.total; }, 0);
+  var ooQ = (ooCustSearch || '').trim().toLowerCase();
+  var ooMatchCount = 0;
 
   function customerPillStyle(active) {
     return 'padding:4px 12px;border-radius:5px;border:1.5px solid '+(active?'#378ADD':'transparent')+';background:'+(active?'#0C447C':'transparent')+';color:'+(active?'#85B7EB':'#888780')+';font-weight:'+(active?'500':'400')+';font-size:11px;cursor:pointer;font-family:system-ui;transition:all .15s;';
@@ -10288,7 +10348,7 @@ function renderOrdersSummary() {
   // Trailing fixed column holds the per-customer export button — a real column
   // rather than an absolute overlay so the bar and unit figures never shift.
   var customerRowColTpl = '170px 1fr 110px 22px';
-  var customerRowsHTML = customersVisible.map(function(c){
+  var customerRowsHTML = customersAll.map(function(c, ci){
     var pPct = maxCustomerTotal ? (c.powder  / maxCustomerTotal * 100) : 0;
     var cPct = maxCustomerTotal ? (c.capsule / maxCustomerTotal * 100) : 0;
     var totalPct = maxCustomerTotal ? (c.total / maxCustomerTotal * 100) : 0;
@@ -10330,7 +10390,16 @@ function renderOrdersSummary() {
       + '<div style="text-align:right;line-height:0;">'+_ooExportBtn(c.name)+'</div>'
       + '</div>';
 
-    if (!isOpen) return summaryRow;
+    // One wrapper per customer so hiding a row hides its drilldown with it.
+    // Initial display is decided here (a search query wins over the limit) so the
+    // list paints already-filtered — no flash of the full roster on load/refresh.
+    var ooVisible = ooQ ? (c.name.toLowerCase().indexOf(ooQ) !== -1) : (ci < customerLimit);
+    if (ooVisible) ooMatchCount++;
+    function ooWrap(inner) {
+      return '<div class="oo-cust-row" data-oo-cust="'+esc(c.name.toLowerCase())+'" data-oo-rank="'+ci+'"'
+        + ' style="display:'+(ooVisible ? 'block' : 'none')+';">' + inner + '</div>';
+    }
+    if (!isOpen) return ooWrap(summaryRow);
 
     // Drill-down: the customer's orders, scoped to the active type view and
     // sorted by weeks on the books desc (oldest first), ties broken by units.
@@ -10389,27 +10458,46 @@ function renderOrdersSummary() {
       + drillExportBar + drillHeaders + drillBody + emptyNote
       + '</div>';
 
-    return summaryRow + drillHTML;
+    return ooWrap(summaryRow + drillHTML);
   }).join('');
 
-  var customerHiddenFooter = customersHidden.length > 0
-    ? '<div style="padding:10px 2px;font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;text-align:center;border-bottom:0.5px solid #2c2c2a;">+' + customersHidden.length + ' more customer' + (customersHidden.length===1?'':'s') + ' \u00b7 ' + hiddenUnits.toLocaleString() + ' units not shown</div>'
-    : '';
+  // Two notes live in the DOM at once and filterOOCustomers swaps which is shown:
+  // the "+N more" limit note (server-rendered, needs the unit math) and the search
+  // match count (filled in by JS). Keeping both avoids recomputing units per keystroke.
+  var noteStyle = 'padding:10px 2px;font-size:11px;color:#5f5e5a;font-style:italic;font-family:system-ui;text-align:center;border-bottom:0.5px solid #2c2c2a;';
+  var customerHiddenFooter = '<div id="oo-cust-note-limit" style="'+noteStyle+'display:'+((customersHidden.length > 0 && !ooQ) ? 'block' : 'none')+';">'
+      + (customersHidden.length > 0 ? '+' + customersHidden.length + ' more customer' + (customersHidden.length===1?'':'s') + ' \u00b7 ' + hiddenUnits.toLocaleString() + ' units not shown' : '')
+    + '</div>'
+    + '<div id="oo-cust-note-search" style="'+noteStyle+'display:'+(ooQ ? 'block' : 'none')+';">'
+      + (ooQ ? esc(_ooMatchNote(ooMatchCount, customersAll.length, ooCustSearch)) : '')
+    + '</div>';
   var customerLegend = customerChartView === 'all' && customersVisible.length > 0
     ? '<div style="display:flex;gap:18px;padding:10px 2px 2px;font-size:11px;color:#888780;font-family:system-ui;">'
     +   '<div style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:2px;background:'+LINE_COLOR['line#1']+';"></span>Powder</div>'
     +   '<div style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:2px;background:'+LINE_COLOR['line#2']+';"></span>Capsule</div>'
     + '</div>'
     : '';
+  var emptyStyle = 'padding:20px 0;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;';
   var customerEmpty = customersAll.length === 0
-    ? '<div style="padding:20px 0;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">No customers for the selected view.</div>'
-    : '';
+    ? '<div style="'+emptyStyle+'">No customers for the selected view.</div>'
+    : '<div id="oo-cust-empty" style="'+emptyStyle+'display:'+((ooQ && ooMatchCount === 0) ? 'block' : 'none')+';">'
+        + (ooQ && ooMatchCount === 0 ? 'No customer matches \u201c'+esc(ooCustSearch)+'\u201d.' : '')
+      + '</div>';
+  // Reuses the .cust-search-* tokens the Customers tab and Logistics log already
+  // use, so every search box on the dashboard looks and behaves the same. Typing
+  // calls filterOOCustomers(), which only flips row visibility — no re-render.
+  var ooCustSearchHTML = '<div class="cust-search-wrap" style="min-width:0;">'
+    + '<span class="cust-search-icon"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#888780" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#888780" stroke-width="1.3" stroke-linecap="round"/></svg></span>'
+    + '<input id="ooCustSearchInput" type="text" class="cust-search-input" placeholder="Search customers&hellip;" aria-label="Search customers" autocomplete="off" style="width:190px;height:28px;" value="'+esc(ooCustSearch)+'" oninput="filterOOCustomers()" onkeydown="onOOCustSearchKey(event)" />'
+    + '<button id="ooCustSearchClear" type="button" class="cust-search-clear" aria-label="Clear search" style="display:'+(ooCustSearch?'inline-flex':'none')+';" onclick="clearOOCustSearch()">&times;</button>'
+    + '</div>';
   var customerChartHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">'
     +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Customer Breakdown</div>'
-    +   '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+    +   '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
     +     customerViewToggle
     +     customerLimitToggle
+    +     ooCustSearchHTML
     +   '</div>'
     + '</div>'
     + customerRowsHTML
