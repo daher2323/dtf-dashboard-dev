@@ -10452,7 +10452,14 @@ function renderMaterials() {
     // so showing only consumed parts made the row look like it was missing parts.
     // Dormant parts render muted, and the badge counts active-of-total.
     var dormant = m.dormantParts || [];
-    var rosterParts = m.isGroup ? m.partNums.concat(dormant).sort() : m.partNums;
+    // Active parts first, then dormant — the trailing .sort() used to flatten the two
+    // groups into one alphabetical run, so which parts actually matter was down to how
+    // their numbers happened to collate. Both lists are already sorted individually
+    // (partNums and dormantParts are built sorted), so concatenating is enough. This
+    // also matches the expanded panel's Breakdown by part #, which has always put
+    // consumed parts before dormant ones. With the balanced grid, WPC's first row is
+    // now its three active parts and the second row its three dormant ones.
+    var rosterParts = m.isGroup ? m.partNums.concat(dormant) : m.partNums;
     var dimSet = {};
     dormant.forEach(function(p){ dimSet[p] = true; });
     var partsBadge = dormant.length
