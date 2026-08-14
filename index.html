@@ -1845,6 +1845,9 @@ var FEFO_REVIEW_MIN_KG = 25;         // review list floor — keeps flavour dust
 var FEFO_REVIEW_HORIZON_DAYS = 90;   // expired, or expiring inside this window
 var FEFO_EVENT_CAP = 25;             // per-lot evidence rows kept for the drill-down
 var _fefoOpenLot = null;             // T# whose skip detail is expanded, or null
+// Which section of an expanded material is showing. Sticky across materials on
+// purpose: auditing lots means opening five rows in a row and wanting Lots each time.
+var matInlineTab = 'usage';          // 'usage' | 'customers' | 'parts' | 'lots'
 var _fefoCache = null, _fefoCacheKey = '';
 // Pick-sheet dates are Google Form timestamps ("1/5/2026 14:32:05"); the time part
 // has to come off before parsing or every row is rejected.
@@ -9012,6 +9015,7 @@ function setMaterialsAllSegment() {
 function setMaterialsFefoOnly(v) {
   materialsFefoOnly = !!v;
   if (materialsFefoOnly) {
+    matInlineTab = 'lots';        // ditto — the evidence lives on the Lots tab
     materialsShortOnly = false;
     materialsExpiringOnly = false;
     // Same reasoning as the Expiring segment: a stranded lot often belongs to a
@@ -9027,6 +9031,7 @@ function setMaterialsFefoOnly(v) {
 function setMaterialsExpiringOnly(v) {
   materialsExpiringOnly = !!v;
   if (materialsExpiringOnly) {
+    matInlineTab = 'lots';        // you filtered for expiry; that is the tab you want
     materialsShortOnly = false; materialsFefoOnly = false;   // exclusive segments
     // Reach the zero-usage rows too. Measured on the live feed: with them hidden the
     // page shows 11,185 kg expired / 3,143 kg at risk; with them shown it is 17,745
@@ -9216,12 +9221,9 @@ function matSummaryInner(m, idx, monthKeys, unit) {
   }
   // Left-aligned segmented control, matching the By quarter / By customer toggle
   // on the Jars/Bottles/Lids cards. Replaces the old section label.
-  var toggle = '<div style="display:flex;align-items:center;margin-bottom:10px;">'
-    + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-      + '<button onclick="setMatSummaryView(\'quarter\')" style="'+navBtnStyle(matSummaryView==='quarter')+'">By quarter</button>'
-      + '<button onclick="setMatSummaryView(\'customer\')" style="'+navBtnStyle(matSummaryView==='customer')+'">By customer</button>'
-    + '</div>'
-  + '</div>';
+  // The By quarter / By customer toggle was promoted into the panel's tab bar, so
+  // this section no longer carries its own control.
+  var toggle = '';
 
   var tableHTML;
   if (matSummaryView === 'customer') {
@@ -9672,6 +9674,58 @@ function matLotTableHTML(m, unit) {
     + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">' + notes.join(' ') + '</div>'
     + '</div>';
 }
+// Which tab this material is showing. Parts only exists for grouped SKUs, so a
+// remembered 'parts' must fall back rather than render an empty panel.
+function _matTab(m) {
+  var t = matInlineTab;
+  if (t === 'parts' && !(m && m.isGroup)) return 'usage';
+  return (t === 'usage' || t === 'customers' || t === 'parts' || t === 'lots') ? t : 'usage';
+}
+function setMatInlineTab(v) {
+  matInlineTab = v;
+  if (v !== 'customers') drillCustomer = null;   // leaving Customers drops its product drill
+  var list = window._matList || [], i;
+  for (i = 0; i < list.length; i++) {
+    if (list[i].name === window._selectedMaterial) { renderMatInline(list[i], i); return; }
+  }
+}
+// Tab bar for the expanded panel. Counts live on the labels, and Lots carries a
+// risk dot when the material holds expired stock or a lot on the FEFO review list —
+// so the bar tells you there is something to look at without making you look. That
+// is strictly more than the old stacked layout gave you, where the same fact sat
+// 700px down the page.
+function matInlineTabBar(m, idx) {
+  var e = m.expiry || null;
+  var lotN = e ? e.lots.length : 0;
+  var custN = (function(){
+    try { return buildMatCustomerData(m, window._matMonthKeys || []).length; } catch (err) { return 0; }
+  })();
+  var partN = m.isGroup ? Object.keys(m.partBreakdown || {}).length : 0;
+  var risk = !!(e && (e.expiredKg > 0 || e.badDateLots > 0)) || matHasFefoReview(m);
+  var riskTip = !e ? '' : (e.expiredKg > 0
+      ? Math.round(e.expiredKg).toLocaleString() + ' ' + matUnit(m.name) + ' already past date'
+      : (matHasFefoReview(m) ? 'A lot here keeps getting picked past while at risk' : 'An expiry value on this material cannot be read'));
+  var tabs = [
+    { id:'usage',     label:'Usage' },
+    { id:'customers', label:'Customers', count: custN },
+    { id:'parts',     label:'Parts',     count: partN, only: !!m.isGroup },
+    { id:'lots',      label:'Lots',      count: lotN,  dot: risk, dotTip: riskTip }
+  ];
+  var active = _matTab(m);
+  var html = tabs.map(function(t){
+    if (t.only === false) return '';
+    var on = active === t.id;
+    var st = 'padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-family:system-ui;transition:all .15s;display:inline-flex;align-items:center;gap:5px;'
+      + (on ? 'border:1.5px solid #378ADD;background:#0C447C;color:#85B7EB;font-weight:500;'
+            : 'border:1.5px solid transparent;background:transparent;color:#888780;font-weight:400;');
+    return '<button onclick="event.stopPropagation();setMatInlineTab(' + jsStr(t.id) + ')" style="' + st + '">'
+      + t.label
+      + (t.count ? ' <span style="font-size:10px;opacity:.75;">' + t.count + '</span>' : '')
+      + (t.dot ? ' <span title="' + esc(t.dotTip || '') + '" style="width:6px;height:6px;border-radius:50%;background:#FAC775;display:inline-block;"></span>' : '')
+      + '</button>';
+  }).join('');
+  return '<div style="display:flex;align-items:center;gap:2px;padding:3px;margin-bottom:12px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;width:fit-content;">' + html + '</div>';
+}
 function renderMatInline(m, idx) {
   var panel = document.getElementById('mat-inline-'+idx);
   if (!panel) return;
@@ -9725,7 +9779,7 @@ function renderMatInline(m, idx) {
         + '</div>'
         + matLotTableHTML(m, unit)
       + '</div>';
-    return;
+    return;   // no usage series here, so no tabs — the two tables are all there is
   }
 
   var monthKeys = window._matMonthKeys || [];
@@ -9733,6 +9787,10 @@ function renderMatInline(m, idx) {
   var chartData = monthKeys.map(function(k){ return Math.round(m.byMonth[k]||0); });
 
   // Quarterly / by-customer consumption summary (toggle lives in the section header)
+  // The tab is the single source of truth; matSummaryView is derived from it every
+  // render rather than kept in sync by the setter, so a deep link or a stale value
+  // can never leave the Customers tab showing the quarterly table.
+  matSummaryView = (_matTab(m) === 'customers') ? 'customer' : 'quarter';
   var summaryHTML = '<div id="mat-summary-'+idx+'">'+matSummaryInner(m, idx, monthKeys, unit)+'</div>';
 
   // Per-part breakdown table (grouped SKUs only)
@@ -9842,11 +9900,15 @@ function renderMatInline(m, idx) {
           + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+m.lotCount+'</div></div>'
       + '</div>'
       + _stockCompositionHTML(m, unit)
-      + '<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+esc(unit)+' for '+esc(m.name)+'">Trend.</canvas></div>'
-      + '<div id="mat-month-drill-'+idx+'" style="margin-top:0;"></div>'
-      + summaryHTML
-      + breakdownHTML
-      + matLotTableHTML(m, unit)
+      + matInlineTabBar(m, idx)
+      + (_matTab(m) === 'usage'
+          ? '<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+esc(unit)+' for '+esc(m.name)+'">Trend.</canvas></div>'
+            + '<div id="mat-month-drill-'+idx+'" style="margin-top:0;"></div>'
+            + summaryHTML
+          : '')
+      + (_matTab(m) === 'customers' ? summaryHTML : '')
+      + (_matTab(m) === 'parts' ? breakdownHTML : '')
+      + (_matTab(m) === 'lots' ? matLotTableHTML(m, unit) : '')
     + '</div>';
 
   // Stash context so the By quarter / By customer toggle can rebuild just the
@@ -9859,6 +9921,9 @@ function renderMatInline(m, idx) {
     setTimeout(function(){ renderMatMonthDrill(m, idx, ds.mk, ds.label, ds.barIdx); }, 50);
   }
   if (window['matChart_'+idx]) { window['matChart_'+idx].destroy(); window['matChart_'+idx]=null; }
+  // Only exists on the Usage tab. Chart.js measures its canvas at construction, so
+  // building it while hidden yields a zero-width chart — hence render-on-visible
+  // rather than render-then-hide.
   var ctx = document.getElementById('mat-chart-'+idx);
   if (!ctx) return;
   var skipLabels = monthKeys.length > 12;
