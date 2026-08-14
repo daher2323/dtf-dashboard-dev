@@ -10509,7 +10509,7 @@ function renderOrdersSummary() {
     + '<div id="oo-cust-note-search" style="'+noteStyle+'display:'+(ooQ ? 'block' : 'none')+';">'
       + (ooQ ? esc(_ooMatchNote(ooMatchCount, customersAll.length, ooCustSearch)) : '')
     + '</div>';
-  var customerLegend = customerChartView === 'all' && customersVisible.length > 0
+  var customerLegend = customerChartView === 'all' && customersAll.length > 0
     ? '<div style="display:flex;gap:18px;padding:10px 2px 2px;font-size:11px;color:#888780;font-family:system-ui;">'
     +   '<div style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:2px;background:'+LINE_COLOR['line#1']+';"></span>Powder</div>'
     +   '<div style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:2px;background:'+LINE_COLOR['line#2']+';"></span>Capsule</div>'
