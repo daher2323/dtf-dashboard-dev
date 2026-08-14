@@ -9772,6 +9772,173 @@ function renderMaterials() {
 
 // ── Open Orders ───────────────────────────────────────────────────────────
 
+// ── Per-customer Open Orders export ───────────────────────────────────────
+// Sales sends this workbook to the customer, so it is deliberately built from
+// that brand's FULL open book — every open powder + capsule row, production and
+// sample/bulk alike — and NOT from whatever the Customer Breakdown's All/Powder/
+// Capsule and Top 10/25 toggles happen to be showing. A report that silently
+// dropped half a customer's orders because a toggle was set is worse than one
+// that shows more than the screen; the sheet header states the basis either way.
+// "Open" means on the books: Complete/RTS is excluded, same rule as the page.
+function _ooBrandRows(brand) {
+  var want = (brand == null ? '' : String(brand)).trim().toLowerCase(), out = [];
+  function take(rows, type) {
+    (rows || []).forEach(function(r){
+      if ((r['Brand Name']||'').trim().toLowerCase() !== want) return;
+      if ((r['Planning Status']||'').trim().toLowerCase() === 'complete/rts') return;
+      out.push({ row:r, type:type });
+    });
+  }
+  take(openOrdersPowder,  'Powder');
+  take(openOrdersCapsule, 'Capsule');
+  // Oldest first, ties by size — the same order the on-screen drilldown uses.
+  out.sort(function(a,b){
+    var dw = num(b.row['# of Weeks on the Books']) - num(a.row['# of Weeks on the Books']);
+    if (dw) return dw;
+    return num(b.row['Order Amount']) - num(a.row['Order Amount']);
+  });
+  return out;
+}
+function _ooIsLabelBlocked(r) { return (r['Planning Status']||'').trim() === 'Not Enough Labels'; }
+// The sheet's Labels column is a count on hand, but it also carries text
+// ("Unlabeled") or nothing at all. Keep the raw string for display and only do
+// arithmetic when the cell is genuinely numeric, so a note never turns into a
+// bogus shortfall figure in front of a customer.
+function _ooLabelsOnHand(r) {
+  var raw = (r['Labels'] == null ? '' : String(r['Labels'])).trim();
+  var numeric = raw !== '' && /^[\d,]+(\.\d+)?$/.test(raw);
+  return { raw: raw, num: numeric ? num(raw) : null };
+}
+// Small download button. Lives on Customer Breakdown rows (whose click toggles
+// the drilldown) and on Labels-tab brand headers, hence stopPropagation.
+function _ooExportBtn(brand, px) {
+  var s = px || 12;
+  return '<button onclick="event.stopPropagation();exportOpenOrdersForCustomer('+jsStr(brand)+')" '
+    + 'title="Export '+esc(brand)+' open orders to Excel" '
+    + 'style="background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:2px;line-height:0;border-radius:4px;" '
+    + 'onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'">'
+    + '<svg width="'+s+'" height="'+s+'" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
+    + '</button>';
+}
+function exportOpenOrdersForCustomer(brand) {
+  if (typeof XLSX === 'undefined') { alert('Export library not loaded yet, please try again.'); return; }
+  var name = (brand == null ? '' : String(brand)).trim();
+  var items = _ooBrandRows(name);
+  if (!items.length) { alert('No open orders on the books for ' + (name || 'this customer') + '.'); return; }
+
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  var totalUnits = 0, blocked = [], blockedUnits = 0;
+  items.forEach(function(it){
+    var u = num(it.row['Order Amount']);
+    totalUnits += u;
+    if (_ooIsLabelBlocked(it.row)) { blocked.push(it); blockedUnits += u; }
+  });
+
+  var wb = XLSX.utils.book_new();
+  var subtitle = name + '  ·  ' + items.length + ' open order' + (items.length===1?'':'s')
+    + '  ·  ' + totalUnits.toLocaleString() + ' units  ·  Generated ' + dateStr;
+  // Say the basis out loud: this total includes sample-pack and bulk orders, while
+  // the dashboard's Customer Breakdown counts production units only, so the two
+  // figures can differ for the same customer and that must not read as an error.
+  var basis = 'Open orders on the books (Complete/RTS excluded), powder and capsule, oldest first by weeks on the books.'
+    + '  Includes production, sample-pack and bulk orders.'
+    + (blocked.length
+        ? '  ' + blocked.length + ' order' + (blocked.length===1?'':'s') + ' (' + blockedUnits.toLocaleString()
+          + ' units) are held for labels — see the Labels Needed sheet.'
+        : '');
+
+  // ── Sheet 1: the open book ──
+  // Labels on Hand / Short are filled ONLY for Not Enough Labels rows. The Labels
+  // column carries values on other statuses too, and a bare "0" next to a
+  // Scheduled order would read as a problem that isn't one; blank = not applicable.
+  var s1Headers = ['Type','Product','Order Amount','Planning Status','Weeks on Books','Promise Date / Notes','Labels on Hand','Labels Short','Label Status Update','Invoice / Estimate #','PO #'];
+  var s1Rows = [
+    ['DTF Operations Center — Open Orders'],
+    [subtitle],
+    [basis],
+    [],
+    s1Headers
+  ];
+  items.forEach(function(it){
+    var r = it.row, amt = num(r['Order Amount']);
+    var onHand = '', short = '';
+    if (_ooIsLabelBlocked(r)) {
+      var lb = _ooLabelsOnHand(r);
+      onHand = (lb.num !== null) ? lb.num : lb.raw;
+      if (lb.num !== null) short = Math.max(0, amt - lb.num);
+    }
+    var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
+    s1Rows.push([
+      it.type,
+      (r['Product Name']||'').trim(),
+      amt,
+      (r['Planning Status']||'').trim(),
+      weeksRaw ? num(weeksRaw) : '',
+      (r['Promise Date / Notes']||'').trim(),
+      onHand,
+      short,
+      (r['Label Status Update']||'').trim(),
+      (r['Invoice / Estimate #']||'').trim(),
+      (r['P.O. #'] || r['PO #'] || '').toString().trim()
+    ]);
+  });
+  s1Rows.push(['TOTAL','',totalUnits,'','','','','','','','']);
+  var ws1 = XLSX.utils.aoa_to_sheet(s1Rows);
+  ws1['!cols'] = [{wch:9},{wch:52},{wch:13},{wch:19},{wch:15},{wch:34},{wch:14},{wch:12},{wch:42},{wch:18},{wch:14}];
+  ws1['!merges'] = [
+    {s:{r:0,c:0},e:{r:0,c:s1Headers.length-1}},
+    {s:{r:1,c:0},e:{r:1,c:s1Headers.length-1}},
+    {s:{r:2,c:0},e:{r:2,c:s1Headers.length-1}}
+  ];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Open Orders');
+
+  // ── Sheet 2: labels detail — only when something is actually blocked, so a
+  // clean book doesn't ship an empty sheet the customer has to interpret. ──
+  if (blocked.length) {
+    var s2Headers = ['Type','Product','Ordered','Labels on Hand','Short','Weeks on Books','Label Status Update'];
+    var s2Rows = [
+      ['Held for labels — ' + name],
+      [blocked.length + ' order' + (blocked.length===1?'':'s') + '  ·  ' + blockedUnits.toLocaleString() + ' units  ·  Generated ' + dateStr],
+      ['Labels on Hand is the count currently in house; Short is Ordered minus on hand.'],
+      [],
+      s2Headers
+    ];
+    var sumOnHand = 0, sumShort = 0, anyOnHand = false;
+    blocked.forEach(function(it){
+      var r = it.row, amt = num(r['Order Amount']), lb = _ooLabelsOnHand(r);
+      var short = '';
+      if (lb.num !== null) { short = Math.max(0, amt - lb.num); sumOnHand += lb.num; sumShort += short; anyOnHand = true; }
+      var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
+      s2Rows.push([
+        it.type,
+        (r['Product Name']||'').trim(),
+        amt,
+        (lb.num !== null) ? lb.num : lb.raw,
+        short,
+        weeksRaw ? num(weeksRaw) : '',
+        (r['Label Status Update']||'').trim()
+      ]);
+    });
+    s2Rows.push(['TOTAL','',blockedUnits, anyOnHand?sumOnHand:'', anyOnHand?sumShort:'', '', '']);
+    var ws2 = XLSX.utils.aoa_to_sheet(s2Rows);
+    ws2['!cols'] = [{wch:9},{wch:52},{wch:12},{wch:15},{wch:12},{wch:15},{wch:46}];
+    ws2['!merges'] = [
+      {s:{r:0,c:0},e:{r:0,c:s2Headers.length-1}},
+      {s:{r:1,c:0},e:{r:1,c:s2Headers.length-1}},
+      {s:{r:2,c:0},e:{r:2,c:s2Headers.length-1}}
+    ];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Labels Needed');
+  }
+
+  // Customer name + today's date, local (not UTC — an evening export should not
+  // carry tomorrow's date). Non-alphanumerics collapse to _ so the name is safe
+  // as a filename and still readable: "Dragon Pharma" -> Dragon_Pharma.
+  var safe = name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'Customer';
+  var ymd = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+  XLSX.writeFile(wb, 'DTF_Open_Orders_' + safe + '_' + ymd + '.xlsx');
+}
+
 function renderOrders() {
   fetchOpenOrdersIfNeeded(false);
   // renderOrdersSummary builds the whole page and picks which sections to
@@ -10095,7 +10262,9 @@ function renderOrdersSummary() {
     + '<button onclick="setCustomerChartLimit(\'all\')" style="'+customerPillStyle(customerChartLimit==='all')+'">All</button>'
     + '</div>';
 
-  var customerRowColTpl = '170px 1fr 110px';
+  // Trailing fixed column holds the per-customer export button — a real column
+  // rather than an absolute overlay so the bar and unit figures never shift.
+  var customerRowColTpl = '170px 1fr 110px 22px';
   var customerRowsHTML = customersVisible.map(function(c){
     var pPct = maxCustomerTotal ? (c.powder  / maxCustomerTotal * 100) : 0;
     var cPct = maxCustomerTotal ? (c.capsule / maxCustomerTotal * 100) : 0;
@@ -10135,6 +10304,7 @@ function renderOrdersSummary() {
       + '</div>'
       + barHTML
       + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:500;font-size:12px;">'+c.total.toLocaleString()+'</div>'
+      + '<div style="text-align:right;line-height:0;">'+_ooExportBtn(c.name)+'</div>'
       + '</div>';
 
     if (!isOpen) return summaryRow;
@@ -10155,6 +10325,15 @@ function renderOrdersSummary() {
                : customerChartView === 'powder'  ? LINE_COLOR['line#1']
                : '#888780';
     var drillColTpl = '72px 1fr 90px 70px 220px';
+    // Labelled twin of the row's icon button — the drilldown is where sales sits
+    // when pulling a customer's report, so here it says what it does in words.
+    var drillExportBar = '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;">'
+      + '<button onclick="event.stopPropagation();exportOpenOrdersForCustomer('+jsStr(c.name)+')" '
+      +   'style="font-size:11px;padding:4px 10px;border:1.5px solid #378ADD;border-radius:7px;background:#0C447C;color:#85B7EB;font-weight:500;cursor:pointer;font-family:system-ui;display:inline-flex;align-items:center;gap:5px;">'
+      +   '<svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
+      +   'Export open orders'
+      + '</button>'
+      + '</div>';
     var drillHeaders = '<div style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
       + '<div>Type</div><div>Product</div>'
       + '<div style="text-align:right;">Units</div>'
@@ -10184,7 +10363,7 @@ function renderOrdersSummary() {
       ? '<div style="padding:14px 0;text-align:center;color:#5f5e5a;font-size:11px;font-style:italic;font-family:system-ui;">No orders match the current filter.</div>'
       : '';
     var drillHTML = '<div style="background:#0f1012;border-left:2px solid '+accent+';padding:10px 14px 12px 14px;margin:0 -6px;border-bottom:0.5px solid #2c2c2a;">'
-      + drillHeaders + drillBody + emptyNote
+      + drillExportBar + drillHeaders + drillBody + emptyNote
       + '</div>';
 
     return summaryRow + drillHTML;
@@ -10305,6 +10484,7 @@ function renderOrdersSummary() {
             var info = byBrand[brand];
             var brandHeader = '<div style="background:#1e2124;padding:10px 16px 6px;display:flex;align-items:baseline;gap:12px;">'
               + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;font-family:system-ui;">'+esc(brand)+'</div>'
+              + (brand !== '(no brand)' ? _ooExportBtn(brand, 11) : '')
               + '<div style="font-size:11px;color:#F09595;font-family:system-ui;font-variant-numeric:tabular-nums;">'+info.items.length+' product'+(info.items.length===1?'':'s')+' \u00b7 '+info.units.toLocaleString()+' units</div>'
               + '</div>';
             var rows = info.items.map(function(lb, idx){
