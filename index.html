@@ -116,7 +116,31 @@
      Hide columns that compress badly (sparklines, bar columns, secondary
      stats); stack two-column layouts; let the main nav scroll horizontally.
      Test at 390px (iPhone 14 portrait). All overrides are mobile-only. */
+  /* ── Phone: Order Aging status chips ──────────────────────────────────────
+     The chip grid is 120px + one max-content column per status, which runs off a
+     390px screen and forced a horizontal scroll past the filters people use most.
+     The group label gets its own full-width row and the chips fall into two even
+     columns beneath it, so the whole control sits inline with the page. The inline
+     grid-template-columns has to be overridden, hence !important. */
   @media (max-width: 768px) {
+    .agf-grid { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+    .agf-glabel { grid-column: 1 / -1 !important; margin: 4px 0 -2px; }
+    .agf-chip { padding: 6px 10px; gap: 7px; font-size: 12px; }
+    .agf-seg { display: flex; width: 100%; margin-bottom: 12px; }
+    .agf-seg button { flex: 1 1 0; padding: 8px 4px; font-size: 12px; }
+    /* ── Phone: Labels blocker rows ────────────────────────────────────────
+       Six columns (~600px) squeezed the product name into a ribbon four words
+       wide. Drop the header row and restack each line: type badge, then the full
+       product name, then units and weeks facing each other, then the two note
+       fields full width. Nothing is hidden — it just reads down instead of across. */
+    .lbl-hdr { display: none !important; }
+    .lbl-row { display: grid !important; grid-template-columns: 1fr auto !important;
+               gap: 3px 10px !important; padding: 10px 14px !important; align-items: start !important; }
+    .lbl-row > div:nth-child(1) { grid-column: 1 / -1; }                        /* type badge */
+    .lbl-row > div:nth-child(2) { grid-column: 1 / -1; font-size: 12.5px; }     /* product */
+    .lbl-row > div:nth-child(3) { grid-column: 1; text-align: left !important; font-weight: 500; }  /* units */
+    .lbl-row > div:nth-child(4) { grid-column: 2; text-align: right !important; }                    /* weeks */
+    .lbl-row > div:nth-child(5), .lbl-row > div:nth-child(6) { grid-column: 1 / -1; font-size: 11px; }
     .shell { padding: 8px; }
     .app-bar { padding: 0 8px; min-height: 56px; }
     /* App bar → two rows on phones: [logo · Refresh/Admin] on top, the full-width
@@ -11486,7 +11510,7 @@ function renderOrdersSummary() {
     if (filtered.length === 0) {
       bodyHTML = '<div style="background:#1e2124;padding:24px 16px;text-align:center;color:#888780;font-size:12px;font-family:system-ui;font-style:italic;">No blocked orders match the current filter.</div>';
     } else {
-      bodyHTML = '<div style="background:#141618;display:grid;grid-template-columns:'+colTemplate+';gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:8px 16px;">'
+      bodyHTML = '<div class="lbl-hdr" style="background:#141618;display:grid;grid-template-columns:'+colTemplate+';gap:10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:8px 16px;">'
         +   '<div>Type</div><div>Product</div><div style="text-align:right;">Units</div><div style="text-align:right;">Weeks</div><div>Promise / Notes</div><div>Label Status Update</div>'
         + '</div>'
         + brandNames.map(function(brand){
@@ -11506,7 +11530,7 @@ function renderOrdersSummary() {
               // Age color: muted by default, amber >=6 weeks, red >=12 weeks.
               var weeksColor = weeksNum >= 12 ? '#F09595' : weeksNum >= 6 ? '#FAC775' : '#888780';
               var sep = idx < info.items.length - 1 ? 'border-bottom:0.5px dashed #2c2c2a;' : '';
-              return '<div style="background:#1a1d20;display:grid;grid-template-columns:'+colTemplate+';gap:10px;padding:7px 16px;'+sep+'font-size:12px;font-family:system-ui;align-items:center;">'
+              return '<div class="lbl-row" style="background:#1a1d20;display:grid;grid-template-columns:'+colTemplate+';gap:10px;padding:7px 16px;'+sep+'font-size:12px;font-family:system-ui;align-items:center;">'
                 + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+lb.type+'</span></div>'
                 + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;" title="'+esc(r['Product Name']||'')+'">'+esc(r['Product Name']||'')+'</div>'
                 + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(r['Order Amount']).toLocaleString()+'</div>'
