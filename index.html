@@ -10487,7 +10487,7 @@ function renderMaterials() {
     var dimSet = {};
     dormant.forEach(function(p){ dimSet[p] = true; });
     var partsBadge = dormant.length
-      ? (m.partNums.length ? m.partNums.length + ' of ' + rosterParts.length + ' active' : rosterParts.length + ' parts')
+      ? (m.partNums.length ? m.partNums.length + ' of ' + rosterParts.length + ' in use' : rosterParts.length + ' parts')
       : m.partNums.length + ' parts';
     var partsBadgeTitle = dormant.length
       ? m.partNums.length + ' of ' + rosterParts.length + ' part #s in this group were consumed in the selected window; all ' + rosterParts.length + ' count toward On hand and Committed.'
@@ -10502,7 +10502,7 @@ function renderMaterials() {
           // Wraps to two lines rather than truncating: the name identifies the row, and
           // vertical space is far cheaper here than horizontal. Clamped at two lines so a
           // pathological name can't stretch the row, with the full text on hover.
-          +'<span title="'+esc(m.name)+'" style="flex:1;min-width:0;white-space:normal;overflow:hidden;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">'+esc(m.name)+'</span>'
+          +'<span title="'+esc(m.name)+'" style="min-width:0;white-space:normal;overflow:hidden;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">'+esc(m.name)+'</span>'
           +(sg?'<span style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#26215C;color:#AFA9EC;flex-shrink:0;">softgels</span>':'')
           +(m.isGroup?'<span title="'+esc(partsBadgeTitle)+'" style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C2240;color:#85B7EB;flex-shrink:0;">'+partsBadge+'</span>':'')
         +'</div>'
