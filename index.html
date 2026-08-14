@@ -9853,14 +9853,73 @@ function _ooBrandRows(brand) {
   return out;
 }
 function _ooIsLabelBlocked(r) { return (r['Planning Status']||'').trim() === 'Not Enough Labels'; }
-// The sheet's Labels column is a count on hand, but it also carries text
-// ("Unlabeled") or nothing at all. Keep the raw string for display and only do
-// arithmetic when the cell is genuinely numeric, so a note never turns into a
-// bogus shortfall figure in front of a customer.
+// The sheet's Labels column is a count of labels on hand. It is populated on every
+// open row, not just blocked ones, but it can also carry text ("Unlabeled"), so
+// only do arithmetic when the cell is genuinely numeric — a note must never turn
+// into a bogus shortfall figure in front of a customer.
+//
+// It is also, by the team's own account, the least reliable column on the sheet:
+// labels often arrive and sit in receiving before anyone updates it, so a recorded
+// 0 frequently means "not logged yet" rather than "none here". That's why the
+// export shows the count on EVERY row (blanking it on all but the blocked rows
+// read as broken data) and states its provenance in the sheet header, rather than
+// dressing a stale number up as fact.
 function _ooLabelsOnHand(r) {
   var raw = (r['Labels'] == null ? '' : String(r['Labels'])).trim();
   var numeric = raw !== '' && /^[\d,]+(\.\d+)?$/.test(raw);
   return { raw: raw, num: numeric ? num(raw) : null };
+}
+// Cell values: a number when countable, the raw note when not, '' when the sheet
+// has nothing. '' matters — an optional column that is '' on every row gets
+// dropped from the workbook entirely (see _ooBuildSheet).
+function _ooOnHandCell(r) {
+  var lb = _ooLabelsOnHand(r);
+  return lb.num !== null ? lb.num : lb.raw;
+}
+// Short is reported for every row, 0 included: "0 short" is real information
+// (labels are all in), which is exactly what a blank used to hide.
+function _ooShortCell(r) {
+  var lb = _ooLabelsOnHand(r);
+  if (lb.num === null) return '';
+  return Math.max(0, num(r['Order Amount']) - lb.num);
+}
+// Stated on both sheets. The counts are worth sending — a customer wants to know
+// 4,550 of 5,000 labels are in — but they are only as fresh as the planning sheet,
+// so the report says so instead of letting a stale 0 speak for itself.
+var LABEL_PROVENANCE = 'Labels on Hand is what our planning sheet showed when this file was generated; '
+  + 'it can lag labels already received, so a 0 may mean \u201cnot logged yet\u201d rather than \u201cnone here\u201d. '
+  + 'Labels Short is Order Amount minus labels on hand.';
+function _ooEmptyCell(v) { return v === '' || v === null || v === undefined; }
+// Build one worksheet from a column model. Columns flagged `optional` are dropped
+// from the workbook when no row in THIS customer's book fills them: roughly half
+// our orders carry no customer PO #, and a column of blanks reads as missing data
+// rather than "doesn't apply here". `total`, where set, lands in a closing TOTAL
+// row; the label goes in the first surviving column, which is always text.
+function _ooBuildSheet(headerLines, cols, items) {
+  var grid = items.map(function(it){ return cols.map(function(c){ return c.get(it); }); });
+  var keep = [], i, j, filled;
+  for (j = 0; j < cols.length; j++) {
+    if (!cols[j].optional) { keep.push(j); continue; }
+    filled = false;
+    for (i = 0; i < grid.length; i++) { if (!_ooEmptyCell(grid[i][j])) { filled = true; break; } }
+    if (filled) keep.push(j);
+  }
+  var rows = [], hasTotal = false;
+  for (i = 0; i < headerLines.length; i++) rows.push([headerLines[i]]);
+  rows.push([]);
+  rows.push(keep.map(function(j){ return cols[j].header; }));
+  for (i = 0; i < grid.length; i++) rows.push(keep.map(function(j){ return grid[i][j]; }));
+  for (j = 0; j < keep.length; j++) if (cols[keep[j]].total !== undefined) hasTotal = true;
+  if (hasTotal) {
+    rows.push(keep.map(function(j, k){
+      if (cols[j].total !== undefined) return cols[j].total;
+      return k === 0 ? 'TOTAL' : '';
+    }));
+  }
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = keep.map(function(j){ return { wch: cols[j].width }; });
+  ws['!merges'] = headerLines.map(function(_unused, r){ return { s:{r:r,c:0}, e:{r:r,c:keep.length-1} }; });
+  return ws;
 }
 // Small download button. Lives on Customer Breakdown rows (whose click toggles
 // the drilldown) and on Labels-tab brand headers, hence stopPropagation.
@@ -9881,11 +9940,17 @@ function exportOpenOrdersForCustomer(brand) {
 
   var now = new Date();
   var dateStr = now.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
-  var totalUnits = 0, blocked = [], blockedUnits = 0;
+  var totalUnits = 0, blocked = [], blockedUnits = 0, blockedOnHand = 0, blockedShort = 0;
   items.forEach(function(it){
     var u = num(it.row['Order Amount']);
     totalUnits += u;
-    if (_ooIsLabelBlocked(it.row)) { blocked.push(it); blockedUnits += u; }
+    if (!_ooIsLabelBlocked(it.row)) return;
+    blocked.push(it);
+    blockedUnits += u;
+    // Only countable rows contribute to the label totals — a row reading
+    // "Unlabeled" would otherwise silently count as zero on hand.
+    var lb = _ooLabelsOnHand(it.row);
+    if (lb.num !== null) { blockedOnHand += lb.num; blockedShort += Math.max(0, u - lb.num); }
   });
 
   var wb = XLSX.utils.book_new();
@@ -9896,6 +9961,7 @@ function exportOpenOrdersForCustomer(brand) {
   // figures can differ for the same customer and that must not read as an error.
   var basis = 'Open orders on the books (Complete/RTS excluded), powder and capsule, oldest first by weeks on the books.'
     + '  Includes production, sample-pack and bulk orders.'
+    + '  ' + LABEL_PROVENANCE
     + (blocked.length
         ? '  ' + blocked.length + ' order' + (blocked.length===1?'':'s') + ' (' + blockedUnits.toLocaleString()
           + ' units) are held for labels — see the Labels Needed sheet.'
@@ -9904,87 +9970,59 @@ function exportOpenOrdersForCustomer(brand) {
   // ── Sheet 1: the open book ──
   // Column order is the customer-facing one: the two reference numbers they can
   // look up first, then the order, then its label position. Promise Date / Notes
-  // and Label Status Update are deliberately NOT here — they are internal
-  // hand-written scratch notes and must not leave the building.
-  // Labels on Hand / Short are filled ONLY for Not Enough Labels rows. The Labels
-  // column carries values on other statuses too, and a bare "0" next to a
-  // Scheduled order would read as a problem that isn't one; blank = not applicable.
-  var s1Headers = ['Invoice / Estimate #','PO #','Product','Order Amount','Weeks on Books','Planning Status','Labels on Hand','Labels Short'];
-  var s1Rows = [
-    ['DTF Operations Center — Open Orders'],
-    [subtitle],
-    [basis],
-    [],
-    s1Headers
+  // and Label Status Update are deliberately absent — internal hand-written
+  // scratch notes that must not leave the building. PO # and the label columns
+  // are optional: they vanish when this customer's book has nothing in them.
+  var s1cols = [
+    { header:'Invoice / Estimate #', width:18, optional:true,
+      get:function(it){ return (it.row['Invoice / Estimate #']||'').trim(); } },
+    { header:'PO #', width:16, optional:true,
+      get:function(it){ return (it.row['P.O. #'] || it.row['PO #'] || '').toString().trim(); } },
+    { header:'Product', width:52,
+      get:function(it){ return (it.row['Product Name']||'').trim(); } },
+    { header:'Order Amount', width:13, total:totalUnits,
+      get:function(it){ return num(it.row['Order Amount']); } },
+    { header:'Weeks on Books', width:15,
+      get:function(it){ var w = (it.row['# of Weeks on the Books']||'').toString().trim(); return w ? num(w) : ''; } },
+    { header:'Planning Status', width:19,
+      get:function(it){ return (it.row['Planning Status']||'').trim(); } },
+    { header:'Labels on Hand', width:15, optional:true,
+      get:function(it){ return _ooOnHandCell(it.row); } },
+    { header:'Labels Short', width:13, optional:true,
+      get:function(it){ return _ooShortCell(it.row); } }
   ];
-  items.forEach(function(it){
-    var r = it.row, amt = num(r['Order Amount']);
-    var onHand = '', short = '';
-    if (_ooIsLabelBlocked(r)) {
-      var lb = _ooLabelsOnHand(r);
-      onHand = (lb.num !== null) ? lb.num : lb.raw;
-      if (lb.num !== null) short = Math.max(0, amt - lb.num);
-    }
-    var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
-    s1Rows.push([
-      (r['Invoice / Estimate #']||'').trim(),
-      (r['P.O. #'] || r['PO #'] || '').toString().trim(),
-      (r['Product Name']||'').trim(),
-      amt,
-      weeksRaw ? num(weeksRaw) : '',
-      (r['Planning Status']||'').trim(),
-      onHand,
-      short
-    ]);
-  });
-  s1Rows.push(['TOTAL','','',totalUnits,'','','','']);
-  var ws1 = XLSX.utils.aoa_to_sheet(s1Rows);
-  ws1['!cols'] = [{wch:18},{wch:16},{wch:52},{wch:13},{wch:15},{wch:19},{wch:14},{wch:12}];
-  ws1['!merges'] = [
-    {s:{r:0,c:0},e:{r:0,c:s1Headers.length-1}},
-    {s:{r:1,c:0},e:{r:1,c:s1Headers.length-1}},
-    {s:{r:2,c:0},e:{r:2,c:s1Headers.length-1}}
-  ];
-  XLSX.utils.book_append_sheet(wb, ws1, 'Open Orders');
+  XLSX.utils.book_append_sheet(wb, _ooBuildSheet([
+    'DTF Operations Center — Open Orders',
+    subtitle,
+    basis
+  ], s1cols, items), 'Open Orders');
 
   // ── Sheet 2: labels detail — only when something is actually blocked, so a
-  // clean book doesn't ship an empty sheet the customer has to interpret. ──
+  // clean book doesn't ship an empty sheet the customer has to interpret. Same
+  // column order as sheet 1 minus Planning Status: every row here is Not Enough
+  // Labels by definition. ──
   if (blocked.length) {
-    // Same column order as sheet 1 (minus Planning Status — every row here is
-    // Not Enough Labels by definition), so the two sheets read as one report.
-    var s2Headers = ['Invoice / Estimate #','PO #','Product','Ordered','Weeks on Books','Labels on Hand','Short'];
-    var s2Rows = [
-      ['Held for labels — ' + name],
-      [blocked.length + ' order' + (blocked.length===1?'':'s') + '  ·  ' + blockedUnits.toLocaleString() + ' units  ·  Generated ' + dateStr],
-      ['Labels on Hand is the count currently in house; Short is Ordered minus on hand.'],
-      [],
-      s2Headers
+    var s2cols = [
+      { header:'Invoice / Estimate #', width:18, optional:true,
+        get:function(it){ return (it.row['Invoice / Estimate #']||'').trim(); } },
+      { header:'PO #', width:16, optional:true,
+        get:function(it){ return (it.row['P.O. #'] || it.row['PO #'] || '').toString().trim(); } },
+      { header:'Product', width:52,
+        get:function(it){ return (it.row['Product Name']||'').trim(); } },
+      { header:'Ordered', width:12, total:blockedUnits,
+        get:function(it){ return num(it.row['Order Amount']); } },
+      { header:'Weeks on Books', width:15,
+        get:function(it){ var w = (it.row['# of Weeks on the Books']||'').toString().trim(); return w ? num(w) : ''; } },
+      { header:'Labels on Hand', width:15, total:blockedOnHand,
+        get:function(it){ return _ooOnHandCell(it.row); } },
+      { header:'Short', width:12, total:blockedShort,
+        get:function(it){ return _ooShortCell(it.row); } }
     ];
-    var sumOnHand = 0, sumShort = 0, anyOnHand = false;
-    blocked.forEach(function(it){
-      var r = it.row, amt = num(r['Order Amount']), lb = _ooLabelsOnHand(r);
-      var short = '';
-      if (lb.num !== null) { short = Math.max(0, amt - lb.num); sumOnHand += lb.num; sumShort += short; anyOnHand = true; }
-      var weeksRaw = (r['# of Weeks on the Books']||'').toString().trim();
-      s2Rows.push([
-        (r['Invoice / Estimate #']||'').trim(),
-        (r['P.O. #'] || r['PO #'] || '').toString().trim(),
-        (r['Product Name']||'').trim(),
-        amt,
-        weeksRaw ? num(weeksRaw) : '',
-        (lb.num !== null) ? lb.num : lb.raw,
-        short
-      ]);
-    });
-    s2Rows.push(['TOTAL','','',blockedUnits,'', anyOnHand?sumOnHand:'', anyOnHand?sumShort:'']);
-    var ws2 = XLSX.utils.aoa_to_sheet(s2Rows);
-    ws2['!cols'] = [{wch:18},{wch:16},{wch:52},{wch:12},{wch:15},{wch:15},{wch:12}];
-    ws2['!merges'] = [
-      {s:{r:0,c:0},e:{r:0,c:s2Headers.length-1}},
-      {s:{r:1,c:0},e:{r:1,c:s2Headers.length-1}},
-      {s:{r:2,c:0},e:{r:2,c:s2Headers.length-1}}
-    ];
-    XLSX.utils.book_append_sheet(wb, ws2, 'Labels Needed');
+    XLSX.utils.book_append_sheet(wb, _ooBuildSheet([
+      'Held for labels — ' + name,
+      blocked.length + ' order' + (blocked.length===1?'':'s') + '  ·  ' + blockedUnits.toLocaleString() + ' units  ·  Generated ' + dateStr,
+      LABEL_PROVENANCE
+    ], s2cols, blocked), 'Labels Needed');
   }
 
   // Customer name + today's date, local (not UTC — an evening export should not
