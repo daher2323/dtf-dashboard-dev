@@ -9622,10 +9622,20 @@ function matLotTableHTML(m, unit) {
       useFirstMarked = true;
       tag = ' <span title="Earliest expiry still in date — pick this one next." style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C447C;color:#85B7EB;white-space:nowrap;">USE FIRST</span>';
     }
-    // Was this lot picked past while it still had life? The count is the signal —
-    // one skip is a judgement call, thirty is a picking path that ignores the date.
+    // Was this lot picked past while it still had life? Shown ONLY when the lot is
+    // itself at risk — expired, or inside the review horizon.
+    //
+    // It used to appear on every stranded lot, greyed when off the review list, on the
+    // theory that it was visible without shouting. That was wrong: 80% of those badges
+    // (606 of 757) sit on lots more than 90 days out, and a material like Creatine —
+    // 51,000 kg on hand, 85,000 kg committed, 17,000 kg/month burn, every lot 400+ days
+    // out — wore ten of them at once. "Skipped 169x" on stock that will be consumed two
+    // years early is not a finding, and a badge that appears on every row teaches you to
+    // stop reading it. FEFO discipline only matters when turnover does not outrun shelf
+    // life, so the badge now follows the risk, not the count.
     var miss = _fefo.byLot[(L.lot || '').toUpperCase()], missTag = '';
-    if (miss && miss.skips > 0) {
+    var missMatters = miss && miss.skips > 0 && L.days != null && L.days <= FEFO_REVIEW_HORIZON_DAYS;
+    if (missMatters) {
       var lastTxt = miss.lastSkip ? _matExpDateStr(miss.lastSkip) : '';
       missTag = ' <span title="Passed over ' + miss.skips + ' time' + (miss.skips===1?'':'s')
         + ' in favour of ' + miss.altLots + ' later-expiring lot' + (miss.altLots===1?'':'s')
@@ -9648,7 +9658,7 @@ function matLotTableHTML(m, unit) {
       + '<td style="' + td + 'color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;">' + (L.supplier ? esc(L.supplier) : '') + (L.batch ? ' <span style="color:#5f5e5a;">' + esc(L.batch) + '</span>' : '') + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (L.received ? esc(L.received) : '—') + '</td>'
       + '</tr>'
-      + ((_fefoOpenLot === L.lot && miss) ? _fefoDetailRowHTML(miss, unit, multiPart ? 8 : 7) : '');
+      + ((_fefoOpenLot === L.lot && missMatters) ? _fefoDetailRowHTML(miss, unit, multiPart ? 8 : 7) : '');
   }).join('');
   var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var thR = th.replace('text-align:left', 'text-align:right');
