@@ -106,7 +106,7 @@
     /* table-layout:fixed ignores min-width on <col>, so when the table overflows on
        mobile the flex Material column collapses to ~0 (WebKit). Pin it to a real
        width here so the name has room; desktop keeps its min-width flex behavior. */
-    col.matcol-name { width: 200px; }
+    col.matcol-name { width: 220px; }
     th.mat-pin-rank, td.mat-pin-rank { position: sticky; left: 0; z-index: 3; background: #1e2124; }
     th.mat-pin-name, td.mat-pin-name { position: sticky; left: 28px; z-index: 3; background: #1e2124; box-shadow: 6px 0 6px -4px rgba(0,0,0,.45); }
   }
@@ -10444,8 +10444,11 @@ function renderMaterials() {
       +'onmouseout="if(this.style.background!==\'rgb(26, 37, 53)\')this.style.background=\'transparent\'">'
       +'<td class="mat-pin-rank" style="padding:8px 10px;color:#5f5e5a;font-size:11px;width:26px;">'+(i+1)+'</td>'
       +'<td class="mat-pin-name" style="padding:8px 10px;overflow:hidden;">'
-        +'<div class="mat-name" style="font-size:12px;font-weight:500;color:'+(isSelected?'#85B7EB':'#e8e6e0')+';font-family:system-ui;display:flex;align-items:center;gap:6px;overflow:hidden;">'
-          +'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(m.name)+'</span>'
+        +'<div class="mat-name" style="font-size:12px;font-weight:500;color:'+(isSelected?'#85B7EB':'#e8e6e0')+';font-family:system-ui;display:flex;align-items:flex-start;gap:6px;overflow:hidden;">'
+          // Wraps to two lines rather than truncating: the name identifies the row, and
+          // vertical space is far cheaper here than horizontal. Clamped at two lines so a
+          // pathological name can't stretch the row, with the full text on hover.
+          +'<span title="'+esc(m.name)+'" style="flex:1;min-width:0;white-space:normal;overflow:hidden;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">'+esc(m.name)+'</span>'
           +(sg?'<span style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#26215C;color:#AFA9EC;flex-shrink:0;">softgels</span>':'')
           +(m.isGroup?'<span title="'+esc(partsBadgeTitle)+'" style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C2240;color:#85B7EB;flex-shrink:0;">'+partsBadge+'</span>':'')
         +'</div>'
@@ -10600,18 +10603,21 @@ function renderMaterials() {
     +'<div style="overflow-x:auto;"><table class="mat-table" style="width:100%;font-family:system-ui;table-layout:fixed;">'
     +'<colgroup>'
     +'<col style="width:28px;">'      // # (rank)
-    +'<col class="matcol-name" style="min-width:170px;">' // Material
-    +'<col style="width:96px;">'      // On hand
-    +'<col style="width:100px;">'     // Committed
-    +'<col style="width:104px;">'     // Available
-    +'<col style="width:96px;">'      // Cover
-    +'<col style="width:112px;">'     // Expiry
-    +'<col style="width:104px;">'     // Last month
-    +'<col style="width:96px;">'      // 3-mo avg
-    +'<col style="width:96px;">'      // 6-mo avg
-    +'<col style="width:104px;">'     // 6-mo trend
-    +'<col style="width:96px;">'      // 3<->6 mo
-    +'<col style="width:104px;">'     // 6-mo total
+    +'<col class="matcol-name" style="min-width:220px;">' // Material
+    // Trimmed to give the Material column back the room the Expiry column took. The
+    // figures here are short ("27,164.56 kg" is ~78px at 12px), so these widths were
+    // padding; the name was the column actually starved.
+    +'<col style="width:92px;">'      // On hand
+    +'<col style="width:92px;">'      // Committed
+    +'<col style="width:100px;">'     // Available
+    +'<col style="width:88px;">'      // Cover
+    +'<col style="width:104px;">'     // Expiry
+    +'<col style="width:92px;">'      // Last month
+    +'<col style="width:88px;">'      // 3-mo avg
+    +'<col style="width:88px;">'      // 6-mo avg
+    +'<col style="width:92px;">'      // 6-mo trend
+    +'<col style="width:88px;">'      // 3<->6 mo
+    +'<col style="width:92px;">'      // 6-mo total
     +'</colgroup>'
     +'<thead>'
     // Group row: Material spans both rows; the two cluster labels span their columns.
