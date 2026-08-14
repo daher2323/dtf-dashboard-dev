@@ -622,7 +622,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v3';  // v3: + inventoryLotIndex (all lots, incl. depleted)
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v4';  // v4: discards any truncated payload cached before the size guard existed
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -1725,15 +1725,37 @@ function parseInventory(text) {
   } catch (e) { return {}; }
 }
 
+// A truncated or half-generated CSV parses fine — it is merely short — and the old
+// "more than zero parts" test accepted it, cached it for the whole session, and left
+// every stock, cover and expiry cell reading "—" while inventoryLoaded insisted all
+// was well. Same failure mode applyFreshData already guards against for production
+// rows: a dataset that collapses is a bad response, not news. So require a plausible
+// size and otherwise keep what we have, because stale-but-whole beats fresh-but-gutted.
+var INVENTORY_MIN_PARTS = 200;     // the sheet carries ~1,170; anything near zero is a bad fetch
+function _inventoryLooksComplete(parsed, current) {
+  var n = Object.keys(parsed || {}).length;
+  if (n < INVENTORY_MIN_PARTS) return false;
+  var have = Object.keys(current || {}).length;
+  return !(have && n < have * 0.8);
+}
 function fetchInventoryIfNeeded() {
   if (inventoryLoaded) return;
   fetchInventoryCSV().then(function(t){
+    // parseInventory rebuilds inventoryLotIndex as a side effect, so a rejected parse
+    // must not leave its scraps behind for the FEFO detector.
+    var keepIndex = inventoryLotIndex;
     var parsed = parseInventory(t);
-    if (Object.keys(parsed).length > 0) {
+    if (_inventoryLooksComplete(parsed, inventoryByPart)) {
       inventoryByPart = parsed;
       inventoryLoaded = true;
       try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+    } else {
+      inventoryLotIndex = keepIndex;
+      _fefoCache = null;
+      console.warn('Inventory fetch rejected: ' + Object.keys(parsed || {}).length
+        + ' parts parsed (need at least ' + INVENTORY_MIN_PARTS + ' and 80% of the '
+        + Object.keys(inventoryByPart || {}).length + ' already held). Keeping existing data.');
     }
   });
 }
@@ -2098,7 +2120,9 @@ function fetchDemandIfNeeded() {
 function _loadStockCaches() {
   try {
     var ri = sessionStorage.getItem(INVENTORY_CACHE_KEY);
-    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; } }
+    // Same size test on the way in: a cache is only as trustworthy as the fetch that
+    // wrote it, and a gutted payload must not be able to survive a reload.
+    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; } }
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
