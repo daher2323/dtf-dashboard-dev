@@ -2009,6 +2009,22 @@ function computeFefoOps() {
       if (best === null) continue;
       var lq = liveQty[best], lx = liveExp[best];
       var stranded = lq != null && lq >= FEFO_OPS_OUTCOME_MIN_KG;
+      // Split pull, not a skip: the earlier-expiring lot was drawn on the same slip, so
+      // FEFO was followed and the pull was simply spread across two lots (usually because
+      // the older one could not cover the whole quantity). 500 of ~6,600 decisions.
+      var bothPulled = (mine[i].rowTs || []).indexOf(best) !== -1;
+      // Was it put right afterwards? A correction is a LATER submission for the same
+      // production lot and part that names the lot which should have been pulled. Reads
+      // zero across all history because nothing was telling anyone a mispick had happened;
+      // it starts counting the first time someone re-logs a swapped pull.
+      var fixedAt = null;
+      var lpRows = ix.byLotPart[mine[i].lpKey] || [];
+      for (var fi = 0; fi < lpRows.length; fi++) {
+        if (lpRows[fi].t <= when) continue;                 // must be a later slip
+        if (lpRows[fi].ts.indexOf(best) === -1) continue;   // must name the right lot
+        fixedAt = lpRows[fi].t;
+        break;                                             // earliest correction wins
+      }
       out.push({
         when: when,
         part: used.part,
@@ -2024,7 +2040,9 @@ function computeFefoOps() {
         // Ground truth, not a projection: 'expired' = it went off with stock left,
         // 'sitting' = still on the shelf, 'consumed' = used anyway, no harm done.
         outcome: !stranded ? 'consumed' : (lx != null && lx < today ? 'expired' : 'sitting'),
-        strandedKg: stranded ? lq : 0
+        strandedKg: stranded ? lq : 0,
+        bothPulled: bothPulled,
+        fixedAt: fixedAt
       });
     }
   }
@@ -2157,7 +2175,19 @@ function _fefoOpsGroups() {
   var P = _fefoOpsPeriod();
   var all = computeFefoOps();
   var inPeriod = all.filter(function(d){ return d.when >= P.start && d.when <= P.end; });
-  var flagged = inPeriod.filter(function(d){ return d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap; });
+  // Split pulls come out before the thresholds are applied. They are not skips — the
+  // earlier-expiring lot was drawn on the same slip — so counting them would overstate the
+  // problem in the one view meant to be trusted daily. Reported separately rather than
+  // dropped silently.
+  // Counted against the same thresholds, so "N split pulls excluded" is exactly how many
+  // rows the exclusion removed — not every split pull in the period, most of which the
+  // thresholds would have dropped anyway.
+  var splitPulls = inPeriod.filter(function(d){
+    return d.bothPulled && d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap;
+  });
+  var flagged = inPeriod.filter(function(d){
+    return !d.bothPulled && d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap;
+  });
 
   // Denominator: picks in this period we could actually evaluate. Stated so the counts
   // read as a floor rather than a total — see the note on computeFefoOps.
@@ -2172,18 +2202,32 @@ function _fefoOpsGroups() {
   // staging rule. Material name is for reading; the part # is what you act on.
   var groups = {}, order = [];
   flagged.forEach(function(d){
-    if (!groups[d.part]) { groups[d.part] = { part:d.part, material:d.material, rows:[], worst:0, expired:0 }; order.push(d.part); }
+    if (!groups[d.part]) { groups[d.part] = { part:d.part, material:d.material, rows:[], worst:0, expired:0, fixed:0, openN:0 }; order.push(d.part); }
     var g = groups[d.part];
     g.rows.push(d);
     if (d.gapDays > g.worst) g.worst = d.gapDays;
     if (d.outcome === 'expired') g.expired++;
+    if (d.fixedAt) g.fixed++; else g.openN++;
     if (!g.material && d.material) g.material = d.material;
   });
   order.sort(function(a, b){
     var A = groups[a], B = groups[b];
-    if (A.expired !== B.expired) return B.expired - A.expired;   // realised cost first
+    // Anything still needing action outranks everything else — this view is read daily
+    // while material is being pulled, so a fully-corrected material should sink.
+    var Ao = A.openN > 0, Bo = B.openN > 0;
+    if (Ao !== Bo) return Ao ? -1 : 1;
+    if (A.expired !== B.expired) return B.expired - A.expired;   // then realised cost
     if (A.rows.length !== B.rows.length) return B.rows.length - A.rows.length;
     return B.worst - A.worst;
+  });
+  // Row order settled here, once, so the panel and the export cannot disagree: still-open
+  // picks first, then most recent.
+  order.forEach(function(part){
+    groups[part].rows.sort(function(x, y){
+      var xf = x.fixedAt ? 1 : 0, yf = y.fixedAt ? 1 : 0;
+      if (xf !== yf) return xf - yf;
+      return y.when - x.when;
+    });
   });
   // Search haystack per group: material, part #, every T# on both sides of each decision,
   // the production lot, and the brand/product behind it.
@@ -2199,8 +2243,10 @@ function _fefoOpsGroups() {
   });
 
   var oc = { expired:0, sitting:0, consumed:0 };
-  flagged.forEach(function(d){ oc[d.outcome]++; });
-  return { P:P, inPeriod:inPeriod, flagged:flagged, groups:groups, order:order, evaluable:evaluable, oc:oc };
+  var fixedTotal = 0;
+  flagged.forEach(function(d){ oc[d.outcome]++; if (d.fixedAt) fixedTotal++; });
+  return { P:P, inPeriod:inPeriod, flagged:flagged, groups:groups, order:order, evaluable:evaluable,
+           oc:oc, splitPulls:splitPulls.length, fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal };
 }
 
 // The panel that replaces the materials table when the pick log is showing.
@@ -2249,12 +2295,28 @@ function _fefoOpsPanelHTML() {
     + '<span>flagged of ' + inPeriod.length.toLocaleString() + ' picks that had an earlier lot available, out of ' + evaluable.toLocaleString() + ' checkable picks this period</span>';
   if (flagged.length) {
     h += '<span style="color:#3a3a38;">&middot;</span>'
-      + '<span>across <span style="color:#e8e6e0;">' + order.length + '</span> material' + (order.length===1?'':'s') + '</span>'
-      + '<span style="color:#3a3a38;">&middot;</span>'
+      + '<span>across <span style="color:#e8e6e0;">' + order.length + '</span> material' + (order.length===1?'':'s') + '</span>';
+    // Corrected vs still open leads, because on a board read while material is being
+    // pulled that is the actionable split — ahead of what the skipped lot's fate was.
+    if (G.fixedTotal) {
+      h += '<span style="color:#3a3a38;">&middot;</span>'
+        + '<span title="A later pick entry for the same production lot and part named the lot that should have been pulled — the pull was put right." style="color:#9FE1CB;cursor:help;">&#10003; ' + G.fixedTotal + ' corrected</span>';
+    }
+    if (G.openTotal) {
+      h += '<span style="color:#3a3a38;">&middot;</span>'
+        + '<span title="No later pick entry for the same production lot and part names the correct lot, so as far as the pick sheet knows these were never put right." style="color:#FAC775;cursor:help;">' + G.openTotal + ' still open</span>';
+    }
+    h += '<span style="color:#3a3a38;">&middot;</span>'
       + ['expired','sitting','consumed'].filter(function(o){ return oc[o]; }).map(function(o){
           var C = _FEFO_OUTCOME[o];
           return '<span title="'+esc(C.tip)+'" style="color:'+C.fg+';cursor:help;">'+oc[o]+' '+C.label+'</span>';
         }).join('<span style="color:#3a3a38;"> &middot; </span>');
+  }
+  // Split pulls, stated rather than silently dropped: they were excluded before the
+  // thresholds because drawing the older lot on the same slip is FEFO, not a skip.
+  if (G.splitPulls) {
+    h += '<span style="color:#3a3a38;">&middot;</span>'
+      + '<span title="Picks where the earlier-expiring lot was drawn on the SAME slip as the later one — the pull was spread over two lots, usually because the older one could not cover the quantity. Not a skip, so these are excluded from the flagged count." style="border-bottom:1px dotted #5f5e5a;cursor:help;">' + G.splitPulls + ' split pull' + (G.splitPulls===1?'':'s') + ' excluded</span>';
   }
   // The coverage floor. Load-bearing: roughly half of picked T#s are gone from the
   // inventory feed, and a flag needs both the picked lot and its sibling present.
@@ -2301,7 +2363,12 @@ function _fefoOpsPanelHTML() {
           + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(g.material || part) + '</div>'
           + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">' + esc(part) + '</div>'
         + '</div>'
-        + '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;flex-shrink:0;">' + g.rows.length + ' pick' + (g.rows.length===1?'':'s') + '</span>'
+        // Fully corrected reads green and states it outright, so a glance down the list
+        // separates "handled" from "go and look at this" without opening anything.
+        + (g.openN === 0
+            ? '<span title="Every flagged pick on this material was followed by a later entry naming the correct lot." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; all ' + g.rows.length + ' corrected</span>'
+            : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;flex-shrink:0;">' + g.openN + ' open</span>'
+              + (g.fixed ? '<span title="Corrected by a later pick entry naming the right lot." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; ' + g.fixed + '</span>' : ''))
         + (g.expired ? '<span title="' + esc(_FEFO_OUTCOME.expired.tip) + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;flex-shrink:0;">' + g.expired + ' expired</span>' : '')
         + '<span style="font-size:10px;color:#888780;font-family:system-ui;flex-shrink:0;width:92px;text-align:right;">worst ' + worstMo + ' mo apart</span>'
         + '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;transition:transform .15s;transform:' + (open?'rotate(180deg)':'') + '"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
@@ -2318,12 +2385,15 @@ function _fefoOpsPanelHTML() {
           + '<th style="' + th + '">Should have pulled</th>'
           + '<th style="' + th + 'text-align:right;">Apart</th>'
           + '<th style="' + th + 'text-align:right;">Qty</th>'
+          + '<th style="' + th + 'text-align:center;">Fixed</th>'
           + '<th style="' + th + 'text-align:right;padding-right:14px;">Outcome</th>'
         + '</tr></thead><tbody>'
-        + g.rows.slice().sort(function(a,b){ return b.when - a.when; }).map(function(d){
+        // Row order comes from _fefoOpsGroups (open first, then newest) so the export
+        // matches; no re-sorting here.
+        + g.rows.map(function(d){
             var C = _FEFO_OUTCOME[d.outcome];
             var nm = _fefoOpsLotName(d.orderLot);
-            return '<tr style="border-top:0.5px solid #2c2c2a;">'
+            return '<tr style="border-top:0.5px solid #2c2c2a;' + (d.fixedAt ? 'opacity:.62;' : '') + '">'
               + '<td style="' + td + 'color:#cfcdc7;vertical-align:top;">' + _fefoOpsShortDate(d.when) + '</td>'
               + '<td style="' + td + 'color:#888780;vertical-align:top;">' + (d.orderLot ? esc(d.orderLot) : '—')
                 // Brand and product on a second line: this is the whole point of the
@@ -2340,6 +2410,12 @@ function _fefoOpsPanelHTML() {
               + '<td style="' + td + '">' + _blendCopyCell(d.shouldLot) + ' <span style="color:#FAC775;font-size:10px;">exp ' + _fefoOpsShortDate(d.shouldExp) + ' &middot; ' + d.lifeLeft + 'd left</span></td>'
               + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">' + Math.round(d.gapDays/30) + ' mo</td>'
               + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + (d.qty ? fmtStockQty(d.qty) : '—') + '</td>'
+              // The indicator: a later entry on this production lot named the right T#.
+              + '<td style="' + td + 'text-align:center;">'
+                + (d.fixedAt
+                    ? '<span title="Corrected ' + _fefoOpsShortDate(d.fixedAt) + ' — a later pick entry for this production lot and part named ' + esc(d.shouldLot) + '." style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:#085041;color:#9FE1CB;cursor:help;">&#10003; ' + _fefoOpsShortDate(d.fixedAt) + '</span>'
+                    : '<span title="No later pick entry for this production lot and part names ' + esc(d.shouldLot) + '. Re-log the pick once the drum is swapped and this turns green." style="color:#5f5e5a;cursor:help;">&mdash;</span>')
+              + '</td>'
               + '<td style="' + td + 'text-align:right;padding-right:14px;"><span title="' + esc(C.tip) + '" style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:' + C.bg + ';color:' + C.fg + ';cursor:help;">' + C.label + '</span></td>'
               + '</tr>';
           }).join('')
@@ -2390,18 +2466,34 @@ function _fefoIndex() {
     byPart[pt].push(k);
   }
   var picksByLot = {};
+  // (production lot | part #) -> its submissions, ascending. A correction is logged as a
+  // NEW pick entry for the same lot and part naming the right T#, so answering "was this
+  // put right afterwards?" is a lookup here rather than a scan of every pick.
+  var byLotPart = {};
   for (i = 0; i < rows.length; i++) {
     var d = _fefoPickDate(rows[i].date);
     if (!d) continue;
     var t = d.getTime(), slots = rows[i].slots || [];
+    // Every T# on this one slip. Needed to tell a mispick from a split pull: if the
+    // earlier-expiring lot was drawn on the SAME slip, FEFO was not skipped, the pull was
+    // just spread over two lots.
+    var rowTs = [];
+    for (j = 0; j < slots.length; j++) {
+      var rt = normT(slots[j].t);
+      if (rt) rowTs.push(rt);
+    }
+    var lpKey = (rows[i].orderLot || '') + '|' + (rows[i].part || '');
+    if (!byLotPart[lpKey]) byLotPart[lpKey] = [];
+    byLotPart[lpKey].push({ t: t, ts: rowTs });
     for (j = 0; j < slots.length; j++) {
       var tn = normT(slots[j].t);
       if (!tn || !idx[tn]) continue;
       if (!picksByLot[tn]) picksByLot[tn] = [];
       // material/part ride along for the ops log, which groups by material and never
-      // has a live inventory row to read them off.
+      // has a live inventory row to read them off. rowTs/lpKey carry the slip context.
       picksByLot[tn].push({ t: t, qty: slots[j].qty || 0, orderLot: rows[i].orderLot,
-                            material: rows[i].material || '', pickPart: rows[i].part || '' });
+                            material: rows[i].material || '', pickPart: rows[i].part || '',
+                            rowTs: rowTs, lpKey: lpKey });
     }
   }
   for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
@@ -2419,8 +2511,12 @@ function _fefoIndex() {
     while (lo < hi) { var mid = (lo + hi) >> 1; if (arr[mid].t > t) hi = mid; else lo = mid + 1; }
     return base + arr.suffix[lo];
   }
+  for (k in byLotPart) { if (!byLotPart.hasOwnProperty(k)) continue;
+    byLotPart[k].sort(function(a, b){ return a.t - b.t; });
+  }
   _fefoIdxKey = key;
-  _fefoIdxCache = { idx: idx, byPart: byPart, picksByLot: picksByLot, balanceAt: balanceAt, key: key };
+  _fefoIdxCache = { idx: idx, byPart: byPart, picksByLot: picksByLot, byLotPart: byLotPart,
+                    balanceAt: balanceAt, key: key };
   return _fefoIdxCache;
 }
 
@@ -13400,15 +13496,18 @@ function exportMaterials() {
   var _opsN = 0;
   _opsOrder.forEach(function(p){ _opsN += _ops.groups[p].rows.length; });
   if (_opsN) {
-    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Pulled T#','Pulled Expires','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart','Qty Picked','Outcome'];
+    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Pulled T#','Pulled Expires','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart','Qty Picked','Corrected','Outcome'];
     var s5Rows = [
       ['FEFO pick opportunities — ' + _ops.P.label],
       ['Exported: '+dateStr+' · '+_opsN+' flagged pick'+(_opsN===1?'':'s')+' across '+_opsOrder.length+' material'+(_opsOrder.length===1?'':'s')
+        + ' · '+_ops.fixedTotal+' corrected, '+_ops.openTotal+' still open'
         + ' · flagged when the lot passed over had '+fefoOpsLife+' days or less of life left AND what was picked instead expired at least '+fefoOpsGap+' days later'
+        + (_ops.splitPulls ? ' · '+_ops.splitPulls+' split pull'+(_ops.splitPulls===1?'':'s')+' excluded (earlier lot drawn on the same slip — FEFO, not a skip)' : '')
         + (_opsQ ? ' · Search "'+matSearch+'"' : '')],
       ['Of '+_ops.inPeriod.length+' picks in this period that had an earlier lot available, out of '+_ops.evaluable+' checkable picks.'
         + ' A pick is only checkable when the lot pulled AND an earlier-expiring sibling of the same part are both still in the inventory feed — about half of picked T#s are, so these counts are a floor, not a total,'
         + ' and they are NOT comparable between periods because older lots have been purged from the feed.'],
+      ['Corrected = a later pick entry for the same production lot and part named the lot that should have been pulled, i.e. the pull was put right. OPEN = no such entry exists, so as far as the pick sheet knows it was never corrected.'],
       ['Outcome is today’s position of the lot that was passed over, not a projection: EXPIRED = it went off with stock still on it; ON SHELF = still in stock and in date; USED SINCE = consumed later anyway, no loss.'
         + ' Legitimate reasons to pass over a lot exist (allergen segregation, a customer-specific lot, a hold) — review, do not assume.'],
       [],
@@ -13427,17 +13526,19 @@ function exportMaterials() {
           d.shouldLot, d.shouldExp == null ? '' : _matExpDateStr(d.shouldExp),
           d.lifeLeft, Math.round(d.gapDays / 30),
           d.qty ? Math.round(d.qty * 100) / 100 : '',
+          d.fixedAt ? _matExpDateStr(d.fixedAt) : 'OPEN',
           _opsOutcomeWord[d.outcome] || d.outcome
         ]);
       });
     });
     var ws5 = XLSX.utils.aoa_to_sheet(s5Rows);
-    ws5['!cols'] = [{wch:12},{wch:40},{wch:10},{wch:15},{wch:20},{wch:38},{wch:12},{wch:14},{wch:20},{wch:12},{wch:14},{wch:13},{wch:11},{wch:12}];
+    ws5['!cols'] = [{wch:12},{wch:40},{wch:10},{wch:15},{wch:20},{wch:38},{wch:12},{wch:14},{wch:20},{wch:12},{wch:14},{wch:13},{wch:11},{wch:12},{wch:12}];
     ws5['!merges'] = [
       {s:{r:0,c:0},e:{r:0,c:s5Headers.length-1}},
       {s:{r:1,c:0},e:{r:1,c:s5Headers.length-1}},
       {s:{r:2,c:0},e:{r:2,c:s5Headers.length-1}},
-      {s:{r:3,c:0},e:{r:3,c:s5Headers.length-1}}
+      {s:{r:3,c:0},e:{r:3,c:s5Headers.length-1}},
+      {s:{r:4,c:0},e:{r:4,c:s5Headers.length-1}}
     ];
     XLSX.utils.book_append_sheet(wb, ws5, 'Pick Opportunities');
   }
