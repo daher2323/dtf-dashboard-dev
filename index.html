@@ -2211,8 +2211,13 @@ function _fefoOpsPanelHTML() {
       // Wrapped and tagged so the toolbar search hides rows in the DOM rather than
       // re-rendering per keystroke — same reason the Open Orders customer list does it
       // that way. Search is live for this view via _filterFefoOps.
-      var wrapOpen = '<div class="fefo-ops-row" data-fefo-mat="'
-        + esc(((g.material || '') + ' ' + part).toLowerCase()) + '">';
+      //
+      // The haystack includes every T# on the group's decisions, both the lot pulled and
+      // the one that should have been, so searching a T# here surfaces the picks it was
+      // involved in — the tracing case, alongside the same T# search on the main table.
+      var hay = (g.material || '') + ' ' + part;
+      g.rows.forEach(function(d){ hay += ' ' + d.pickedLot + ' ' + d.shouldLot; });
+      var wrapOpen = '<div class="fefo-ops-row" data-fefo-mat="' + esc(hay.toLowerCase()) + '">';
       var head = '<div onclick="toggleFefoOpsMat(' + jsStr(part) + ')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:0.5px solid #2c2c2a;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
         + '<div style="flex:1;min-width:0;">'
           + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(g.material || part) + '</div>'
@@ -9653,10 +9658,38 @@ function setMaterialsExpiringOnly(v) {
   renderMaterials();
 }
 
+// Resolve a search query to the part #s whose lots match it, so typing a T# finds the
+// material holding it. Reads inventoryLotIndex rather than the lotRows behind the Lots
+// tab, because that index carries EVERY lot including depleted ones — and a T# someone
+// is looking up is usually one they already picked, so it is often no longer in stock.
+//
+// The reverse direction (query -> parts) is a scan of a few thousand keys. That is cheap
+// enough per keystroke, and memoised on the query plus the index identity: parseInventory
+// assigns a fresh object each fetch, so a refresh invalidates by reference rather than by
+// counting keys on every letter typed.
+var _matLotQuery = null, _matLotQueryParts = null, _matLotQueryIdx = null;
+function _partsMatchingLotQuery(q) {
+  if (q === _matLotQuery && inventoryLotIndex === _matLotQueryIdx) return _matLotQueryParts;
+  _matLotQuery = q; _matLotQueryIdx = inventoryLotIndex; _matLotQueryParts = null;
+  // Under 3 characters a fragment matches a large share of the feed, which would widen
+  // every short search into noise instead of narrowing it.
+  if (!q || q.length < 3) return null;
+  var parts = null, k;
+  for (k in inventoryLotIndex) { if (!inventoryLotIndex.hasOwnProperty(k)) continue;
+    if (k.toLowerCase().indexOf(q) === -1) continue;
+    var p = inventoryLotIndex[k].part; if (!p) continue;
+    if (!parts) parts = {};
+    parts[p] = true;
+  }
+  _matLotQueryParts = parts;
+  return parts;
+}
+
 function filterMaterials() {
   matSearch = (document.getElementById('matSearchInput')||{}).value || '';
   var matList = window._matList || [];
   var q = matSearch.toLowerCase();
+  var lotParts = _partsMatchingLotQuery(q);
   // Segment badges reflect every OTHER filter (time window + zero-usage already
   // baked into matList, plus search) but never the short toggle itself, so toggling
   // it changes what's shown, not the counts.
@@ -9666,8 +9699,11 @@ function filterMaterials() {
     var ir = document.getElementById('mat-inline-row-'+i);
     // Search the full SKU-group roster (stockParts), not just parts consumed in the
     // window — those dormant part #s are visible on the row, so they must be findable.
+    // A part also counts as a hit when one of its lot T#s matches the query.
     var searchMatch = !q || m.name.toLowerCase().indexOf(q) !== -1
-      || (m.stockParts || m.partNums).some(function(p){ return p.toLowerCase().indexOf(q) !== -1; });
+      || (m.stockParts || m.partNums).some(function(p){
+           return p.toLowerCase().indexOf(q) !== -1 || !!(lotParts && lotParts[p]);
+         });
     var shortRow = matIsShort(m);
     var expiringRow = matIsExpiring(m);
     var fefoRow = matHasFefoReview(m);
@@ -11199,7 +11235,7 @@ function renderMaterials() {
     // Right group \u2014 search + export (same placement as Jars/Bottles/Lids/etc.)
     +'<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">'
       +'<div style="position:relative;display:inline-flex;align-items:center;">'
-      +'<input id="matSearchInput" type="text" placeholder="Search ingredient or part \u2026" oninput="matSearch=this.value;filterMaterials();document.getElementById(\'matSearchClear\').style.display=this.value?\'flex\':\'none\';" value="'+esc(matSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
+      +'<input id="matSearchInput" type="text" placeholder="Search ingredient, part # or T# \u2026" oninput="matSearch=this.value;filterMaterials();document.getElementById(\'matSearchClear\').style.display=this.value?\'flex\':\'none\';" value="'+esc(matSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:248px;height:28px;">'
       +'<button id="matSearchClear" onclick="matSearch=\'\';document.getElementById(\'matSearchInput\').value=\'\';filterMaterials();this.style.display=\'none\';" style="display:'+(matSearch?'flex':'none')+';position:absolute;right:6px;width:16px;height:16px;border-radius:50%;border:none;background:#444441;cursor:pointer;align-items:center;justify-content:center;padding:0;flex-shrink:0;">'
       +'<svg width="8" height="8" viewBox="0 0 8 8" fill="none"><line x1="1" y1="1" x2="7" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/><line x1="7" y1="1" x2="1" y2="7" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/></svg>'
       +'</button>'
