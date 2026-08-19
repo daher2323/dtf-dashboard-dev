@@ -10627,14 +10627,15 @@ function renderMaterials() {
   // or 1,188 with zero-usage shown), so six divs per row would spend ~7,000 extra DOM
   // nodes on an identical picture.
   function sparkSVG(data, trend, labels, unitFull) {
-    // 7px bars on a 2px gap, lifted straight off the Jars/Bottles/Lids sparkline so the
-    // two read as the same chart. Stretching them to fill the column instead (13.5px)
-    // made the same data look heavier than the rest of Procurement. The group is
-    // centred in an unchanged 100px canvas rather than shrinking the SVG, which keeps
-    // the cell geometry — and the responsive rules keyed to this column — untouched.
-    var w=100, h=28, padTop=3, barW=7, gap=2;
+    // Bars fill the column: width is derived from the bar count, not fixed, which puts
+    // the usual six months at 13.5px. The Jars/Bottles/Lids sparkline now follows the
+    // same rule (see SPARK_CANVAS in renderProcurement) rather than the same literal
+    // pixel value — it has to, because its bar count grows by one every quarter while
+    // this one is always exactly six.
+    var w=100, h=28, padX=2, padTop=3, gap=3;
     var n=data.length||1;
-    var x0=(w - (n*barW + (n-1)*gap))/2;
+    var barW=(w - padX*2 - gap*(n-1))/n;
+    var x0=padX;
     var max=Math.max.apply(null,data)||1;
     var usable=h-padTop;              // 3px headroom so the tallest bar isn't flush
     var col=trend==='up'?'#1D9E75':trend==='down'?'#E24B4A':trend==='volatile'?'#EF9F27':'#888780';
@@ -12339,14 +12340,25 @@ function renderProcurement() {
     var prevYr = nowYr - 1;
     var ytdLabel = now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 
-    // Sparkline
+    // Sparkline. Bar width is derived from a fixed canvas rather than pinned at 7px, so
+    // this reads at the same weight as the Materials trend column (~13.5px per bar with
+    // today's 7 quarters). It cannot simply copy that 13.5px: this series runs Q1 2025 →
+    // present and gains a bar every quarter, so a fixed width would grow the cell from
+    // 106px now to ~292px within three years, taking that width off the YTD progress
+    // bars beside it for good. Deriving instead keeps the row geometry still and lets
+    // the bars thin as history accumulates — down to SPARK_MIN_BAR, past which the
+    // canvas does grow, because unreadable slivers would be worse than a wider cell.
+    var SPARK_CANVAS = 112, SPARK_GAP = 3, SPARK_MIN_BAR = 4;
+    var qn = cd.qtrs.length || 1;
+    var sparkBarW = Math.max(SPARK_MIN_BAR, (SPARK_CANVAS - SPARK_GAP*(qn-1)) / qn);
+    var sparkTotalW = qn*sparkBarW + SPARK_GAP*(qn-1);
     var sparkMax = Math.max.apply(null, cd.qtrs.map(function(q){return q.units;})) || 1;
     var sparkBars = cd.qtrs.map(function(q) {
       var h = q.units ? Math.max(3, Math.round((q.units/sparkMax)*28)) : 3;
       var isCur = q.key === curQk;
       var col = isCur ? '#378ADD' : (q.units > 0 ? bar26Color : '#2c2c2a');
       var op  = isCur ? '.6' : (q.units > 0 ? '.75' : '.25');
-      return '<div style="width:7px;height:'+h+'px;background:'+col+';opacity:'+op+';border-radius:1px 1px 0 0;align-self:flex-end;"></div>';
+      return '<div style="width:'+sparkBarW.toFixed(1)+'px;height:'+h+'px;background:'+col+';opacity:'+op+';border-radius:1px 1px 0 0;align-self:flex-end;"></div>';
     }).join('');
 
     var header = '<div onclick="toggleProc(\''+sid+'\', '+jsStr(cd.sku)+')" class="proc-row" '
@@ -12376,7 +12388,7 @@ function renderProcurement() {
         +'</div>'
         +(isDes||isNeck ? '<div>'+pctB(cd.ytdUnits, cd.ytd25Units, false)+'</div>' : (cd.ytdPct!==null?'<div>'+pctB(cd.ytdPct, cd.ytdPct25, false)+'</div>':'<div style="height:18px;"></div>'))
       +'</div>'
-      +'<div style="display:flex;align-items:flex-end;gap:2px;height:28px;flex-shrink:0;margin-left:16px;">'+sparkBars+'</div>'
+      +'<div style="display:flex;align-items:flex-end;gap:'+SPARK_GAP+'px;height:28px;flex-shrink:0;margin-left:16px;width:'+sparkTotalW.toFixed(1)+'px;">'+sparkBars+'</div>'
       +'<svg id="pc-'+sid+'" width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;margin-left:8px;transition:transform .15s;transform:'+(expanded?'rotate(180deg)':'')+'"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     +'</div>';
 
