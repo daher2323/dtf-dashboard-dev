@@ -2388,7 +2388,20 @@ function computeFefoMisses() {
   var today = _expiryToday(), all = [], byPartReview = {};
   for (k in strand) { if (!strand[k].skips) continue;
     var L = live[k];
-    if (!L || L.row.qty < FEFO_MIN_KG) continue;     // used up since — nothing to address
+    // Gone from stock entirely: no lot row on screen to annotate, nothing to say.
+    //
+    // This used to also drop anything under FEFO_MIN_KG as "used up since — nothing to
+    // address", which was right for the review list and wrong for everything else. The
+    // review list keeps its own, much higher floor (FEFO_REVIEW_MIN_KG, 25 kg) a few
+    // lines below, so this test was only ever suppressing the "skipped Nx" badge on the
+    // Lots tab — and it suppressed it with a bias. The earliest-expiring lot is both the
+    // one most likely to have been walked past AND the one most likely to have been worn
+    // down to a remnant, so the floor hid the count on precisely the rows that explain
+    // the outcome: 32 lots, 13 of them the USE FIRST lot for their material. L-Glycine
+    // T31993 was passed over 34 times, is down to 0.4 kg, expires in 13 days, and was
+    // being told "USE FIRST" with no hint of the history. lotRows only holds lots with
+    // qty > 0, so `live` membership already means "still has something on it".
+    if (!L) continue;
     var exp = L.row.exp;
     var days = exp == null ? null : Math.round((exp - today) / _EXPIRY_MS_PER_DAY);
     var altN = 0, ak; for (ak in strand[k].alts) if (strand[k].alts.hasOwnProperty(ak)) altN++;
