@@ -583,6 +583,26 @@ var CSV_MATERIALS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZP
 // IMPORTRANGEs the raw data. Isolating it from the heavy source doc cuts the cold
 // regeneration from ~50-150s to ~0.2-15s. Headers match, so parseInventory is unchanged.
 var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1449767280&single=true&output=csv';
+// ARCHIVED lots — spent lots the live inventory QUERY filters out (Col21 = 'Yes'). Optional:
+// leave '' and everything below no-ops.
+//
+// These rows must reach inventoryLotIndex and NOTHING else. That index is the "every lot
+// ever, including depleted" map the FEFO comparison needs, and the reason old picks become
+// uncheckable is that the sibling lot they should have been compared against has been
+// archived out of view. Feeding it the archive stops coverage decaying: instead of a rolling
+// ~3-month window the pick log gets real history, and the per-period trend it currently
+// refuses to draw becomes meaningful.
+//
+// They must NOT reach inventoryByPart / lotRows, which drive on-hand stock, Committed,
+// Available, Cover, the expiry projection and the FEFO review floor walk. Archived lots are
+// spent; counting them as stock would inflate on-hand and invent expired inventory. That
+// separation is the whole safety property here — see parseInventoryArchive.
+//
+// Expected headers, same as CSV_INVENTORY: DTF Part #, DTF Lot #, Material Name,
+// Current Stock, EXP. Date, Receiving Date, Status, Locations, Supplier/MFG, Lot / Batch.
+// Rows missing a part #, lot # or usable expiry date are skipped — an archived lot with no
+// expiry cannot serve as a FEFO comparison, so it is no loss.
+var CSV_INVENTORY_ARCHIVE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1775747917&single=true&output=csv';
 // Forthcoming (committed/forecasted) ingredient demand. NON-TABULAR: a wide sheet
 // of repeating [Part #, Ingredient Name, KG] blocks starting at row 12. We scan
 // every cell from row 12 down for a Part #, take the value two columns over as the
@@ -622,7 +642,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v4';  // v4: discards any truncated payload cached before the size guard existed
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v5';  // v5: lotIndex now also carries archived (spent) lots; v4 discarded pre-size-guard payloads
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -1750,6 +1770,46 @@ function parseInventory(text) {
 // was well. Same failure mode applyFreshData already guards against for production
 // rows: a dataset that collapses is a bad response, not news. So require a plausible
 // size and otherwise keep what we have, because stale-but-whole beats fresh-but-gutted.
+// Merge archived lots into inventoryLotIndex ONLY — never into inventoryByPart. Called after
+// parseInventory, which resets inventoryLotIndex as a side effect, so order matters.
+//
+// A live lot always wins a T# collision: if a lot somehow appears in both sheets, the version
+// still holding stock is the truthful one. Returns how many were added so the caller can say
+// so, and 0 on anything unparseable rather than throwing — the archive is an enhancement, and
+// a bad archive fetch must never take the live inventory down with it.
+function mergeInventoryArchive(text) {
+  if (!text) return 0;
+  try {
+    var rows = parseCSVMultiline(text), added = 0, skipped = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var part = (r['DTF Part #'] || '').trim();
+      var lotNo = (r['DTF Lot #'] || '').trim();
+      if (!part || !lotNo) { skipped++; continue; }
+      var key = lotNo.toUpperCase();
+      if (inventoryLotIndex[key]) continue;              // live row already there — leave it
+      var xd = parseInvDate(r['EXP. Date']);
+      if (xd == null) { skipped++; continue; }            // no date = useless as a comparison
+      inventoryLotIndex[key] = {
+        part: part,
+        qty: num(r['Current Stock']),                     // normally 0; only used by balanceAt
+        exp: xd.getTime(),
+        received: (r['Receiving Date'] || '').trim(),
+        archived: true                                    // so callers can tell it is spent
+      };
+      added++;
+    }
+    if (added) console.log('[DTF] Inventory archive: added ' + added + ' spent lot(s) to the FEFO index'
+      + (skipped ? ' (' + skipped + ' skipped — no part #, lot # or usable expiry date)' : '') + '.');
+    else if (skipped) console.warn('[DTF] Inventory archive: nothing usable in ' + rows.length
+      + ' row(s). Check the published tab has the same headers as the live inventory sheet.');
+    return added;
+  } catch (e) {
+    console.warn('[DTF] Inventory archive parse failed, continuing without it: ' + (e && e.message ? e.message : e));
+    return 0;
+  }
+}
+
 var INVENTORY_MIN_PARTS = 200;     // the sheet carries ~1,170; anything near zero is a bad fetch
 function _inventoryLooksComplete(parsed, current) {
   var n = Object.keys(parsed || {}).length;
@@ -1761,7 +1821,13 @@ function fetchInventoryIfNeeded(force) {
   if (inventoryLoaded && !force) return;
   if (_invFetching) return;   // a cold inventory read can take ~60s; never stack them
   _invFetching = true;
-  fetchInventoryCSV(!!force).then(function(t){
+  // The archive rides along on the same request cycle. Its own failure is swallowed to '' by
+  // fetchCSVSimple, so a missing or broken archive tab costs coverage and nothing else.
+  Promise.all([
+    fetchInventoryCSV(!!force),
+    CSV_INVENTORY_ARCHIVE ? fetchCSVSimple(CSV_INVENTORY_ARCHIVE, !!force) : Promise.resolve('')
+  ]).then(function(res){
+    var t = res[0], archiveText = res[1];
     _invFetching = false;
     // parseInventory rebuilds inventoryLotIndex as a side effect, so a rejected parse
     // must not leave its scraps behind for the FEFO detector.
@@ -1770,6 +1836,10 @@ function fetchInventoryIfNeeded(force) {
     if (_inventoryLooksComplete(parsed, inventoryByPart)) {
       inventoryByPart = parsed;
       inventoryLoaded = true;
+      // Strictly after parseInventory, which has just reset the index. Archived lots land in
+      // inventoryLotIndex only — never in `parsed`, which becomes inventoryByPart and drives
+      // every stock, cover and expiry figure on the page.
+      mergeInventoryArchive(archiveText);
       // The FEFO memos are keyed on row/lot *counts*, which a corrected expiry date
       // leaves untouched — so replacing the data has to drop them explicitly or the
       // stale computation outlives the stale input.
