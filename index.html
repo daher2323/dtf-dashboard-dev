@@ -4958,7 +4958,18 @@ function prepData() {
   return {now:now,lots:lots,completeLots:completeLots,partialLots:partialLots,totalUnits:totalUnits,totalProj:totalProj,uniqueProds:uniqueProds,uniqueCusts:uniqueCusts,totalLots:totalLots,devs:devs,avgDev:avgDev,highDevCount:highDevCount,uniqDays:uniqDays,avgPerDay:avgPerDay,total25:total25,total25lots:total25lots,comp25pct:comp25pct,avg25perDay:avg25perDay,avgDev25:avgDev25,custs25:custs25,lineEntries:lineEntries,lineAvg:lineAvg,comp25:comp25};
 }
 
-function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
+// Wording for the day-total readout at the right edge of the segmented bar.
+// A finished day (any past day, or today after 4pm ET) can no longer make up a
+// gap — its miss is final, so it reads as a shortfall, not as work "to go".
+function bannerRemainText(remaining, dayComplete, goalNoun) {
+  if(remaining<=0) return {text:'+'+Math.abs(remaining).toLocaleString()+' over target', color:'#9FE1CB'};
+  return {
+    text: remaining.toLocaleString()+(dayComplete?' short of '+goalNoun:' to go'),
+    color: dayComplete?'#EF9F27':'#888780'
+  };
+}
+
+function animateGauges(gaugeData, todayTotal, totalGoal, barColor, dayComplete, goalNoun) {
   var DURATION = 1200, start = null;
   function easeOut(t){ return 1-Math.pow(1-t,3); }
   function drawDial(idx, color, track, frac) {
@@ -5005,8 +5016,8 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
       if(rem){
         var remaining=Math.round(totalGoal-todayTotal*e);
         rem.style.fontSize='11px';rem.style.fontWeight='500';
-        if(remaining<=0){rem.style.color='#9FE1CB';rem.textContent='+'+(Math.abs(remaining)).toLocaleString()+' over target';}
-        else{rem.style.color='#888780';rem.textContent=remaining.toLocaleString()+' to go';}
+        var rt=bannerRemainText(remaining, dayComplete, goalNoun);
+        rem.style.color=rt.color;rem.textContent=rt.text;
       }
       // Legend labels sit in a normal flex row below the bar, so they can
       // never overlap each other regardless of where the segments are. We
@@ -5040,7 +5051,7 @@ function animateGauges(gaugeData, todayTotal, totalGoal, barColor) {
   requestAnimationFrame(draw);
 }
 
-function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusColor) {
+function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusColor, dayComplete, goalNoun) {
   gaugeData.forEach(function(g){
     var frac = g.avg ? (g.units/g.avg) : 0, hit = frac >= TARGET_HIT_THRESHOLD;
     var card = document.getElementById('gcard_'+g.idx);
@@ -5056,7 +5067,13 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
     if(check) check.style.display = hit ? 'flex' : 'none';
     if(remain){
       if(hit){ remain.innerHTML='<svg width="10" height="10" viewBox="0 0 11 11" fill="none" style="flex-shrink:0"><polyline points="1.5,5.5 4.5,8.5 9.5,2.5" stroke="#1D9E75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span style="color:#1D9E75;">Target reached</span>'; }
-      else if(g.avg){ var left=Math.max(0,Math.round(g.avg-g.units)); remain.innerHTML='<svg width="10" height="10" viewBox="0 0 10 10" style="flex-shrink:0"><circle cx="5" cy="5" r="4" fill="none" stroke="#EF9F27" stroke-width="1.2"/><line x1="5" y1="2.8" x2="5" y2="5.5" stroke="#EF9F27" stroke-width="1.2" stroke-linecap="round"/><circle cx="5" cy="7.2" r="0.7" fill="#EF9F27"/></svg><span style="color:#EF9F27;">'+left.toLocaleString()+' units remaining</span>'; }
+      else if(g.avg){
+        var left=Math.max(0,Math.round(g.avg-g.units));
+        // Same distinction as the banner: a finished day missed its number, it
+        // doesn't still have units left to run.
+        var gapLbl=left.toLocaleString()+' units '+(dayComplete?'short of '+(g.isTarget?'target':'avg'):'remaining');
+        remain.innerHTML='<svg width="10" height="10" viewBox="0 0 10 10" style="flex-shrink:0"><circle cx="5" cy="5" r="4" fill="none" stroke="#EF9F27" stroke-width="1.2"/><line x1="5" y1="2.8" x2="5" y2="5.5" stroke="#EF9F27" stroke-width="1.2" stroke-linecap="round"/><circle cx="5" cy="7.2" r="0.7" fill="#EF9F27"/></svg><span style="color:#EF9F27;">'+gapLbl+'</span>';
+      }
       else remain.innerHTML='';
     }
   });
@@ -5077,7 +5094,9 @@ function applyHitStates(gaugeData, todayTotal, totalGoal, statusLabel, statusCol
   var rem=document.getElementById('banner-remaining');
   if(allHit){
     ['banner-seg1','banner-seg2','banner-seg4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='1'; });
-    if(rem){ rem.style.color='#9FE1CB'; rem.textContent='+' + (todayTotal-totalGoal).toLocaleString()+' over target'; }
+    // allHit tolerates 0.99, so a "hit" day can still sit a few units under —
+    // route through the shared helper rather than printing "+-70 over target".
+    if(rem){ var hrt=bannerRemainText(totalGoal-todayTotal, dayComplete, goalNoun); rem.style.color=hrt.color; rem.textContent=hrt.text; }
     ['banner-leg-line#1','banner-leg-line#2','banner-leg-line#4'].forEach(function(id){ var el=document.getElementById(id); if(el) el.style.opacity='1'; });
   }
   var bs=document.getElementById('banner-bullseye'); if(bs) bs.style.display=allHit?'inline':'none';
@@ -5190,6 +5209,7 @@ function renderToday() {
   var totalGoal=ALL_LINES.reduce(function(s,line){return s+lineGoal(line).value;},0);
   var allLinesHaveTarget=ALL_LINES.every(function(line){ var g=lineGoal(line); return g.isTarget; });
   var bannerGoalLabel=allLinesHaveTarget?'% of Target':'% of Avg';
+  var bannerGoalNoun=allLinesHaveTarget?'target':'avg';
   var todayPct=totalGoal?Math.round((todayTotal/totalGoal)*100):0;
   var statusLabel=isLive&&!dayComplete?'Day in progress':(todayPct>100?'Target exceeded':todayPct>=TARGET_HIT_THRESHOLD*100?'Target met':'Day complete');
   var statusColor=isLive&&!dayComplete?'#888780':(todayPct>=100?'#1D9E75':'#EF9F27');
@@ -5307,7 +5327,7 @@ function renderToday() {
       +'<div id="banner-seg1" style="flex-shrink:0;height:100%;width:0%;background:'+LINE_COLOR['line#1']+';transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-seg2" style="flex-shrink:0;height:100%;width:0%;background:'+LINE_COLOR['line#2']+';transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
       +'<div id="banner-seg4" style="flex-shrink:0;height:100%;width:0%;background:'+LINE_COLOR['line#4']+';transition:width 1.2s cubic-bezier(.4,0,.2,1);"></div>'
-      +'<div id="banner-remaining" style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'+totalGoal.toLocaleString()+' to go</div>'
+      +'<div id="banner-remaining" style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:#888780;font-family:system-ui;white-space:nowrap;">'+esc(bannerRemainText(totalGoal, dayComplete, bannerGoalNoun).text)+'</div>'
     +'</div>'
     +'<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;min-height:18px;">'
       +'<div id="banner-leg-line#1" style="display:none;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#1']+';font-family:system-ui;white-space:nowrap;">Line #1 — 0</div>'
@@ -5323,8 +5343,8 @@ function renderToday() {
     +'</div>'
     +'<div id="dailyCompletedGrid">'+completedHTML+'</div></div></div></div>';
 
-  var gaugeData=ALL_LINES.map(function(line,i){ var k2=lk(line), goal=lineGoal(line); return {idx:i,line:line,color:LINE_COLOR[k2]||'#888780',track:LINE_TRACK[k2]||'#2c2c2a',units:todayByLine[line]||0,avg:goal.value,sfx:goal.lineDown?'% of Target (down)':goal.isTarget?'% of Target':'% of Avg',lineDown:goal.lineDown}; });
-  setTimeout(function(){ applyHitStates(gaugeData,todayTotal,totalGoal,statusLabel,statusColor); animateGauges(gaugeData,todayTotal,totalGoal,barColor); }, 0);
+  var gaugeData=ALL_LINES.map(function(line,i){ var k2=lk(line), goal=lineGoal(line); return {idx:i,line:line,color:LINE_COLOR[k2]||'#888780',track:LINE_TRACK[k2]||'#2c2c2a',units:todayByLine[line]||0,avg:goal.value,isTarget:goal.isTarget,sfx:goal.lineDown?'% of Target (down)':goal.isTarget?'% of Target':'% of Avg',lineDown:goal.lineDown}; });
+  setTimeout(function(){ applyHitStates(gaugeData,todayTotal,totalGoal,statusLabel,statusColor,dayComplete,bannerGoalNoun); animateGauges(gaugeData,todayTotal,totalGoal,barColor,dayComplete,bannerGoalNoun); }, 0);
 }
 
 // Builds the Daily "Completed today" 3-column (per-line) grid from a list of
@@ -5586,6 +5606,11 @@ function renderWeekly() {
   // Don't count today as a full elapsed day until after 4PM ET
   var daysElapsed=isLiveWeek?(day===0?wkDayCount:day===6?wkDayCount:todayComplete?Math.min(day,wkDayCount):Math.min(day-1,wkDayCount)):wkDayCount;
   var daysRemaining=isLiveWeek?Math.max(0,wkDayCount-daysElapsed):0;
+  // A week with no days left to run can't still be "on pace" or have units "to
+  // go" — its number is final. True for any past week, and for the live week
+  // once Friday 4PM ET passes (the same threshold the Daily tab treats as
+  // day-complete), which is also when onPace switches to its final-tally test.
+  var weekComplete=daysRemaining===0;
 
   // Last week same days elapsed — apples to apples
   var lastWkSameEnd=new Date(lastMon); lastWkSameEnd.setDate(lastMon.getDate()+daysElapsed-1); lastWkSameEnd.setHours(23,59,59,999);
@@ -5625,12 +5650,11 @@ function renderWeekly() {
   var vsTarget=weekUnits-weeklyTarget;
   var vsTargetPct=weeklyTarget?Math.round((vsTarget/weeklyTarget)*100):0;
   var statusLabel,statusBg,statusTxt;
-  if(isLiveWeek){
-    if(targetSource==='est'||targetSource==='avg'){
-      statusLabel=''; statusBg=''; statusTxt='';
-    } else {
-      statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775';
-    }
+  if(isLiveWeek&&(targetSource==='est'||targetSource==='avg')){
+    // Nothing worth grading against a guessed target.
+    statusLabel=''; statusBg=''; statusTxt='';
+  } else if(!weekComplete){
+    statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775';
   } else{ var finalPct=weeklyTarget?(weekUnits/weeklyTarget)*100:0; if(finalPct>100){statusLabel='Target exceeded';statusBg='#085041';statusTxt='#9FE1CB';}else if(finalPct>=TARGET_HIT_THRESHOLD*100){statusLabel='Target met';statusBg='#085041';statusTxt='#9FE1CB';}else{statusLabel='Target missed';statusBg='#791F1F';statusTxt='#F09595';} }
   // Build per-lot unit counts within this week's window only
   var weekLotUnits={};
@@ -5694,14 +5718,15 @@ function renderWeekly() {
     // ── Nav bar ──
     // ── Weekly banner (daily bar style) ──
     (function(){
-      var allHitWeek=!isLiveWeek&&weeklyTarget&&(weekUnits/weeklyTarget)>=TARGET_HIT_THRESHOLD;
+      var allHitWeek=weekComplete&&weeklyTarget&&(weekUnits/weeklyTarget)>=TARGET_HIT_THRESHOLD;
       var bannerBorder=allHitWeek?'2px solid #1D9E75':'0.5px solid #2c2c2a';
       var bannerShadow=allHitWeek?'0 0 10px 2px rgba(29,158,117,0.28),0 0 20px 4px rgba(29,158,117,0.10)':'none';
       var pctColor=allHitWeek?'#9FE1CB':onPace?'#9FE1CB':'#EF9F27';
       var statusColor=allHitWeek?'#9FE1CB':onPace?'#9FE1CB':'#EF9F27';
-      var remText=allHitWeek?'+'+(weekUnits-weeklyTarget).toLocaleString()+' over target'
-        :isLiveWeek&&weeklyTarget?Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go'
-        :weeklyTarget?(weekUnits>=weeklyTarget?'+'+( weekUnits-weeklyTarget).toLocaleString()+' over target':Math.max(0,weeklyTarget-weekUnits).toLocaleString()+' to go'):'';
+      // Same shortfall/surplus wording as the Daily banner: a finished week
+      // missed its number, it doesn't still have units "to go".
+      var rem=weeklyTarget?bannerRemainText(weeklyTarget-weekUnits, weekComplete, 'target'):null;
+      var remText=rem?rem.text:'';
       // segment widths — scale against max of (total units, target) so bar never overflows
       var barScale=Math.max(weekUnits,weeklyTarget||1);
       var segs=ALL_LINES.map(function(line){
@@ -5752,7 +5777,7 @@ function renderWeekly() {
             var radius=i===0?'6px 0 0 6px':i===ALL_LINES.length-1?'0 6px 6px 0':'0';
             return '<div style="position:absolute;top:0;left:'+segLeft[i]+'%;height:100%;width:'+segs[i]+'%;background:'+color+';border-radius:'+radius+';"></div>';
           }).join('')
-          +'<div style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:'+(allHitWeek?'#9FE1CB':'#888780')+';font-family:system-ui;white-space:nowrap;">'+remText+'</div>'
+          +'<div style="position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:11px;font-weight:500;color:'+(rem?rem.color:'#888780')+';font-family:system-ui;white-space:nowrap;">'+remText+'</div>'
         +'</div>'
         // per-line labels under bar — flex row so labels can never overlap
         // when segments cluster at the start of a mostly-empty bar (e.g. early
