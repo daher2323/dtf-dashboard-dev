@@ -2045,7 +2045,8 @@ var fefoOpsGran = 'month';    // 'week' | 'month' | 'quarter'
 var fefoOpsAnchor = null;     // a Date inside the selected period; null = current period
 var fefoOpsLife = FEFO_OPS_LIFE_DAYS;
 var fefoOpsGap = FEFO_OPS_GAP_DAYS;
-var fefoOpsOpen = {};         // part # -> drilled open
+var fefoOpsOpen = {};         // part # -> explicit override of the expand/collapse stance
+var fefoOpsAllOpen = false;   // default stance for groups with no override
 
 // Bounds for the selected period. Self-contained rather than reusing the Logistics
 // navigator, whose bounds carry outbound/inbound baggage this has no use for.
@@ -2070,25 +2071,45 @@ function _fefoOpsPeriod() {
   var nt = Date.now();
   return { start: s.getTime(), end: e.getTime(), label: label, isCurrent: nt >= s.getTime() && nt <= e.getTime() };
 }
-function setFefoOpsView(v) { fefoOpsView = !!v; fefoOpsOpen = {}; renderMaterials(); }
-function setFefoOpsGran(g) { fefoOpsGran = g; fefoOpsAnchor = null; fefoOpsOpen = {}; renderMaterials(); }
+// Expansion is a stance, not per-render state. fefoOpsAllOpen is the default for every
+// group; fefoOpsOpen holds explicit per-material overrides on top of it. Both are sticky
+// across period navigation on purpose: the intended use is a weekly board left up all
+// week, so stepping to the next week should not silently collapse everything you were
+// watching. Keys are part #s, so overrides left behind for a material absent from the new
+// period are inert.
+function _fefoOpsIsOpen(part) {
+  return fefoOpsOpen[part] === undefined ? fefoOpsAllOpen : !!fefoOpsOpen[part];
+}
+// renderMaterials is called directly (not through the render() wrapper), so anything that
+// changes the panel's height has to hold scroll itself or the page jumps to the top.
+function _fefoOpsRerender() {
+  var y = window.scrollY;
+  renderMaterials();
+  requestAnimationFrame(function(){ window.scrollTo(0, y); });
+}
+function setFefoOpsView(v) { fefoOpsView = !!v; renderMaterials(); }
+function setFefoOpsGran(g) { fefoOpsGran = g; fefoOpsAnchor = null; renderMaterials(); }
 function navFefoOps(delta) {
   var a = new Date(_fefoOpsPeriod().start);
   if (fefoOpsGran === 'week') a.setDate(a.getDate() + delta*7);
   else if (fefoOpsGran === 'quarter') a.setMonth(a.getMonth() + delta*3);
   else a.setMonth(a.getMonth() + delta);
-  fefoOpsAnchor = a; fefoOpsOpen = {};
-  renderMaterials();
+  fefoOpsAnchor = a;
+  _fefoOpsRerender();
 }
-function goFefoOpsLive() { fefoOpsAnchor = null; fefoOpsOpen = {}; renderMaterials(); }
-function setFefoOpsThresh(life, gap) { fefoOpsLife = life; fefoOpsGap = gap; fefoOpsOpen = {}; renderMaterials(); }
+function goFefoOpsLive() { fefoOpsAnchor = null; _fefoOpsRerender(); }
+function setFefoOpsThresh(life, gap) { fefoOpsLife = life; fefoOpsGap = gap; _fefoOpsRerender(); }
 function toggleFefoOpsMat(part) {
-  // renderMaterials is called directly (not through the render() wrapper), so scroll
-  // has to be held here or expanding a row near the bottom jumps to the top.
-  var y = window.scrollY;
-  fefoOpsOpen[part] = !fefoOpsOpen[part];
-  renderMaterials();
-  requestAnimationFrame(function(){ window.scrollTo(0, y); });
+  fefoOpsOpen[part] = !_fefoOpsIsOpen(part);
+  _fefoOpsRerender();
+}
+// Expand/collapse everything in the current period. Clears the per-material overrides so
+// the stance is unambiguous — otherwise "Expand all" could leave a row shut because it was
+// individually collapsed earlier.
+function toggleFefoOpsAll(open) {
+  fefoOpsAllOpen = !!open;
+  fefoOpsOpen = {};
+  _fefoOpsRerender();
 }
 // Brand + product behind a production lot #, so a flagged pick names the thing that was
 // actually being made. Same fallback chain the Recall and Blend views use: the production
@@ -2238,8 +2259,25 @@ function _fefoOpsPanelHTML() {
   // The coverage floor. Load-bearing: roughly half of picked T#s are gone from the
   // inventory feed, and a flag needs both the picked lot and its sibling present.
   h += '<span style="color:#3a3a38;">&middot;</span>'
-    + '<span title="A pick can only be checked when the lot picked AND an earlier-expiring sibling are both still in the inventory feed. Only about half of picked T#s are, so this is a floor, not a total — and counts are not comparable between periods, because older lots have been purged." style="border-bottom:1px dotted #5f5e5a;cursor:help;">counts are a floor</span>'
-    + '</div>';
+    + '<span title="A pick can only be checked when the lot picked AND an earlier-expiring sibling are both still in the inventory feed. Only about half of picked T#s are, so this is a floor, not a total — and counts are not comparable between periods, because older lots have been purged." style="border-bottom:1px dotted #5f5e5a;cursor:help;">counts are a floor</span>';
+  // Expand/collapse all, pushed to the right end of the strip it controls. "All open" is
+  // judged over the groups actually in this period, so it flips to Collapse only once
+  // everything on screen is showing.
+  if (flagged.length) {
+    var allOpenNow = order.length > 0 && order.every(function(p){ return _fefoOpsIsOpen(p); });
+    h += '<button onclick="toggleFefoOpsAll(' + (allOpenNow ? 'false' : 'true') + ')" style="margin-left:auto;'
+      // The strip is align-items:baseline for its text; a button needs centring instead.
+      + 'align-self:center;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 10px;border-radius:6px;'
+      + 'border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:11px;'
+      + 'font-weight:500;font-family:system-ui;white-space:nowrap;" '
+      + 'onmouseover="this.style.background=\'#252829\';this.style.color=\'#e8e6e0\'" '
+      + 'onmouseout="this.style.background=\'transparent\';this.style.color=\'#888780\'" '
+      + 'title="Show or hide the picks under every material. Stays as you left it when you step between periods.">'
+      + '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;transition:transform .15s;transform:' + (allOpenNow ? 'rotate(180deg)' : '') + '"><polyline points="2,4 6,8 10,4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      + (allOpenNow ? 'Collapse all' : 'Expand all')
+      + '</button>';
+  }
+  h += '</div>';
 
   // ── Grouped rows ──
   if (!flagged.length) {
@@ -2251,7 +2289,7 @@ function _fefoOpsPanelHTML() {
   } else {
     h += order.map(function(part){
       var g = groups[part];
-      var open = !!fefoOpsOpen[part];
+      var open = _fefoOpsIsOpen(part);
       var worstMo = Math.round(g.worst / 30);
       // Wrapped and tagged so the toolbar search hides rows in the DOM rather than
       // re-rendering per keystroke — same reason the Open Orders customer list does it
