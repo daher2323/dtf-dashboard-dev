@@ -626,6 +626,11 @@ var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v4';  // v4: discards any truncat
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
+// In-flight guards for the four slow-moving feeds. The *Loaded flags above answer
+// "do we have data"; these answer "is a request already out". Both are needed now
+// that refreshStockFeeds() calls the fetchers on a timer: the loaded flags no longer
+// suppress repeat calls, and a cold inventory read can take ~60s.
+var _invFetching = false, _demandFetching = false, _matFetching = false, _lotIdxFetching = false;
 var TARGET_HIT_THRESHOLD = 0.99; // 99% = within 1% tolerance
 var ALL_LINES = ['Line #1', 'Line #2', 'Line #4'];
 var LINE_COLOR = {'line#1':'#378ADD','line#2':'#7F77DD','line#4':'#D4537E'};
@@ -1617,28 +1622,42 @@ function fetchData(fresh) {
   ]);
 }
 
-function fetchMaterialsIfNeeded() {
-  if (materialsData.length > 0) return;
-  fetchMaterialsCSV().then(function(t){
+function fetchMaterialsIfNeeded(force) {
+  if (materialsData.length > 0 && !force) return;
+  // Without this guard the pre-existing latch ("materialsData is still empty")
+  // lets every render of the Materials view fire another fetch while the first
+  // is in flight — harmless when it happened once at load, not once a timer
+  // starts calling this on a schedule.
+  if (_matFetching) return;
+  _matFetching = true;
+  fetchMaterialsCSV(!!force).then(function(t){
+    _matFetching = false;
     var parsed = parseMaterials(t);
     if (parsed.length > 0) {
       materialsData = parsed;
       // Same raw text, parsed positionally for Recall Tracking (see parsePickRows).
       pickRows = parsePickRows(t);
+      _fefoCache = null;   // pick rows are half the FEFO input
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
       // Route through render() (not renderRecall directly) so the wrapper preserves
       // focus + caret — otherwise finishing the pick-sheet fetch mid-typing wipes
       // the input. recallQuery is kept live via onRecallInput, so the value survives.
       if (mainSection === 'quality') render();   // recall or blend: run any pending trace
     }
+  }).catch(function(e){
+    _matFetching = false;
+    console.warn('Materials refresh failed: ' + (e && e.message ? e.message : e));
   });
 }
 
 function fetchInventoryCSV(fresh) {
-  // No cachebust: a stable URL lets Google's CDN serve its cached copy (~0.25s)
-  // instead of treating each request as new and regenerating cold (up to ~60s).
-  // Inventory changes slowly, so CDN-level staleness (minutes) is acceptable.
-  return fetch(CSV_INVENTORY, NO_CACHE).then(function(r){
+  // Default (initial load): no cachebust, so a stable URL lets Google's CDN serve
+  // its cached copy (~0.25s) instead of treating each request as new and
+  // regenerating cold (up to ~60s). fresh=true emits a unique token and forces a
+  // true origin read — used by every *refresh* path, where the whole point is to
+  // see an edit the user just made. Without it a refresh can be answered from the
+  // same 5-minute CDN bucket it was trying to escape.
+  return fetch(fresh ? bustUrl(CSV_INVENTORY, true) : CSV_INVENTORY, NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -1738,9 +1757,12 @@ function _inventoryLooksComplete(parsed, current) {
   var have = Object.keys(current || {}).length;
   return !(have && n < have * 0.8);
 }
-function fetchInventoryIfNeeded() {
-  if (inventoryLoaded) return;
-  fetchInventoryCSV().then(function(t){
+function fetchInventoryIfNeeded(force) {
+  if (inventoryLoaded && !force) return;
+  if (_invFetching) return;   // a cold inventory read can take ~60s; never stack them
+  _invFetching = true;
+  fetchInventoryCSV(!!force).then(function(t){
+    _invFetching = false;
     // parseInventory rebuilds inventoryLotIndex as a side effect, so a rejected parse
     // must not leave its scraps behind for the FEFO detector.
     var keepIndex = inventoryLotIndex;
@@ -1748,6 +1770,10 @@ function fetchInventoryIfNeeded() {
     if (_inventoryLooksComplete(parsed, inventoryByPart)) {
       inventoryByPart = parsed;
       inventoryLoaded = true;
+      // The FEFO memo is keyed on row/lot *counts*, which a corrected expiry date
+      // leaves untouched — so replacing the data has to drop it explicitly or the
+      // stale computation outlives the stale input.
+      _fefoCache = null;
       try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     } else {
@@ -1757,6 +1783,11 @@ function fetchInventoryIfNeeded() {
         + ' parts parsed (need at least ' + INVENTORY_MIN_PARTS + ' and 80% of the '
         + Object.keys(inventoryByPart || {}).length + ' already held). Keeping existing data.');
     }
+  }).catch(function(e){
+    // Belt and braces: an in-flight latch that never clears would silently disable
+    // every future refresh, which is the exact failure this guard exists to avoid.
+    _invFetching = false;
+    console.warn('Inventory refresh failed: ' + (e && e.message ? e.message : e));
   });
 }
 
@@ -2090,8 +2121,9 @@ function parseDemand(text) {
 }
 
 function fetchDemandCSV(fresh) {
-  // No cachebust — same rationale as fetchInventoryCSV: hit Google's CDN cache.
-  return fetch(CSV_DEMAND, NO_CACHE).then(function(r){
+  // No cachebust on first load, forced origin read on refresh — same rationale
+  // as fetchInventoryCSV.
+  return fetch(fresh ? bustUrl(CSV_DEMAND, true) : CSV_DEMAND, NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -2100,9 +2132,12 @@ function fetchDemandCSV(fresh) {
   }).catch(function(){ return ''; });
 }
 
-function fetchDemandIfNeeded() {
-  if (demandLoaded) return;
-  fetchDemandCSV().then(function(t){
+function fetchDemandIfNeeded(force) {
+  if (demandLoaded && !force) return;
+  if (_demandFetching) return;
+  _demandFetching = true;
+  fetchDemandCSV(!!force).then(function(t){
+    _demandFetching = false;
     var parsed = parseDemand(t);
     if (Object.keys(parsed).length > 0) {
       demandByPart = parsed;
@@ -2110,23 +2145,31 @@ function fetchDemandIfNeeded() {
       try { sessionStorage.setItem(DEMAND_CACHE_KEY, JSON.stringify({ byPart: parsed, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     }
+  }).catch(function(e){
+    _demandFetching = false;
+    console.warn('Demand refresh failed: ' + (e && e.message ? e.message : e));
   });
 }
 
 // Hydrate inventory/demand from sessionStorage (set by prior fetches this session)
 // so the Stock-position columns paint instantly instead of re-waiting on Google.
-// In-memory loaded flags then short-circuit the network fetch for the rest of the
-// session — matching how the data already loads at most once per page load.
+//
+// The loaded flags this sets would also suppress the load-time fetch, which is why
+// reloading the page used to be no way out of a stale cell: within the 10-minute TTL
+// a reload repainted the same snapshot without ever asking Google. It records
+// _stockHydratedFromCache instead, so loadDashboard can paint instantly AND then
+// verify against the origin.
+var _stockHydratedFromCache = false;
 function _loadStockCaches() {
   try {
     var ri = sessionStorage.getItem(INVENTORY_CACHE_KEY);
     // Same size test on the way in: a cache is only as trustworthy as the fetch that
     // wrote it, and a gutted payload must not be able to survive a reload.
-    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; } }
+    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; _stockHydratedFromCache = true; } }
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
-    if (rd) { var cd = JSON.parse(rd); if (cd && cd.byPart && (Date.now() - (cd.ts || 0)) < STOCK_CACHE_TTL) { demandByPart = cd.byPart; demandLoaded = true; } }
+    if (rd) { var cd = JSON.parse(rd); if (cd && cd.byPart && (Date.now() - (cd.ts || 0)) < STOCK_CACHE_TTL) { demandByPart = cd.byPart; demandLoaded = true; _stockHydratedFromCache = true; } }
   } catch(e) {}
 }
 
@@ -2524,22 +2567,87 @@ function parseAmt(s) {
   return { value: Math.round(n), unit: (m[3] || '').trim() };
 }
 
-function fetchLotIndexIfNeeded() {
-  if (lotIndexLoaded) return;
+function fetchLotIndexIfNeeded(force) {
+  if (lotIndexLoaded && !force) return;
+  if (_lotIdxFetching) return;
   var urls = Object.keys(CSV_LOT_INDEX_BY_YEAR).map(function(y){ return CSV_LOT_INDEX_BY_YEAR[y]; });
   if (!urls.length) { lotIndexLoaded = true; return; }
-  Promise.all(urls.map(function(u){ return fetchCSVSimple(u); })).then(function(texts){
+  _lotIdxFetching = true;
+  Promise.all(urls.map(function(u){ return fetchCSVSimple(u, !!force); })).then(function(texts){
+    _lotIdxFetching = false;
     var merged = {};
     texts.forEach(function(t){
       var partial = parseLotIndex(t);
       Object.keys(partial).forEach(function(k){ merged[k] = partial[k]; });
     });
-    lotIndex = merged;
-    lotIndexLoaded = true;
-    // If the user is already sitting on the materials view, re-render so any
-    // previously-"Unknown" lots pick up their brand/product from the index.
-    if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+    // Only replace on a non-empty result. fetchCSVSimple swallows failures into ''
+    // so a bad publish snapshot arrives as an empty parse, and this assignment used
+    // to be unconditional — safe when it ran once per page load, a way to blank
+    // every lot's brand now that a timer calls it repeatedly.
+    if (Object.keys(merged).length > 0) {
+      lotIndex = merged;
+      lotIndexLoaded = true;
+      // If the user is already sitting on the materials view, re-render so any
+      // previously-"Unknown" lots pick up their brand/product from the index.
+      if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+      // Recall and Blend name their lots out of this index too (buildRecallResult /
+      // buildBlendResult). Harmless to omit when this only ran once at load; now that
+      // it re-reads on a timer, a landed refresh has to repaint them as well.
+      else if (mainSection === 'quality') render();
+    } else if (!lotIndexLoaded) {
+      console.warn('Lot index fetch returned no rows; keeping it unloaded so the next refresh retries.');
+    }
+  }).catch(function(e){
+    _lotIdxFetching = false;
+    console.warn('Lot index refresh failed: ' + (e && e.message ? e.message : e));
   });
+}
+
+// Re-read the four slow-moving feeds behind Procurement and Quality: materials /
+// pick sheet, raw-material inventory, forthcoming demand, and the lot index.
+//
+// These used to load at most once per page load. Each fetcher latched on its own
+// "loaded" flag, nothing ever cleared those flags, and neither the Refresh button
+// nor either auto-refresh timer called them — so a long-lived tab could sit on an
+// expiry date the sheet had corrected days earlier, and pressing Refresh (which
+// only re-pulls the production CSVs) did nothing to shift it.
+//
+// force=true bypasses the loaded flags AND cachebusts the request, so this is a
+// genuine origin read rather than a re-hydration of whatever is already held.
+// Each fetcher keeps its existing size/sanity guard, so a bad publish snapshot is
+// still rejected in favour of the data on screen.
+var _stockRefreshAt = 0;                          // last time we *attempted* a re-read
+var STOCK_REFRESH_MIN_INTERVAL = 5 * 60 * 1000;   // matches the auto-refresh tick
+function refreshStockFeeds() {
+  // Stamped on attempt rather than success: a failed attempt should wait for the
+  // next tick like any other, not spin on every render.
+  _stockRefreshAt = Date.now();
+  fetchMaterialsIfNeeded(true);
+  fetchLotIndexIfNeeded(true);
+  // Inventory and demand are the admin-only Procurement feeds; viewers never see
+  // the columns they populate, matching the role gate on the initial load.
+  if (userRole === 'admin') {
+    fetchInventoryIfNeeded(true);
+    fetchDemandIfNeeded(true);
+  }
+}
+
+// Called when Materials or Quality renders. The 5-minute timer only helps someone
+// already sitting on the section; without this, arriving from Production after an
+// hour elsewhere shows whatever was last fetched until the next tick — which is the
+// same "looks current, isn't" failure in miniature. Rate-limited to one attempt per
+// STOCK_REFRESH_MIN_INTERVAL so ordinary re-renders (sorting, expanding a row) are
+// free, and the in-flight guards absorb the rest.
+function refreshStockFeedsIfStale() {
+  if (Date.now() - _stockRefreshAt < STOCK_REFRESH_MIN_INTERVAL) return;
+  refreshStockFeeds();
+}
+
+// True for the sections whose numbers come from those feeds. Used to keep the
+// periodic re-read off the backs of users sitting on Production or Sales, where
+// none of it is on screen.
+function _onStockSection() {
+  return mainSection === 'procurement' || mainSection === 'quality';
 }
 
 function parseMaterials(text) {
@@ -2841,10 +2949,19 @@ function loadDashboard() {
     // highly variable latency — 1-20s for these sheets).
     fetchMaterialsIfNeeded();
     fetchLotIndexIfNeeded();
+    // These count as a re-read for staleness purposes, so the first visit to
+    // Materials doesn't immediately fire a second, forced round of the same fetches.
+    _stockRefreshAt = Date.now();
     // Warm the Procurement data (admin-only tab) during initial load so the slow
     // inventory fetch overlaps with login + the Production view, and Materials is
     // usually ready by the time the user navigates there.
     if (userRole === 'admin') { fetchOpenOrdersIfNeeded(false); fetchInventoryIfNeeded(); fetchDemandIfNeeded(); fetchLogisticsIfNeeded(false); fetchInboundIfNeeded(false); }
+    // A genuine cold start is covered by the calls above, which use the stable URL
+    // and land in ~0.25s off Google's CDN. But if _loadStockCaches painted from
+    // sessionStorage, those calls just returned early — so force one real origin
+    // read behind the instant paint. Reloading the page is the first thing anyone
+    // does when a number looks wrong; it has to actually check.
+    if (_stockHydratedFromCache) refreshStockFeeds();
     // Safety net: if daily view looks empty after load, re-fetch once after a short delay
     // Guards against Google Sheets CDN serving a stale response on first hit.
     // fresh=true bypasses the bucket so this retry can't reuse the same stale
@@ -2932,6 +3049,9 @@ function hardRefresh() {
   var btn = document.querySelector('#app-bar-right button');
   if (btn) { btn.style.opacity = '.5'; btn.querySelector('span').textContent = 'Refreshing…'; }
   _refreshInFlight = true; updateFreshnessStamp();
+  // The button says "Refresh", so it refreshes everything on screen — not just the
+  // production CSVs. These land independently and re-render themselves when they do.
+  refreshStockFeeds();
   fetchData(true).then(function(res){
     _refreshInFlight = false;
     if (applyFreshData(res)) { lastRefreshTime = Date.now(); updateFreshnessStamp(); render(); _maybeRetryFromOrphans(false); }
@@ -3061,6 +3181,10 @@ function startRefreshTimers() {
     // pick up new rows the operators just published.
     if(topView==='summary'&&subView==='performance'||topView==='detail') refreshAndRender(false, false, true);
     if(userRole==='admin') { fetchOpenOrdersIfNeeded(false); if(mainSection==='logistics') _logiFetchActive(); }
+    // Materials / inventory / demand / lot index, but only while the user is on a
+    // section that displays them — a cold inventory read is expensive and nobody on
+    // Production is looking at it.
+    if(_onStockSection()) refreshStockFeeds();
   }, 5*60*1000);
   todayTimer = setInterval(function(){
     checkDateRollover();
@@ -3075,7 +3199,12 @@ function startRefreshTimers() {
       }
       // Returning to the tab after being away — force a fresh origin read
       // so we don't show a stale bucketed response from before we left.
-      if(Date.now()-lastRefreshTime > 45000) refreshAndRender(true, false, true);
+      if(Date.now()-lastRefreshTime > 45000) {
+        refreshAndRender(true, false, true);
+        // Same deal for the stock feeds: coming back to the tab should not show
+        // numbers from whenever you last left it.
+        if(_onStockSection()) refreshStockFeeds();
+      }
     }
   });
 }
@@ -3512,6 +3641,10 @@ function setQualitySubTab(v) {
 
 // Quality view dispatcher — renders the active sub-tab's content into #content.
 function renderQuality() {
+  // Recall and Blend both trace against the pick sheet and the lot index, so they
+  // need the same staleness check as Materials — a recall trace run against a
+  // days-old pick sheet is worse than no trace at all.
+  refreshStockFeedsIfStale();
   if (qualitySubTab === 'blend') { renderBlend(); return; }
   if (qualitySubTab === 'recall') { renderRecall(); return; }
   renderRecall(); // default/fallback
@@ -11938,7 +12071,10 @@ function renderOrdersSummary() {
 }
 
 function renderProcurement() {
-  if (procView === 'materials') { fetchMaterialsIfNeeded(); fetchInventoryIfNeeded(); fetchDemandIfNeeded(); fetchLotIndexIfNeeded(); renderMaterials(); return; }
+  // The unforced calls cover a first visit (nothing loaded yet); refreshStockFeedsIfStale
+  // covers arriving with data that loaded a long time ago, which the loaded flags alone
+  // would happily keep showing forever.
+  if (procView === 'materials') { fetchMaterialsIfNeeded(); fetchInventoryIfNeeded(); fetchDemandIfNeeded(); fetchLotIndexIfNeeded(); refreshStockFeedsIfStale(); renderMaterials(); return; }
   var now = new Date();
   var curQk = getQuarterKey(now);
   var cutoff = new Date(TRACKING_START);
