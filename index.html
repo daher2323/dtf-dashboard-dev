@@ -2126,8 +2126,13 @@ function _fefoOpsBtn(active) {
     + ';font-weight:'+(active?'500':'400')+';font-size:11px;cursor:pointer;font-family:system-ui;white-space:nowrap;';
 }
 
-// The panel that replaces the materials table when the pick log is showing.
-function _fefoOpsPanelHTML() {
+// Period scoping, threshold filtering and grouping for the pick log. Shared by the panel
+// and the export so a workbook taken into a review meeting cannot disagree with the
+// screen it was exported from — the same reason _fefoIndex exists.
+//
+// Each group carries its own hay, the search haystack, so the export can apply the
+// toolbar search exactly as the DOM filter does.
+function _fefoOpsGroups() {
   var P = _fefoOpsPeriod();
   var all = computeFefoOps();
   var inPeriod = all.filter(function(d){ return d.when >= P.start && d.when <= P.end; });
@@ -2159,9 +2164,29 @@ function _fefoOpsPanelHTML() {
     if (A.rows.length !== B.rows.length) return B.rows.length - A.rows.length;
     return B.worst - A.worst;
   });
+  // Search haystack per group: material, part #, every T# on both sides of each decision,
+  // the production lot, and the brand/product behind it.
+  order.forEach(function(part){
+    var g = groups[part];
+    var hay = (g.material || '') + ' ' + part;
+    g.rows.forEach(function(d){
+      hay += ' ' + d.pickedLot + ' ' + d.shouldLot + ' ' + d.orderLot;
+      var nm = _fefoOpsLotName(d.orderLot);
+      if (nm) hay += ' ' + nm.brand + ' ' + nm.product;
+    });
+    g.hay = hay.toLowerCase();
+  });
 
   var oc = { expired:0, sitting:0, consumed:0 };
   flagged.forEach(function(d){ oc[d.outcome]++; });
+  return { P:P, inPeriod:inPeriod, flagged:flagged, groups:groups, order:order, evaluable:evaluable, oc:oc };
+}
+
+// The panel that replaces the materials table when the pick log is showing.
+function _fefoOpsPanelHTML() {
+  var G = _fefoOpsGroups();
+  var P = G.P, inPeriod = G.inPeriod, flagged = G.flagged;
+  var groups = G.groups, order = G.order, evaluable = G.evaluable, oc = G.oc;
 
   var h = '';
   // ── Header: what this is, period navigator, granularity ──
@@ -2230,20 +2255,9 @@ function _fefoOpsPanelHTML() {
       var worstMo = Math.round(g.worst / 30);
       // Wrapped and tagged so the toolbar search hides rows in the DOM rather than
       // re-rendering per keystroke — same reason the Open Orders customer list does it
-      // that way. Search is live for this view via _filterFefoOps.
-      //
-      // The haystack includes every T# on the group's decisions, both the lot pulled and
-      // the one that should have been, so searching a T# here surfaces the picks it was
-      // involved in — the tracing case, alongside the same T# search on the main table.
-      var hay = (g.material || '') + ' ' + part;
-      g.rows.forEach(function(d){
-        hay += ' ' + d.pickedLot + ' ' + d.shouldLot + ' ' + d.orderLot;
-        // Brand and product too, so searching a customer surfaces the picks made on
-        // their runs — and a production lot # finds the decision behind it.
-        var nm = _fefoOpsLotName(d.orderLot);
-        if (nm) hay += ' ' + nm.brand + ' ' + nm.product;
-      });
-      var wrapOpen = '<div class="fefo-ops-row" data-fefo-mat="' + esc(hay.toLowerCase()) + '">';
+      // that way. Search is live for this view via _filterFefoOps, and the haystack is
+      // built in _fefoOpsGroups so the export can apply the identical query.
+      var wrapOpen = '<div class="fefo-ops-row" data-fefo-mat="' + esc(g.hay) + '">';
       var head = '<div onclick="toggleFefoOpsMat(' + jsStr(part) + ')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:0.5px solid #2c2c2a;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
         + '<div style="flex:1;min-width:0;">'
           + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(g.material || part) + '</div>'
@@ -13139,7 +13153,19 @@ function toggleMatExportPopover(e) {
   var matCount  = filtered.length;
   var lotCount  = filtered.reduce(function(s,m){ return s + (m.lotCount||0); }, 0);
   var windowLabel  = matWindow === 0 ? 'All time' : 'Past ' + matWindow + ' months';
-  var sheetsLabel  = '2 sheets: Summary + Monthly Detail';
+  // Name the sheets that will actually be in the workbook. This said "2 sheets: Summary +
+  // Monthly Detail" long after Lots By Expiry and FEFO Review were added, so it was
+  // understating what leaves the building — and the two conditional sheets are exactly the
+  // ones worth knowing about before you send the file on.
+  var _sheets = ['Summary', 'Monthly Detail'];
+  if (filtered.some(function(m){ return m.expiry && m.expiry.lots && m.expiry.lots.length; })) _sheets.push('Lots By Expiry');
+  if (computeFefoMisses().review.length) _sheets.push('FEFO Review');
+  var _opsPeek = _fefoOpsGroups();
+  var _opsPeekQ = (matSearch || '').toLowerCase();
+  if (_opsPeek.order.some(function(p){ return !_opsPeekQ || _opsPeek.groups[p].hay.indexOf(_opsPeekQ) !== -1; })) {
+    _sheets.push('Pick Opportunities (' + _opsPeek.P.label + ')');
+  }
+  var sheetsLabel  = _sheets.length + ' sheets: ' + _sheets.join(' + ');
   var filterBits = [];
   if (materialsShortOnly) filterBits.push('Short only');
   if (materialsExpiringOnly) filterBits.push('Expiring only');
@@ -13320,6 +13346,62 @@ function exportMaterials() {
     ws4['!cols'] = [{wch:42},{wch:10},{wch:12},{wch:11},{wch:12},{wch:10},{wch:15},{wch:14},{wch:13},{wch:30},{wch:22},{wch:20}];
     ws4['!merges'] = [{s:{r:0,c:0},e:{r:0,c:s4Headers.length-1}},{s:{r:1,c:0},e:{r:1,c:s4Headers.length-1}},{s:{r:2,c:0},e:{r:2,c:s4Headers.length-1}}];
     XLSX.utils.book_append_sheet(wb, ws4, 'FEFO Review');
+  }
+
+  // Sheet 5: the pick decisions behind those lots, scoped to the period and thresholds
+  // selected in the Pick opportunities view — this is the sheet you take into a training
+  // review. Built from _fefoOpsGroups so it cannot disagree with the screen, including
+  // the toolbar search, and ordered the same way (materials by realised cost, then by
+  // count; decisions newest first within a material).
+  //
+  // One row per pick decision, not per stranded lot, and each row names the product being
+  // made, so a recent one can still be corrected on the floor.
+  var _ops = _fefoOpsGroups();
+  var _opsQ = (matSearch || '').toLowerCase();
+  var _opsOrder = _opsQ ? _ops.order.filter(function(p){ return _ops.groups[p].hay.indexOf(_opsQ) !== -1; }) : _ops.order;
+  var _opsN = 0;
+  _opsOrder.forEach(function(p){ _opsN += _ops.groups[p].rows.length; });
+  if (_opsN) {
+    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Pulled T#','Pulled Expires','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart','Qty Picked','Outcome'];
+    var s5Rows = [
+      ['FEFO pick opportunities — ' + _ops.P.label],
+      ['Exported: '+dateStr+' · '+_opsN+' flagged pick'+(_opsN===1?'':'s')+' across '+_opsOrder.length+' material'+(_opsOrder.length===1?'':'s')
+        + ' · flagged when the lot passed over had '+fefoOpsLife+' days or less of life left AND what was picked instead expired at least '+fefoOpsGap+' days later'
+        + (_opsQ ? ' · Search "'+matSearch+'"' : '')],
+      ['Of '+_ops.inPeriod.length+' picks in this period that had an earlier lot available, out of '+_ops.evaluable+' checkable picks.'
+        + ' A pick is only checkable when the lot pulled AND an earlier-expiring sibling of the same part are both still in the inventory feed — about half of picked T#s are, so these counts are a floor, not a total,'
+        + ' and they are NOT comparable between periods because older lots have been purged from the feed.'],
+      ['Outcome is today’s position of the lot that was passed over, not a projection: EXPIRED = it went off with stock still on it; ON SHELF = still in stock and in date; USED SINCE = consumed later anyway, no loss.'
+        + ' Legitimate reasons to pass over a lot exist (allergen segregation, a customer-specific lot, a hold) — review, do not assume.'],
+      [],
+      s5Headers
+    ];
+    var _opsOutcomeWord = { expired:'EXPIRED', sitting:'ON SHELF', consumed:'USED SINCE' };
+    _opsOrder.forEach(function(p){
+      var g = _ops.groups[p];
+      g.rows.slice().sort(function(a,b){ return b.when - a.when; }).forEach(function(d){
+        var nm = _fefoOpsLotName(d.orderLot);
+        s5Rows.push([
+          _matExpDateStr(d.when),
+          g.material || '', d.part, d.orderLot || '',
+          nm ? nm.brand : '', nm ? nm.product : '',
+          d.pickedLot, d.pickedExp == null ? '' : _matExpDateStr(d.pickedExp),
+          d.shouldLot, d.shouldExp == null ? '' : _matExpDateStr(d.shouldExp),
+          d.lifeLeft, Math.round(d.gapDays / 30),
+          d.qty ? Math.round(d.qty * 100) / 100 : '',
+          _opsOutcomeWord[d.outcome] || d.outcome
+        ]);
+      });
+    });
+    var ws5 = XLSX.utils.aoa_to_sheet(s5Rows);
+    ws5['!cols'] = [{wch:12},{wch:40},{wch:10},{wch:15},{wch:20},{wch:38},{wch:12},{wch:14},{wch:20},{wch:12},{wch:14},{wch:13},{wch:11},{wch:12}];
+    ws5['!merges'] = [
+      {s:{r:0,c:0},e:{r:0,c:s5Headers.length-1}},
+      {s:{r:1,c:0},e:{r:1,c:s5Headers.length-1}},
+      {s:{r:2,c:0},e:{r:2,c:s5Headers.length-1}},
+      {s:{r:3,c:0},e:{r:3,c:s5Headers.length-1}}
+    ];
+    XLSX.utils.book_append_sheet(wb, ws5, 'Pick Opportunities');
   }
 
   var fileName = 'DTF_Materials_'+now.toISOString().split('T')[0]+'.xlsx';
