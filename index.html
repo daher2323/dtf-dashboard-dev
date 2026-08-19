@@ -2080,8 +2080,8 @@ var fefoOpsAllOpen = false;   // default stance for groups with no override
 
 // Bounds for the selected period. Self-contained rather than reusing the Logistics
 // navigator, whose bounds carry outbound/inbound baggage this has no use for.
-function _fefoOpsPeriod() {
-  var a = fefoOpsAnchor ? new Date(fefoOpsAnchor) : new Date();
+function _fefoOpsPeriod(anchorOverride) {
+  var a = anchorOverride ? new Date(anchorOverride) : (fefoOpsAnchor ? new Date(fefoOpsAnchor) : new Date());
   var s, e, label;
   if (fefoOpsGran === 'week') {
     var dow = a.getDay(), back = dow === 0 ? 6 : dow - 1;   // Monday-anchored, as elsewhere
@@ -2119,12 +2119,29 @@ function _fefoOpsRerender() {
 }
 function setFefoOpsView(v) { fefoOpsView = !!v; renderMaterials(); }
 function setFefoOpsGran(g) { fefoOpsGran = g; fefoOpsAnchor = null; renderMaterials(); }
-function navFefoOps(delta) {
+// Anchor one period away from the current one, in the current granularity.
+function _fefoOpsStep(delta) {
   var a = new Date(_fefoOpsPeriod().start);
   if (fefoOpsGran === 'week') a.setDate(a.getDate() + delta*7);
   else if (fefoOpsGran === 'quarter') a.setMonth(a.getMonth() + delta*3);
   else a.setMonth(a.getMonth() + delta);
-  fefoOpsAnchor = a;
+  return a;
+}
+// Can we step back one period? Two stops, whichever comes first: the coverage floor, and
+// the start of recorded history. The second is needed because an empty period passes the
+// coverage test trivially — otherwise, having landed on an old period by switching
+// granularity, the arrow would march back through empty quarters for ever.
+function _fefoOpsCanStepBack() {
+  var P = _fefoOpsPeriod(_fefoOpsStep(-1));
+  var first = _fefoIndex().firstSlot;
+  if (first != null && P.end < first) return { ok:false, P:P, cov:null };
+  var c = _fefoOpsCoverage(P.start, P.end);
+  return { ok: c.enough, P:P, cov:c };
+}
+function navFefoOps(delta) {
+  // Guarded here as well as on the disabled button, since a stale click can still fire.
+  if (delta < 0 && !_fefoOpsCanStepBack().ok) return;
+  fefoOpsAnchor = _fefoOpsStep(delta);
   _fefoOpsRerender();
 }
 function goFefoOpsLive() { fefoOpsAnchor = null; _fefoOpsRerender(); }
@@ -2188,6 +2205,16 @@ function _fefoOpsBtn(active) {
 // toolbar search exactly as the DOM filter does.
 function _fefoOpsGroups() {
   var P = _fefoOpsPeriod();
+  var cov = _fefoOpsCoverage(P.start, P.end);
+  // Below the coverage floor the counts are not a floor, they are noise: too few of the
+  // period's picks are checkable for an absence of flags to mean anything. Return empty
+  // rather than a plausible-looking short list — the panel explains, and the export gets
+  // nothing to hand round. Gated here so both consumers behave identically.
+  if (!cov.enough) {
+    return { P:P, cov:cov, belowFloor:true, inPeriod:[], flagged:[], groups:{}, order:[],
+             evaluable:0, oc:{expired:0,sitting:0,consumed:0}, splitPulls:0,
+             fixedTotal:0, openTotal:0, topUpTotal:0 };
+  }
   var all = computeFefoOps();
   var inPeriod = all.filter(function(d){ return d.when >= P.start && d.when <= P.end; });
   // Split pulls come out before the thresholds are applied. They are not skips — the
@@ -2264,9 +2291,9 @@ function _fefoOpsGroups() {
     if (d.fixedAt) fixedTotal++;
     if (d.couldCover === false) topUpTotal++;
   });
-  return { P:P, inPeriod:inPeriod, flagged:flagged, groups:groups, order:order, evaluable:evaluable,
-           oc:oc, splitPulls:splitPulls.length, fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal,
-           topUpTotal:topUpTotal };
+  return { P:P, cov:cov, belowFloor:false, inPeriod:inPeriod, flagged:flagged, groups:groups,
+           order:order, evaluable:evaluable, oc:oc, splitPulls:splitPulls.length,
+           fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal, topUpTotal:topUpTotal };
 }
 
 // The panel that replaces the materials table when the pick log is showing.
@@ -2282,7 +2309,22 @@ function _fefoOpsPanelHTML() {
       + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
         + '<span style="font-size:11px;font-weight:500;color:#FFD700;text-transform:uppercase;letter-spacing:.04em;">Pick opportunities</span>'
         + '<span style="width:1px;height:16px;background:#2c2c2a;"></span>'
-        + '<button onclick="navFefoOps(-1)" style="width:24px;height:26px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:14px;display:inline-flex;align-items:center;justify-content:center;font-family:system-ui;">&#8249;</button>'
+        + (function(){
+            // Back stops where the pick sheet stops being legible. The limit moves forward
+            // on its own as lots age out, so there is no date to keep updating.
+            var back = _fefoOpsCanStepBack();
+            var off = !back.ok;
+            var why = !back.cov
+              ? esc(back.P.label) + ' is before the pick sheet begins.'
+              : esc(back.P.label) + ' can only be checked on ' + Math.round(back.cov.pct*100)
+                + '% of its picks — the lots the rest name have been consumed and are gone from the inventory feed. Below '
+                + Math.round(FEFO_OPS_MIN_COVERAGE*100) + '% the numbers say more about what is still visible than about how anyone picked, so the view stops here.';
+            return '<button onclick="navFefoOps(-1)" ' + (off ? 'disabled' : '')
+              + (off ? ' title="' + why + '"' : '')
+              + ' style="width:24px;height:26px;border-radius:6px;border:0.5px solid ' + (off ? '#2c2c2a' : '#444441')
+              + ';background:transparent;cursor:' + (off ? 'not-allowed' : 'pointer') + ';color:' + (off ? '#444441' : '#888780')
+              + ';font-size:14px;display:inline-flex;align-items:center;justify-content:center;font-family:system-ui;">&#8249;</button>';
+          })()
         + '<span style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;min-width:150px;text-align:center;">' + esc(P.label) + '</span>'
         + '<button onclick="navFefoOps(1)" ' + (P.isCurrent ? 'disabled' : '') + ' style="width:24px;height:26px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:' + (P.isCurrent?'default':'pointer') + ';color:' + (P.isCurrent?'#444441':'#888780') + ';font-size:14px;display:inline-flex;align-items:center;justify-content:center;font-family:system-ui;">&#8250;</button>'
         + (P.isCurrent ? '' : '<button onclick="goFefoOpsLive()" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;">Jump to current</button>')
@@ -2308,6 +2350,24 @@ function _fefoOpsPanelHTML() {
         + '<span>later.</span>'
       + '</div>'
     + '</div>';
+
+  // ── Below the coverage floor: say so instead of showing a short list ──
+  // Reachable by switching granularity while anchored on an old period (the back arrow is
+  // already blocked). Showing "3 flagged" for a quarter we can only see a fifth of would
+  // read as good news, which is the one thing this must never do.
+  if (G.belowFloor) {
+    h += '<div style="padding:26px 18px;text-align:center;">'
+      + '<div style="font-size:12px;font-weight:500;color:#FAC775;margin-bottom:6px;font-family:system-ui;">Not enough of ' + esc(P.label) + ' is still checkable</div>'
+      + '<div style="font-size:11px;color:#888780;line-height:1.6;max-width:620px;margin:0 auto;font-family:system-ui;">'
+      + 'Only <span style="color:#e8e6e0;">' + Math.round(G.cov.pct*100) + '%</span> of the '
+      + G.cov.entries.toLocaleString() + ' picks logged in this period name a lot that is still in the inventory feed — the rest were consumed and are gone. '
+      + 'A pick can only be checked when the lot pulled <em>and</em> an earlier-expiring sibling are both present, so what survives here would understate the period badly enough to look like good news. '
+      + 'Pick volume has been steady throughout; it is visibility that decays, which is also why this view draws no trend.'
+      + '</div>'
+      + '<div style="font-size:11px;color:#5f5e5a;margin-top:10px;font-family:system-ui;">Showing periods with at least ' + Math.round(FEFO_OPS_MIN_COVERAGE*100) + '% still checkable.</div>'
+      + '</div></div>';
+    return h;
+  }
 
   // ── Summary strip ──
   h += '<div style="padding:10px 14px;background:#141618;border-bottom:0.5px solid #2c2c2a;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:11px;color:#888780;font-family:system-ui;">'
@@ -2344,10 +2404,11 @@ function _fefoOpsPanelHTML() {
     h += '<span style="color:#3a3a38;">&middot;</span>'
       + '<span title="Picks where the earlier-expiring lot was drawn on the SAME slip as the later one — the pull was spread over two lots, usually because the older one could not cover the quantity. Not a skip, so these are excluded from the flagged count." style="border-bottom:1px dotted #5f5e5a;cursor:help;">' + G.splitPulls + ' split pull' + (G.splitPulls===1?'':'s') + ' excluded</span>';
   }
-  // The coverage floor. Load-bearing: roughly half of picked T#s are gone from the
-  // inventory feed, and a flag needs both the picked lot and its sibling present.
+  // The actual coverage for THIS period, rather than a vague "counts are a floor". A number
+  // you can see is worth more than a caveat you learn to skip, and it moves week to week.
   h += '<span style="color:#3a3a38;">&middot;</span>'
-    + '<span title="A pick can only be checked when the lot picked AND an earlier-expiring sibling are both still in the inventory feed. Only about half of picked T#s are, so this is a floor, not a total — and counts are not comparable between periods, because older lots have been purged." style="border-bottom:1px dotted #5f5e5a;cursor:help;">counts are a floor</span>';
+    + '<span title="A pick can only be checked while the lot it names is still in the inventory feed; lots drop out as they are consumed. ' + G.cov.inFeed + ' of this period’s ' + G.cov.entries + ' logged picks are still checkable. A flag needs BOTH the lot picked and an earlier-expiring sibling present, so the true count is higher than what is shown — and counts are not comparable between periods." style="border-bottom:1px dotted #5f5e5a;cursor:help;">'
+    + Math.round(G.cov.pct*100) + '% of this period’s picks still checkable</span>';
   // Expand/collapse all, pushed to the right end of the strip it controls. "All open" is
   // judged over the groups actually in this period, so it flips to Collapse only once
   // everything on screen is showing.
@@ -2552,10 +2613,48 @@ function _fefoIndex() {
   for (k in byLotPart) { if (!byLotPart.hasOwnProperty(k)) continue;
     byLotPart[k].sort(function(a, b){ return a.t - b.t; });
   }
+  // Every T# entry ever logged, with whether its lot is still in the inventory feed.
+  // picksByLot only holds the resolvable ones, so it cannot answer "what fraction of this
+  // period can we even see?" — which is the question that decides whether a period's
+  // numbers mean anything. Sorted so a date range is a contiguous slice.
+  var slots = [];
+  for (i = 0; i < rows.length; i++) {
+    var sd = _fefoPickDate(rows[i].date);
+    if (!sd) continue;
+    var st = sd.getTime(), ss = rows[i].slots || [];
+    for (j = 0; j < ss.length; j++) {
+      var sn2 = normT(ss[j].t);
+      if (!sn2) continue;
+      slots.push({ t: st, ok: !!idx[sn2] });
+    }
+  }
+  slots.sort(function(a, b){ return a.t - b.t; });
+  var firstSlot = slots.length ? slots[0].t : null;   // start of recorded history
   _fefoIdxKey = key;
   _fefoIdxCache = { idx: idx, byPart: byPart, picksByLot: picksByLot, byLotPart: byLotPart,
-                    balanceAt: balanceAt, key: key };
+                    slots: slots, firstSlot: firstSlot, balanceAt: balanceAt, key: key };
   return _fefoIdxCache;
+}
+
+// What share of a period's logged picks can still be checked at all. A pick is only
+// checkable while the lot it names remains in the inventory feed, and lots drop out as they
+// are consumed — so this decays with age, steeply. Measured on the live feed: 99% for the
+// current month, 90% one month back, 75% at three, 44% at six, 19% at ten. Pick VOLUME over
+// those months is flat (2,100-3,200 entries), so the decay is attrition, not activity.
+//
+// This is why the view refuses to draw a trend, and now why it refuses to draw old periods
+// at all: detection needs BOTH the picked lot and an earlier-expiring sibling present, so
+// the miss count falls roughly with the square of coverage. Q4 2025 shows 3 flagged picks
+// against Q3 2026's 99 — not better picking, 22% visibility.
+var FEFO_OPS_MIN_COVERAGE = 0.70;
+function _fefoOpsCoverage(start, end) {
+  var s = _fefoIndex().slots, n = 0, ok = 0;
+  for (var i = 0; i < s.length; i++) {
+    if (s[i].t < start) continue;
+    if (s[i].t > end) break;                 // sorted, so nothing further can match
+    n++; if (s[i].ok) ok++;
+  }
+  return { entries: n, inFeed: ok, pct: n ? ok / n : 1, enough: !n || (ok / n) >= FEFO_OPS_MIN_COVERAGE };
 }
 
 function computeFefoMisses() {
@@ -13578,6 +13677,7 @@ function exportMaterials() {
       ['FEFO pick opportunities — ' + _ops.P.label],
       ['Exported: '+dateStr+' · '+_opsN+' flagged pick'+(_opsN===1?'':'s')+' across '+_opsOrder.length+' material'+(_opsOrder.length===1?'':'s')
         + ' · '+_ops.fixedTotal+' corrected, '+_ops.openTotal+' still open'
+        + ' · '+Math.round(_ops.cov.pct*100)+'% of this period’s '+_ops.cov.entries+' logged picks still checkable'
         + ' · flagged when the lot passed over had '+fefoOpsLife+' days or less of life left AND what was picked instead expired at least '+fefoOpsGap+' days later'
         + (_ops.splitPulls ? ' · '+_ops.splitPulls+' split pull'+(_ops.splitPulls===1?'':'s')+' excluded (earlier lot drawn on the same slip — FEFO, not a skip)' : '')
         + (_opsQ ? ' · Search "'+matSearch+'"' : '')],
