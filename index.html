@@ -2090,6 +2090,26 @@ function toggleFefoOpsMat(part) {
   renderMaterials();
   requestAnimationFrame(function(){ window.scrollTo(0, y); });
 }
+// Brand + product behind a production lot #, so a flagged pick names the thing that was
+// actually being made. Same fallback chain the Recall and Blend views use: the production
+// feed first, since it carries the "Customer - Product" string on the lot itself, then the
+// Lot # reference sheet. About 97% of the pick log's lots resolve; the remainder are
+// 6-digit stick-pack runs and R&D lots that never reach the reference sheet, and those
+// keep just their number rather than being given an invented name.
+function _fefoOpsLotName(lot) {
+  if (!lot) return null;
+  var fromProd = lotMap[lot] && lotMap[lot].product;
+  if (fromProd) {
+    // House convention throughout: the Product field is "<Customer> - <Product Name>".
+    var cut = fromProd.indexOf('-');
+    return cut > 0
+      ? { brand: fromProd.slice(0, cut).trim(), product: fromProd.slice(cut + 1).trim() }
+      : { brand: '', product: fromProd.trim() };
+  }
+  var e = lotIndex[lot];
+  if (e && (e.brand || e.product || e.combined)) return { brand: e.brand || '', product: e.product || e.combined || '' };
+  return null;
+}
 function _fefoOpsShortDate(ms) {
   if (ms == null) return '—';
   var d = new Date(ms);
@@ -2216,7 +2236,13 @@ function _fefoOpsPanelHTML() {
       // the one that should have been, so searching a T# here surfaces the picks it was
       // involved in — the tracing case, alongside the same T# search on the main table.
       var hay = (g.material || '') + ' ' + part;
-      g.rows.forEach(function(d){ hay += ' ' + d.pickedLot + ' ' + d.shouldLot; });
+      g.rows.forEach(function(d){
+        hay += ' ' + d.pickedLot + ' ' + d.shouldLot + ' ' + d.orderLot;
+        // Brand and product too, so searching a customer surfaces the picks made on
+        // their runs — and a production lot # finds the decision behind it.
+        var nm = _fefoOpsLotName(d.orderLot);
+        if (nm) hay += ' ' + nm.brand + ' ' + nm.product;
+      });
       var wrapOpen = '<div class="fefo-ops-row" data-fefo-mat="' + esc(hay.toLowerCase()) + '">';
       var head = '<div onclick="toggleFefoOpsMat(' + jsStr(part) + ')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:0.5px solid #2c2c2a;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
         + '<div style="flex:1;min-width:0;">'
@@ -2244,9 +2270,20 @@ function _fefoOpsPanelHTML() {
         + '</tr></thead><tbody>'
         + g.rows.slice().sort(function(a,b){ return b.when - a.when; }).map(function(d){
             var C = _FEFO_OUTCOME[d.outcome];
+            var nm = _fefoOpsLotName(d.orderLot);
             return '<tr style="border-top:0.5px solid #2c2c2a;">'
-              + '<td style="' + td + 'color:#cfcdc7;">' + _fefoOpsShortDate(d.when) + '</td>'
-              + '<td style="' + td + 'color:#888780;">' + (d.orderLot ? esc(d.orderLot) : '—') + '</td>'
+              + '<td style="' + td + 'color:#cfcdc7;vertical-align:top;">' + _fefoOpsShortDate(d.when) + '</td>'
+              + '<td style="' + td + 'color:#888780;vertical-align:top;">' + (d.orderLot ? esc(d.orderLot) : '—')
+                // Brand and product on a second line: this is the whole point of the
+                // "this week" read — knowing which product it was is what lets someone
+                // go and correct the pick before the run closes out.
+                + (nm ? '<div style="font-size:10px;margin-top:1px;max-width:250px;overflow:hidden;text-overflow:ellipsis;">'
+                        + (nm.brand ? '<span style="color:#85B7EB;">' + esc(nm.brand) + '</span>' : '')
+                        + (nm.brand && nm.product ? '<span style="color:#3a3a38;"> &middot; </span>' : '')
+                        + (nm.product ? '<span style="color:#888780;">' + esc(nm.product) + '</span>' : '')
+                        + '</div>'
+                      : '')
+              + '</td>'
               + '<td style="' + td + '">' + _blendCopyCell(d.pickedLot) + ' <span style="color:#5f5e5a;font-size:10px;">exp ' + _fefoOpsShortDate(d.pickedExp) + '</span></td>'
               + '<td style="' + td + '">' + _blendCopyCell(d.shouldLot) + ' <span style="color:#FAC775;font-size:10px;">exp ' + _fefoOpsShortDate(d.shouldExp) + ' &middot; ' + d.lifeLeft + 'd left</span></td>'
               + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">' + Math.round(d.gapDays/30) + ' mo</td>'
