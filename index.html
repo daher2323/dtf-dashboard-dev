@@ -10490,6 +10490,10 @@ function renderMaterials() {
     var completedKeys = monthKeys.slice(0, monthKeys.length - 1);
     var spark6Keys = completedKeys.slice(-6);
     m.spark = spark6Keys.map(function(k){ return Math.round(m.byMonth[k]||0); });
+    // Same slice over the parallel label list ("Aug 26"), so the sparkline can name its
+    // own bars on hover. Zero-baselined bars can't show small variation on a large flat
+    // series, so the exact monthly figures need to be reachable.
+    m.sparkLabels = monthLabels.slice(0, monthLabels.length - 1).slice(-6);
     // Last COMPLETED month
     var lastMoKey = completedKeys.length ? completedKeys[completedKeys.length-1] : monthKeys[monthKeys.length-1];
     m.lastMonth = Math.round(m.byMonth[lastMoKey]||0);
@@ -10600,25 +10604,55 @@ function renderMaterials() {
   window._matMonthLabels=monthLabels;
   if (!window._selectedMaterial || !matList.some(function(m){ return m.name === window._selectedMaterial; })) window._selectedMaterial=null;
 
-  function sparkSVG(data, trend) {
-    var w=100,h=28,pad=3;
+  // Zero-baselined bars, one per completed month — the same visual language as the
+  // Jars/Bottles/Lids views, which is the lesser reason to use it. The polyline this
+  // replaces floored its y-axis at the smallest POSITIVE month rather than at zero,
+  // and that distorted two ways:
+  //
+  //   • A material holding steady around 17,500 kg/mo — a 1.5% spread — drew a
+  //     full-amplitude zigzag identical to one that grew 6x over the same window.
+  //     Hence rows badged "~flat" sitting next to dramatic peaks, the chart arguing
+  //     with the badge beside it.
+  //   • A zero month was not flattened, it was off the canvas: at min-baseline
+  //     [0,1200,0,900,1500,0] puts the zeros at y=58 in a 28px viewBox, so the
+  //     segments reaching them were clipped and a sparse material drew a broken line
+  //     with invisible gaps. There are 328 zero-usage materials and many more
+  //     partially sparse ones.
+  //
+  // Height now means quantity, and a zero month gets a dim stub so "nothing was
+  // consumed" is something you can see rather than an absence.
+  //
+  // Drawn as <rect>s inside the existing single SVG rather than the flex divs the
+  // Jars view uses: that view renders ~30 rows, this one renders every material (860,
+  // or 1,188 with zero-usage shown), so six divs per row would spend ~7,000 extra DOM
+  // nodes on an identical picture.
+  function sparkSVG(data, trend, labels, unitFull) {
+    var w=100, h=28, padX=2, padTop=3, gap=3;
+    var n=data.length||1;
+    var barW=(w - padX*2 - gap*(n-1))/n;
     var max=Math.max.apply(null,data)||1;
-    // Guard: Math.min over an empty list (all-zero series) is Infinity, which
-    // poisons range and yields NaN coordinates. Fall back to 0 when no positives.
-    var positives=data.filter(function(v){return v>0;});
-    var min=positives.length?Math.min.apply(null,positives):0;
-    var range=max-min||1;
-    var pts=data.map(function(v,i){
-      var x=pad+(i/(Math.max(data.length-1,1)))*(w-pad*2);
-      var y=h-pad-(v-min)/range*(h-pad*2);
-      return x.toFixed(1)+','+y.toFixed(1);
-    });
+    var usable=h-padTop;              // 3px headroom so the tallest bar isn't flush
     var col=trend==='up'?'#1D9E75':trend==='down'?'#E24B4A':trend==='volatile'?'#EF9F27':'#888780';
-    var ld=pts[pts.length-1].split(',');
+    var bars=data.map(function(v,i){
+      var isZero=!(v>0);
+      var bh=isZero?2:Math.max(2,(v/max)*usable);
+      // Most recent month at full strength, earlier ones stepped back — carries the
+      // cue the old trailing dot gave without spending a separate mark on it.
+      var op=isZero?'.28':(i===n-1?'1':'.72');
+      return '<rect x="'+(padX+i*(barW+gap)).toFixed(1)+'" y="'+(h-bh).toFixed(1)+'"'
+        +' width="'+barW.toFixed(1)+'" height="'+bh.toFixed(1)+'"'
+        +' fill="'+(isZero?'#5f5e5a':col)+'" opacity="'+op+'" rx="1"/>';
+    }).join('');
+    // The one thing an honest axis costs: small variation on a large flat series is no
+    // longer visible. So the figures are one hover away, month by month.
+    var tip='';
+    if (labels && labels.length===data.length) {
+      tip='<title>'+esc(labels.map(function(l,i){
+        return l+': '+(data[i]>0 ? data[i].toLocaleString()+' '+unitFull : 'no usage');
+      }).join('\n'))+'</title>';
+    }
     return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'" style="display:block;">'
-      +'<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+col+'" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
-      +'<circle cx="'+ld[0]+'" cy="'+ld[1]+'" r="2.5" fill="'+col+'"/>'
-      +'</svg>';
+      +tip+bars+'</svg>';
   }
 
   function vsBadge(pct) {
@@ -10719,7 +10753,7 @@ function renderMaterials() {
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+fmt(m.lastMonth)+'</td>'
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.avg3)+'</td>'
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.avg6)+'</td>'
-      +'<td style="padding:8px 10px;text-align:center;width:110px;">'+(m.spark&&m.spark.length?sparkSVG(m.spark,m.trend):'<span style="color:#5f5e5a;font-size:12px;">—</span>')+'</td>'
+      +'<td style="padding:8px 10px;text-align:center;width:110px;">'+(m.spark&&m.spark.length?sparkSVG(m.spark,m.trend,m.sparkLabels,unit):'<span style="color:#5f5e5a;font-size:12px;">—</span>')+'</td>'
       +'<td style="text-align:right;padding:8px 10px;">'+vsBadge(m.vsPct)+'</td>'
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.totalKg)+'</td>'
       +'</tr>'
