@@ -1967,7 +1967,8 @@ function _fefoPickDate(v) {
 // period at a time and draws no trend.
 var FEFO_OPS_LIFE_DAYS = 90;     // default: skipped lot was this close to expiry at pick time
 var FEFO_OPS_GAP_DAYS = 180;     // default: and what got picked expired at least this much later
-var FEFO_OPS_OUTCOME_MIN_KG = 25;   // a remnant left behind is not a stranded lot
+// (There is deliberately no quantity floor on the outcome. Whether the skipped lot still
+// holds stock is a fact to report, not a judgement to threshold — see computeFefoOps.)
 var _fefoOpsCache = null, _fefoOpsKey = '';
 function computeFefoOps() {
   var ix = _fefoIndex();
@@ -2008,7 +2009,13 @@ function computeFefoOps() {
       }
       if (best === null) continue;
       var lq = liveQty[best], lx = liveExp[best];
-      var stranded = lq != null && lq >= FEFO_OPS_OUTCOME_MIN_KG;
+      // Presence in lotRows is the fact; a quantity threshold is not. This used to read
+      // `lq >= FEFO_OPS_OUTCOME_MIN_KG` (25 kg), which routed every small remnant into
+      // "used since" — false on 183 of the 190 rows it appeared on, and 121 of those lots
+      // had ALREADY EXPIRED. Vitamin B1 T30944 sat on the shelf with 8.8 kg expiring in a
+      // fortnight while the view called it consumed. lotRows only holds lots with qty > 0,
+      // so membership here means "still has stock on it" and nothing has to be inferred.
+      var onShelf = lq != null;
       // Split pull, not a skip: the earlier-expiring lot was drawn on the same slip, so
       // FEFO was followed and the pull was simply spread across two lots (usually because
       // the older one could not cover the whole quantity). 500 of ~6,600 decisions.
@@ -2039,10 +2046,15 @@ function computeFefoOps() {
         hadKg: balanceAt(best, when),
         // Ground truth, not a projection: 'expired' = it went off with stock left,
         // 'sitting' = still on the shelf, 'consumed' = used anyway, no harm done.
-        outcome: !stranded ? 'consumed' : (lx != null && lx < today ? 'expired' : 'sitting'),
-        strandedKg: stranded ? lq : 0,
+        outcome: !onShelf ? 'consumed' : (lx != null && lx < today ? 'expired' : 'sitting'),
+        leftKg: onShelf ? lq : 0,
         bothPulled: bothPulled,
-        fixedAt: fixedAt
+        fixedAt: fixedAt,
+        // Could the lot that should have been pulled actually have covered this pull? 47%
+        // of flagged decisions it could not, and the FEFO-correct action there was a
+        // partial pull — take the old lot's remainder, top up from the newer one — not the
+        // straight swap the row otherwise implies. null when no quantity was recorded.
+        couldCover: (mine[i].qty > 0) ? (balanceAt(best, when) >= mine[i].qty) : null
       });
     }
   }
@@ -2154,10 +2166,13 @@ function _fefoOpsShortDate(ms) {
   var d = new Date(ms);
   return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
 }
+// "used since" used to sit on any lot under 25 kg, including ones that had already expired.
+// The wording now follows the lot's actual state, and the badge carries the quantity so it
+// cannot overstate or understate: "used up" is reserved for a lot with nothing left on it.
 var _FEFO_OUTCOME = {
-  expired:  { bg:'#791F1F', fg:'#F09595', label:'expired',   tip:'The lot that was skipped went on to pass its expiry date with stock still on it. This one cost something.' },
-  sitting:  { bg:'#4a3410', fg:'#FAC775', label:'on shelf',  tip:'The lot that was skipped is still in stock and still in date — no loss yet, but it is older than what got used.' },
-  consumed: { bg:'#2c2c2a', fg:'#888780', label:'used since',tip:'The lot that was skipped was consumed later anyway. Worth seeing the pattern, but nothing was lost.' }
+  expired:  { bg:'#791F1F', fg:'#F09595', label:'expired',  tip:'The lot that was skipped is still on the shelf and is now past its expiry date. This one cost something.' },
+  sitting:  { bg:'#4a3410', fg:'#FAC775', label:'on shelf', tip:'The lot that was skipped is still in stock and still in date — no loss yet, but it is older than what got used, so it should go first.' },
+  consumed: { bg:'#2c2c2a', fg:'#888780', label:'used up',  tip:'The lot that was skipped has no stock left — it was consumed later anyway, so nothing was lost.' }
 };
 function _fefoOpsBtn(active) {
   return 'padding:3px 10px;border-radius:6px;border:1.5px solid '+(active?'#B8860B':'transparent')
@@ -2243,10 +2258,15 @@ function _fefoOpsGroups() {
   });
 
   var oc = { expired:0, sitting:0, consumed:0 };
-  var fixedTotal = 0;
-  flagged.forEach(function(d){ oc[d.outcome]++; if (d.fixedAt) fixedTotal++; });
+  var fixedTotal = 0, topUpTotal = 0;
+  flagged.forEach(function(d){
+    oc[d.outcome]++;
+    if (d.fixedAt) fixedTotal++;
+    if (d.couldCover === false) topUpTotal++;
+  });
   return { P:P, inPeriod:inPeriod, flagged:flagged, groups:groups, order:order, evaluable:evaluable,
-           oc:oc, splitPulls:splitPulls.length, fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal };
+           oc:oc, splitPulls:splitPulls.length, fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal,
+           topUpTotal:topUpTotal };
 }
 
 // The panel that replaces the materials table when the pick log is showing.
@@ -2311,6 +2331,12 @@ function _fefoOpsPanelHTML() {
           var C = _FEFO_OUTCOME[o];
           return '<span title="'+esc(C.tip)+'" style="color:'+C.fg+';cursor:help;">'+oc[o]+' '+C.label+'</span>';
         }).join('<span style="color:#3a3a38;"> &middot; </span>');
+  }
+  // Top-ups: the older lot could not have covered the pull, so the corrective action is a
+  // partial pull rather than a swap. Stated up front because it changes what to go and do.
+  if (G.topUpTotal) {
+    h += '<span style="color:#3a3a38;">&middot;</span>'
+      + '<span title="On these picks the earlier-expiring lot held less than the quantity needed, so a straight swap was never possible. First-expiry-first-out means taking that lot down to zero and topping up from the newer one." style="color:#FAC775;cursor:help;">' + G.topUpTotal + ' need a top-up, not a swap</span>';
   }
   // Split pulls, stated rather than silently dropped: they were excluded before the
   // thresholds because drawing the older lot on the same slip is FEFO, not a skip.
@@ -2393,6 +2419,7 @@ function _fefoOpsPanelHTML() {
         + g.rows.map(function(d){
             var C = _FEFO_OUTCOME[d.outcome];
             var nm = _fefoOpsLotName(d.orderLot);
+            var _uS = matUnitShort(d.material || g.material || '');
             return '<tr style="border-top:0.5px solid #2c2c2a;' + (d.fixedAt ? 'opacity:.62;' : '') + '">'
               + '<td style="' + td + 'color:#cfcdc7;vertical-align:top;">' + _fefoOpsShortDate(d.when) + '</td>'
               + '<td style="' + td + 'color:#888780;vertical-align:top;">' + (d.orderLot ? esc(d.orderLot) : '—')
@@ -2409,14 +2436,25 @@ function _fefoOpsPanelHTML() {
               + '<td style="' + td + '">' + _blendCopyCell(d.pickedLot) + ' <span style="color:#5f5e5a;font-size:10px;">exp ' + _fefoOpsShortDate(d.pickedExp) + '</span></td>'
               + '<td style="' + td + '">' + _blendCopyCell(d.shouldLot) + ' <span style="color:#FAC775;font-size:10px;">exp ' + _fefoOpsShortDate(d.shouldExp) + ' &middot; ' + d.lifeLeft + 'd left</span></td>'
               + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">' + Math.round(d.gapDays/30) + ' mo</td>'
-              + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + (d.qty ? fmtStockQty(d.qty) : '—') + '</td>'
+              // Needed, and — when the older lot could not have covered it — what it
+              // actually held. Juxtaposed so it is obvious at a glance that the fix here is
+              // a partial pull, not a swap that was never available.
+              + '<td style="' + td + 'text-align:right;color:#85B7EB;vertical-align:top;">' + (d.qty ? fmtStockQty(d.qty) : '—')
+                + (d.couldCover === false
+                    ? '<div title="' + esc(d.shouldLot) + ' held only ' + fmtStockQty(d.hadKg) + ' ' + _uS + ' against the ' + fmtStockQty(d.qty) + ' ' + _uS + ' this pull needed, so a straight swap was never possible. First-expiry-first-out here means taking that remainder and topping up from ' + esc(d.pickedLot) + '." style="font-size:10px;color:#FAC775;margin-top:1px;cursor:help;">had ' + fmtStockQty(d.hadKg) + '</div>'
+                    : '')
+              + '</td>'
               // The indicator: a later entry on this production lot named the right T#.
               + '<td style="' + td + 'text-align:center;">'
                 + (d.fixedAt
                     ? '<span title="Corrected ' + _fefoOpsShortDate(d.fixedAt) + ' — a later pick entry for this production lot and part named ' + esc(d.shouldLot) + '." style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:#085041;color:#9FE1CB;cursor:help;">&#10003; ' + _fefoOpsShortDate(d.fixedAt) + '</span>'
                     : '<span title="No later pick entry for this production lot and part names ' + esc(d.shouldLot) + '. Re-log the pick once the drum is swapped and this turns green." style="color:#5f5e5a;cursor:help;">&mdash;</span>')
               + '</td>'
-              + '<td style="' + td + 'text-align:right;padding-right:14px;"><span title="' + esc(C.tip) + '" style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:' + C.bg + ';color:' + C.fg + ';cursor:help;">' + C.label + '</span></td>'
+              // Badge carries the quantity still on the skipped lot, so the word can never
+              // overstate or understate what is actually sitting there.
+              + '<td style="' + td + 'text-align:right;padding-right:14px;"><span title="' + esc(C.tip) + '" style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:' + C.bg + ';color:' + C.fg + ';cursor:help;">' + C.label
+                + (d.outcome === 'consumed' ? '' : ' &middot; ' + fmtStockQty(d.leftKg) + ' ' + _uS)
+                + '</span></td>'
               + '</tr>';
           }).join('')
         + '</tbody></table></div>';
@@ -13496,7 +13534,7 @@ function exportMaterials() {
   var _opsN = 0;
   _opsOrder.forEach(function(p){ _opsN += _ops.groups[p].rows.length; });
   if (_opsN) {
-    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Pulled T#','Pulled Expires','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart','Qty Picked','Corrected','Outcome'];
+    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Pulled T#','Pulled Expires','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart','Qty Picked','It Held Then','Fix','Corrected','Outcome','Its Stock Now'];
     var s5Rows = [
       ['FEFO pick opportunities — ' + _ops.P.label],
       ['Exported: '+dateStr+' · '+_opsN+' flagged pick'+(_opsN===1?'':'s')+' across '+_opsOrder.length+' material'+(_opsOrder.length===1?'':'s')
@@ -13508,12 +13546,13 @@ function exportMaterials() {
         + ' A pick is only checkable when the lot pulled AND an earlier-expiring sibling of the same part are both still in the inventory feed — about half of picked T#s are, so these counts are a floor, not a total,'
         + ' and they are NOT comparable between periods because older lots have been purged from the feed.'],
       ['Corrected = a later pick entry for the same production lot and part named the lot that should have been pulled, i.e. the pull was put right. OPEN = no such entry exists, so as far as the pick sheet knows it was never corrected.'],
-      ['Outcome is today’s position of the lot that was passed over, not a projection: EXPIRED = it went off with stock still on it; ON SHELF = still in stock and in date; USED SINCE = consumed later anyway, no loss.'
-        + ' Legitimate reasons to pass over a lot exist (allergen segregation, a customer-specific lot, a hold) — review, do not assume.'],
+      ['Fix = SWAP where the earlier-expiring lot could have covered the whole pull, TOP-UP where it held less than was needed, so first-expiry-first-out meant taking its remainder and making up the rest from the newer lot. Compare "Qty Picked" with "It Held Then".'],
+      ['Outcome is today’s position of the lot that was passed over, not a projection: EXPIRED = still on the shelf and now past date; ON SHELF = still in stock and in date; USED UP = no stock left, consumed later anyway, no loss.'
+        + ' "Its Stock Now" is the quantity behind that word. Legitimate reasons to pass over a lot exist (allergen segregation, a customer-specific lot, a hold) — review, do not assume.'],
       [],
       s5Headers
     ];
-    var _opsOutcomeWord = { expired:'EXPIRED', sitting:'ON SHELF', consumed:'USED SINCE' };
+    var _opsOutcomeWord = { expired:'EXPIRED', sitting:'ON SHELF', consumed:'USED UP' };
     _opsOrder.forEach(function(p){
       var g = _ops.groups[p];
       g.rows.slice().sort(function(a,b){ return b.when - a.when; }).forEach(function(d){
@@ -13526,19 +13565,23 @@ function exportMaterials() {
           d.shouldLot, d.shouldExp == null ? '' : _matExpDateStr(d.shouldExp),
           d.lifeLeft, Math.round(d.gapDays / 30),
           d.qty ? Math.round(d.qty * 100) / 100 : '',
+          Math.round(d.hadKg * 100) / 100,
+          d.couldCover === false ? 'TOP-UP' : (d.couldCover === true ? 'SWAP' : ''),
           d.fixedAt ? _matExpDateStr(d.fixedAt) : 'OPEN',
-          _opsOutcomeWord[d.outcome] || d.outcome
+          _opsOutcomeWord[d.outcome] || d.outcome,
+          d.outcome === 'consumed' ? 0 : Math.round(d.leftKg * 100) / 100
         ]);
       });
     });
     var ws5 = XLSX.utils.aoa_to_sheet(s5Rows);
-    ws5['!cols'] = [{wch:12},{wch:40},{wch:10},{wch:15},{wch:20},{wch:38},{wch:12},{wch:14},{wch:20},{wch:12},{wch:14},{wch:13},{wch:11},{wch:12},{wch:12}];
+    ws5['!cols'] = [{wch:12},{wch:40},{wch:10},{wch:15},{wch:20},{wch:38},{wch:12},{wch:14},{wch:20},{wch:12},{wch:14},{wch:13},{wch:11},{wch:13},{wch:8},{wch:12},{wch:12},{wch:13}];
     ws5['!merges'] = [
       {s:{r:0,c:0},e:{r:0,c:s5Headers.length-1}},
       {s:{r:1,c:0},e:{r:1,c:s5Headers.length-1}},
       {s:{r:2,c:0},e:{r:2,c:s5Headers.length-1}},
       {s:{r:3,c:0},e:{r:3,c:s5Headers.length-1}},
-      {s:{r:4,c:0},e:{r:4,c:s5Headers.length-1}}
+      {s:{r:4,c:0},e:{r:4,c:s5Headers.length-1}},
+      {s:{r:5,c:0},e:{r:5,c:s5Headers.length-1}}
     ];
     XLSX.utils.book_append_sheet(wb, ws5, 'Pick Opportunities');
   }
