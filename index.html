@@ -1637,7 +1637,7 @@ function fetchMaterialsIfNeeded(force) {
       materialsData = parsed;
       // Same raw text, parsed positionally for Recall Tracking (see parsePickRows).
       pickRows = parsePickRows(t);
-      _fefoCache = null;   // pick rows are half the FEFO input
+      _fefoInvalidate();   // pick rows are half the FEFO input
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
       // Route through render() (not renderRecall directly) so the wrapper preserves
       // focus + caret — otherwise finishing the pick-sheet fetch mid-typing wipes
@@ -1770,15 +1770,15 @@ function fetchInventoryIfNeeded(force) {
     if (_inventoryLooksComplete(parsed, inventoryByPart)) {
       inventoryByPart = parsed;
       inventoryLoaded = true;
-      // The FEFO memo is keyed on row/lot *counts*, which a corrected expiry date
-      // leaves untouched — so replacing the data has to drop it explicitly or the
+      // The FEFO memos are keyed on row/lot *counts*, which a corrected expiry date
+      // leaves untouched — so replacing the data has to drop them explicitly or the
       // stale computation outlives the stale input.
-      _fefoCache = null;
+      _fefoInvalidate();
       try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     } else {
       inventoryLotIndex = keepIndex;
-      _fefoCache = null;
+      _fefoInvalidate();
       console.warn('Inventory fetch rejected: ' + Object.keys(parsed || {}).length
         + ' parts parsed (need at least ' + INVENTORY_MIN_PARTS + ' and 80% of the '
         + Object.keys(inventoryByPart || {}).length + ' already held). Keeping existing data.');
@@ -1927,6 +1927,10 @@ var _expiryIssuesOpen = false;       // the unreadable/missing-date list under t
 // purpose: auditing lots means opening five rows in a row and wanting Lots each time.
 var matInlineTab = 'usage';          // 'usage' | 'customers' | 'parts' | 'lots'
 var _fefoCache = null, _fefoCacheKey = '';
+// All three FEFO memos key on pick-row and lot COUNTS, which a corrected expiry date
+// leaves untouched — so a data refresh has to drop them by hand, together. Missing one
+// would leave a stale reading sitting next to a fresh one.
+function _fefoInvalidate() { _fefoCache = null; _fefoIdxCache = null; _fefoOpsCache = null; }
 // Pick-sheet dates are Google Form timestamps ("1/5/2026 14:32:05"); the time part
 // has to come off before parsing or every row is rejected.
 function _fefoPickDate(v) {
@@ -1934,14 +1938,358 @@ function _fefoPickDate(v) {
   if (!s) return null;
   return parseInvDate(s.split(' ')[0]);
 }
-function computeFefoMisses() {
+// ── FEFO opportunities: the pick decisions themselves ─────────────────────
+// computeFefoMisses answers "which lots are stranded and at risk today" — a
+// remediation list. This answers a different question for the same data: in a given
+// week/month/quarter, which individual picks passed over something about to expire?
+// That is a training view, so it is deliberately built the other way round:
+//
+//   • One row per PICK, not per stranded lot, and only the BEST alternative (the
+//     earliest-expiring eligible sibling) is reported. Counting every older sibling
+//     turns one decision into eight and inflates the total.
+//   • It does NOT require the skipped lot to still hold stock. computeFefoMisses drops
+//     those on purpose (nothing left to go move), but a past decision still happened
+//     and is still worth learning from — that gate is what reduces ~6,600 decisions to
+//     ~750 lots, and it hides most of the history.
+//   • Materiality is TWO tests, not one. A gap alone flags Creatine (51,000 kg on hand
+//     against 17,000 kg/mo burn, every lot 400+ days out) as the single worst offender,
+//     which is the same noise the review list was built to exclude. The skipped lot
+//     also has to have been genuinely close to expiring when it was walked past.
+//   • Every decision carries its OUTCOME, because that is what makes the review
+//     productive: of ~6,600 decisions, ~4,500 were consumed anyway (no harm) and ~100
+//     actually went off with stock left. "98 cost us something" is a usable meeting;
+//     "6,567 violations" teaches people to stop reading.
+//
+// Coverage: only ~52% of picked T#s are still in the inventory feed, and a decision
+// needs BOTH the picked lot and a sibling present. Every count here is a floor, and
+// the UI says so. It also means counts are NOT comparable across periods — older
+// months under-detect because their lots have been purged — so this view scopes to one
+// period at a time and draws no trend.
+var FEFO_OPS_LIFE_DAYS = 90;     // default: skipped lot was this close to expiry at pick time
+var FEFO_OPS_GAP_DAYS = 180;     // default: and what got picked expired at least this much later
+var FEFO_OPS_OUTCOME_MIN_KG = 25;   // a remnant left behind is not a stranded lot
+var _fefoOpsCache = null, _fefoOpsKey = '';
+function computeFefoOps() {
+  var ix = _fefoIndex();
+  if (_fefoOpsCache && _fefoOpsKey === ix.key) return _fefoOpsCache;
+  var idx = ix.idx, byPart = ix.byPart, picksByLot = ix.picksByLot, balanceAt = ix.balanceAt;
+
+  // Today's position for the outcome verdict. lotRows covers in-stock lots only, so a
+  // lot absent here was consumed — which is the "no harm done" case, not missing data.
+  var liveQty = {}, liveExp = {};
+  var pk2;
+  for (pk2 in inventoryByPart) { if (!inventoryByPart.hasOwnProperty(pk2)) continue;
+    var lr = inventoryByPart[pk2].lotRows || [];
+    for (var li = 0; li < lr.length; li++) {
+      var lu = (lr[li].lot || '').toUpperCase();
+      liveQty[lu] = lr[li].qty; liveExp[lu] = lr[li].exp;
+    }
+  }
+  var today = _expiryToday();
+  var out = [], k, i, j;
+  for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
+    var used = idx[k];
+    if (!used || used.exp == null || !used.part) continue;
+    var sibs = byPart[used.part] || [];
+    var mine = picksByLot[k];
+    for (i = 0; i < mine.length; i++) {
+      var when = mine[i].t, best = null, bestExp = null;
+      for (j = 0; j < sibs.length; j++) {
+        var sn = sibs[j];
+        if (sn === k) continue;
+        var sib = idx[sn];
+        if (!sib || sib.exp == null) continue;
+        if (sib.exp >= used.exp) continue;             // not earlier-expiring
+        if (sib.exp < when) continue;                  // already expired — skipping was right
+        var rd = parseInvDate(sib.received);
+        if (rd && rd.getTime() > when) continue;       // not received yet
+        if (balanceAt(sn, when) < FEFO_MIN_KG) continue;
+        if (best === null || sib.exp < bestExp) { best = sn; bestExp = sib.exp; }
+      }
+      if (best === null) continue;
+      var lq = liveQty[best], lx = liveExp[best];
+      var stranded = lq != null && lq >= FEFO_OPS_OUTCOME_MIN_KG;
+      out.push({
+        when: when,
+        part: used.part,
+        material: mine[i].material || (inventoryByPart[used.part] ? inventoryByPart[used.part].material : '') || '',
+        orderLot: mine[i].orderLot || '',
+        qty: mine[i].qty || 0,
+        pickedLot: k, pickedExp: used.exp,
+        shouldLot: best, shouldExp: bestExp,
+        // The two materiality measures, both in days.
+        gapDays: Math.round((used.exp - bestExp) / _EXPIRY_MS_PER_DAY),
+        lifeLeft: Math.round((bestExp - when) / _EXPIRY_MS_PER_DAY),
+        hadKg: balanceAt(best, when),
+        // Ground truth, not a projection: 'expired' = it went off with stock left,
+        // 'sitting' = still on the shelf, 'consumed' = used anyway, no harm done.
+        outcome: !stranded ? 'consumed' : (lx != null && lx < today ? 'expired' : 'sitting'),
+        strandedKg: stranded ? lq : 0
+      });
+    }
+  }
+  // Worst first: realised cost, then how egregious the swap was.
+  var rank = { expired: 0, sitting: 1, consumed: 2 };
+  out.sort(function(a, b){
+    if (rank[a.outcome] !== rank[b.outcome]) return rank[a.outcome] - rank[b.outcome];
+    return b.gapDays - a.gapDays;
+  });
+  _fefoOpsKey = ix.key;
+  _fefoOpsCache = out;
+  return out;
+}
+
+// ── FEFO opportunities view: state, period window, rendering ──────────────
+var fefoOpsView = false;      // false = the stranded-lot review list, true = the pick log
+var fefoOpsGran = 'month';    // 'week' | 'month' | 'quarter'
+var fefoOpsAnchor = null;     // a Date inside the selected period; null = current period
+var fefoOpsLife = FEFO_OPS_LIFE_DAYS;
+var fefoOpsGap = FEFO_OPS_GAP_DAYS;
+var fefoOpsOpen = {};         // part # -> drilled open
+
+// Bounds for the selected period. Self-contained rather than reusing the Logistics
+// navigator, whose bounds carry outbound/inbound baggage this has no use for.
+function _fefoOpsPeriod() {
+  var a = fefoOpsAnchor ? new Date(fefoOpsAnchor) : new Date();
+  var s, e, label;
+  if (fefoOpsGran === 'week') {
+    var dow = a.getDay(), back = dow === 0 ? 6 : dow - 1;   // Monday-anchored, as elsewhere
+    s = new Date(a.getFullYear(), a.getMonth(), a.getDate() - back);
+    e = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 6, 23, 59, 59, 999);
+    label = 'Week of ' + s.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  } else if (fefoOpsGran === 'quarter') {
+    var q = Math.floor(a.getMonth() / 3);
+    s = new Date(a.getFullYear(), q*3, 1);
+    e = new Date(a.getFullYear(), q*3 + 3, 0, 23, 59, 59, 999);
+    label = 'Q' + (q+1) + ' ' + a.getFullYear();
+  } else {
+    s = new Date(a.getFullYear(), a.getMonth(), 1);
+    e = new Date(a.getFullYear(), a.getMonth() + 1, 0, 23, 59, 59, 999);
+    label = a.toLocaleDateString('en-US', { month:'long', year:'numeric' });
+  }
+  var nt = Date.now();
+  return { start: s.getTime(), end: e.getTime(), label: label, isCurrent: nt >= s.getTime() && nt <= e.getTime() };
+}
+function setFefoOpsView(v) { fefoOpsView = !!v; fefoOpsOpen = {}; renderMaterials(); }
+function setFefoOpsGran(g) { fefoOpsGran = g; fefoOpsAnchor = null; fefoOpsOpen = {}; renderMaterials(); }
+function navFefoOps(delta) {
+  var a = new Date(_fefoOpsPeriod().start);
+  if (fefoOpsGran === 'week') a.setDate(a.getDate() + delta*7);
+  else if (fefoOpsGran === 'quarter') a.setMonth(a.getMonth() + delta*3);
+  else a.setMonth(a.getMonth() + delta);
+  fefoOpsAnchor = a; fefoOpsOpen = {};
+  renderMaterials();
+}
+function goFefoOpsLive() { fefoOpsAnchor = null; fefoOpsOpen = {}; renderMaterials(); }
+function setFefoOpsThresh(life, gap) { fefoOpsLife = life; fefoOpsGap = gap; fefoOpsOpen = {}; renderMaterials(); }
+function toggleFefoOpsMat(part) {
+  // renderMaterials is called directly (not through the render() wrapper), so scroll
+  // has to be held here or expanding a row near the bottom jumps to the top.
+  var y = window.scrollY;
+  fefoOpsOpen[part] = !fefoOpsOpen[part];
+  renderMaterials();
+  requestAnimationFrame(function(){ window.scrollTo(0, y); });
+}
+function _fefoOpsShortDate(ms) {
+  if (ms == null) return '—';
+  var d = new Date(ms);
+  return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
+}
+var _FEFO_OUTCOME = {
+  expired:  { bg:'#791F1F', fg:'#F09595', label:'expired',   tip:'The lot that was skipped went on to pass its expiry date with stock still on it. This one cost something.' },
+  sitting:  { bg:'#4a3410', fg:'#FAC775', label:'on shelf',  tip:'The lot that was skipped is still in stock and still in date — no loss yet, but it is older than what got used.' },
+  consumed: { bg:'#2c2c2a', fg:'#888780', label:'used since',tip:'The lot that was skipped was consumed later anyway. Worth seeing the pattern, but nothing was lost.' }
+};
+function _fefoOpsBtn(active) {
+  return 'padding:3px 10px;border-radius:6px;border:1.5px solid '+(active?'#B8860B':'transparent')
+    + ';background:'+(active?'#2D1F00':'transparent')+';color:'+(active?'#FFD700':'#888780')
+    + ';font-weight:'+(active?'500':'400')+';font-size:11px;cursor:pointer;font-family:system-ui;white-space:nowrap;';
+}
+
+// The panel that replaces the materials table when the pick log is showing.
+function _fefoOpsPanelHTML() {
+  var P = _fefoOpsPeriod();
+  var all = computeFefoOps();
+  var inPeriod = all.filter(function(d){ return d.when >= P.start && d.when <= P.end; });
+  var flagged = inPeriod.filter(function(d){ return d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap; });
+
+  // Denominator: picks in this period we could actually evaluate. Stated so the counts
+  // read as a floor rather than a total — see the note on computeFefoOps.
+  var ix = _fefoIndex(), evaluable = 0, lk2;
+  for (lk2 in ix.picksByLot) { if (!ix.picksByLot.hasOwnProperty(lk2)) continue;
+    if (!ix.idx[lk2] || ix.idx[lk2].exp == null) continue;
+    var pl = ix.picksByLot[lk2];
+    for (var pi = 0; pi < pl.length; pi++) if (pl[pi].t >= P.start && pl[pi].t <= P.end) evaluable++;
+  }
+
+  // Group by part #, which is the unit a fix attaches to — a bin move, a label, a
+  // staging rule. Material name is for reading; the part # is what you act on.
+  var groups = {}, order = [];
+  flagged.forEach(function(d){
+    if (!groups[d.part]) { groups[d.part] = { part:d.part, material:d.material, rows:[], worst:0, expired:0 }; order.push(d.part); }
+    var g = groups[d.part];
+    g.rows.push(d);
+    if (d.gapDays > g.worst) g.worst = d.gapDays;
+    if (d.outcome === 'expired') g.expired++;
+    if (!g.material && d.material) g.material = d.material;
+  });
+  order.sort(function(a, b){
+    var A = groups[a], B = groups[b];
+    if (A.expired !== B.expired) return B.expired - A.expired;   // realised cost first
+    if (A.rows.length !== B.rows.length) return B.rows.length - A.rows.length;
+    return B.worst - A.worst;
+  });
+
+  var oc = { expired:0, sitting:0, consumed:0 };
+  flagged.forEach(function(d){ oc[d.outcome]++; });
+
+  var h = '';
+  // ── Header: what this is, period navigator, granularity ──
+  h += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
+    + '<div style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;">'
+      + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
+        + '<span style="font-size:11px;font-weight:500;color:#FFD700;text-transform:uppercase;letter-spacing:.04em;">Pick opportunities</span>'
+        + '<span style="width:1px;height:16px;background:#2c2c2a;"></span>'
+        + '<button onclick="navFefoOps(-1)" style="width:24px;height:26px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:14px;display:inline-flex;align-items:center;justify-content:center;font-family:system-ui;">&#8249;</button>'
+        + '<span style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;min-width:150px;text-align:center;">' + esc(P.label) + '</span>'
+        + '<button onclick="navFefoOps(1)" ' + (P.isCurrent ? 'disabled' : '') + ' style="width:24px;height:26px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:' + (P.isCurrent?'default':'pointer') + ';color:' + (P.isCurrent?'#444441':'#888780') + ';font-size:14px;display:inline-flex;align-items:center;justify-content:center;font-family:system-ui;">&#8250;</button>'
+        + (P.isCurrent ? '' : '<button onclick="goFefoOpsLive()" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;">Jump to current</button>')
+        + '<span style="width:1px;height:16px;background:#2c2c2a;"></span>'
+        + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          + '<button onclick="setFefoOpsGran(\'week\')" style="'    + _fefoOpsBtn(fefoOpsGran==='week')    + '">Week</button>'
+          + '<button onclick="setFefoOpsGran(\'month\')" style="'   + _fefoOpsBtn(fefoOpsGran==='month')   + '">Month</button>'
+          + '<button onclick="setFefoOpsGran(\'quarter\')" style="' + _fefoOpsBtn(fefoOpsGran==='quarter') + '">Quarter</button>'
+        + '</div>'
+      + '</div>'
+      // ── Materiality controls. Both matter: the gap alone makes high-turnover
+      //    materials look like the worst offenders when their stock never gets near
+      //    its expiry date.
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:#888780;font-family:system-ui;">'
+        + '<span>Flag a pick when the lot passed over had</span>'
+        + '<div style="display:flex;gap:2px;padding:2px;background:#141618;border:0.5px solid #2c2c2a;border-radius:7px;">'
+          + [30,90,180].map(function(v){ return '<button onclick="setFefoOpsThresh('+v+','+fefoOpsGap+')" style="'+_fefoOpsBtn(fefoOpsLife===v)+'">&le;'+v+'d</button>'; }).join('')
+        + '</div>'
+        + '<span>of life left, and what was picked instead expired</span>'
+        + '<div style="display:flex;gap:2px;padding:2px;background:#141618;border:0.5px solid #2c2c2a;border-radius:7px;">'
+          + [90,180,365].map(function(v){ return '<button onclick="setFefoOpsThresh('+fefoOpsLife+','+v+')" style="'+_fefoOpsBtn(fefoOpsGap===v)+'">&ge;'+v+'d</button>'; }).join('')
+        + '</div>'
+        + '<span>later.</span>'
+      + '</div>'
+    + '</div>';
+
+  // ── Summary strip ──
+  h += '<div style="padding:10px 14px;background:#141618;border-bottom:0.5px solid #2c2c2a;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:11px;color:#888780;font-family:system-ui;">'
+    + '<span style="font-size:15px;font-weight:500;color:#e8e6e0;">' + flagged.length.toLocaleString() + '</span>'
+    + '<span>flagged of ' + inPeriod.length.toLocaleString() + ' picks that had an earlier lot available, out of ' + evaluable.toLocaleString() + ' checkable picks this period</span>';
+  if (flagged.length) {
+    h += '<span style="color:#3a3a38;">&middot;</span>'
+      + '<span>across <span style="color:#e8e6e0;">' + order.length + '</span> material' + (order.length===1?'':'s') + '</span>'
+      + '<span style="color:#3a3a38;">&middot;</span>'
+      + ['expired','sitting','consumed'].filter(function(o){ return oc[o]; }).map(function(o){
+          var C = _FEFO_OUTCOME[o];
+          return '<span title="'+esc(C.tip)+'" style="color:'+C.fg+';cursor:help;">'+oc[o]+' '+C.label+'</span>';
+        }).join('<span style="color:#3a3a38;"> &middot; </span>');
+  }
+  // The coverage floor. Load-bearing: roughly half of picked T#s are gone from the
+  // inventory feed, and a flag needs both the picked lot and its sibling present.
+  h += '<span style="color:#3a3a38;">&middot;</span>'
+    + '<span title="A pick can only be checked when the lot picked AND an earlier-expiring sibling are both still in the inventory feed. Only about half of picked T#s are, so this is a floor, not a total — and counts are not comparable between periods, because older lots have been purged." style="border-bottom:1px dotted #5f5e5a;cursor:help;">counts are a floor</span>'
+    + '</div>';
+
+  // ── Grouped rows ──
+  if (!flagged.length) {
+    h += '<div style="padding:28px 14px;text-align:center;color:#5f5e5a;font-size:12px;font-family:system-ui;">'
+      + (inPeriod.length
+          ? 'Nothing egregious in ' + esc(P.label) + '. ' + inPeriod.length.toLocaleString() + ' pick' + (inPeriod.length===1?'':'s') + ' had an earlier lot available, but none met both thresholds — loosen them above to see the near misses.'
+          : 'No checkable picks in ' + esc(P.label) + '.')
+      + '</div>';
+  } else {
+    h += order.map(function(part){
+      var g = groups[part];
+      var open = !!fefoOpsOpen[part];
+      var worstMo = Math.round(g.worst / 30);
+      // Wrapped and tagged so the toolbar search hides rows in the DOM rather than
+      // re-rendering per keystroke — same reason the Open Orders customer list does it
+      // that way. Search is live for this view via _filterFefoOps.
+      var wrapOpen = '<div class="fefo-ops-row" data-fefo-mat="'
+        + esc(((g.material || '') + ' ' + part).toLowerCase()) + '">';
+      var head = '<div onclick="toggleFefoOpsMat(' + jsStr(part) + ')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:0.5px solid #2c2c2a;" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'">'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(g.material || part) + '</div>'
+          + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">' + esc(part) + '</div>'
+        + '</div>'
+        + '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;flex-shrink:0;">' + g.rows.length + ' pick' + (g.rows.length===1?'':'s') + '</span>'
+        + (g.expired ? '<span title="' + esc(_FEFO_OUTCOME.expired.tip) + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;flex-shrink:0;">' + g.expired + ' expired</span>' : '')
+        + '<span style="font-size:10px;color:#888780;font-family:system-ui;flex-shrink:0;width:92px;text-align:right;">worst ' + worstMo + ' mo apart</span>'
+        + '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;transition:transform .15s;transform:' + (open?'rotate(180deg)':'') + '"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        + '</div>';
+      if (!open) return wrapOpen + head + '</div>';
+      var th = 'text-align:left;padding:5px 10px;font-size:9px;color:#5f5e5a;font-weight:500;font-family:system-ui;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;';
+      var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;font-family:system-ui;';
+      var body = '<div style="background:#141618;border-bottom:0.5px solid #2c2c2a;overflow-x:auto;">'
+        + '<table style="width:100%;border-collapse:collapse;">'
+        + '<thead><tr>'
+          + '<th style="' + th + '">Picked on</th>'
+          + '<th style="' + th + '">Production lot</th>'
+          + '<th style="' + th + '">Pulled</th>'
+          + '<th style="' + th + '">Should have pulled</th>'
+          + '<th style="' + th + 'text-align:right;">Apart</th>'
+          + '<th style="' + th + 'text-align:right;">Qty</th>'
+          + '<th style="' + th + 'text-align:right;padding-right:14px;">Outcome</th>'
+        + '</tr></thead><tbody>'
+        + g.rows.slice().sort(function(a,b){ return b.when - a.when; }).map(function(d){
+            var C = _FEFO_OUTCOME[d.outcome];
+            return '<tr style="border-top:0.5px solid #2c2c2a;">'
+              + '<td style="' + td + 'color:#cfcdc7;">' + _fefoOpsShortDate(d.when) + '</td>'
+              + '<td style="' + td + 'color:#888780;">' + (d.orderLot ? esc(d.orderLot) : '—') + '</td>'
+              + '<td style="' + td + '">' + _blendCopyCell(d.pickedLot) + ' <span style="color:#5f5e5a;font-size:10px;">exp ' + _fefoOpsShortDate(d.pickedExp) + '</span></td>'
+              + '<td style="' + td + '">' + _blendCopyCell(d.shouldLot) + ' <span style="color:#FAC775;font-size:10px;">exp ' + _fefoOpsShortDate(d.shouldExp) + ' &middot; ' + d.lifeLeft + 'd left</span></td>'
+              + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">' + Math.round(d.gapDays/30) + ' mo</td>'
+              + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + (d.qty ? fmtStockQty(d.qty) : '—') + '</td>'
+              + '<td style="' + td + 'text-align:right;padding-right:14px;"><span title="' + esc(C.tip) + '" style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:' + C.bg + ';color:' + C.fg + ';cursor:help;">' + C.label + '</span></td>'
+              + '</tr>';
+          }).join('')
+        + '</tbody></table></div>';
+      return wrapOpen + head + body + '</div>';
+    }).join('');
+    h += '<div id="fefoOpsNoMatch" style="display:none;padding:24px 14px;text-align:center;color:#5f5e5a;font-size:12px;font-family:system-ui;">No material in ' + esc(P.label) + ' matches that search.</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// Toolbar search, applied to the pick log. Hides rows in place — the panel is not
+// rebuilt, so the caret and any expanded drilldown survive typing.
+function _filterFefoOps(q) {
+  var rows = document.querySelectorAll('.fefo-ops-row');
+  if (!rows.length) return;
+  var shown = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var hit = !q || (rows[i].getAttribute('data-fefo-mat') || '').indexOf(q) !== -1;
+    rows[i].style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  }
+  var none = document.getElementById('fefoOpsNoMatch');
+  if (none) none.style.display = shown ? 'none' : '';
+}
+
+// Shared scaffolding for both FEFO readings — the stranded-lot review list
+// (computeFefoMisses) and the pick-decision log (computeFefoOps). Extracted so the two
+// cannot drift apart on the subtle parts: what counts as a pick, and what a lot's
+// balance was on a past date.
+//
+//   idx         T# -> {part, qty, exp, received} for EVERY lot, depleted included
+//   byPart      part # -> its lot T#s, so a pick can be compared against its siblings
+//   picksByLot  T# -> its picks ascending, with suffix sums so balanceAt is a binary
+//               search rather than a rescan
+//   balanceAt   what a lot held on a past date = current stock + every pick after it
+var _fefoIdxCache = null, _fefoIdxKey = '';
+function _fefoIndex() {
   var rows = pickRows || [];
   var key = rows.length + ':' + Object.keys(inventoryLotIndex || {}).length;
-  if (_fefoCache && _fefoCacheKey === key) return _fefoCache;
+  if (_fefoIdxCache && _fefoIdxKey === key) return _fefoIdxCache;
 
   var idx = inventoryLotIndex || {}, byPart = {}, k, i, j;
-  // part -> its lots, and lot -> its picks (ascending, with suffix sums so a
-  // balance-at-date lookup is a binary search instead of a rescan).
   for (k in idx) { if (!idx.hasOwnProperty(k)) continue;
     var pt = idx[k].part; if (!pt) continue;
     if (!byPart[pt]) byPart[pt] = [];
@@ -1956,7 +2304,10 @@ function computeFefoMisses() {
       var tn = normT(slots[j].t);
       if (!tn || !idx[tn]) continue;
       if (!picksByLot[tn]) picksByLot[tn] = [];
-      picksByLot[tn].push({ t: t, qty: slots[j].qty || 0, orderLot: rows[i].orderLot });
+      // material/part ride along for the ops log, which groups by material and never
+      // has a live inventory row to read them off.
+      picksByLot[tn].push({ t: t, qty: slots[j].qty || 0, orderLot: rows[i].orderLot,
+                            material: rows[i].material || '', pickPart: rows[i].part || '' });
     }
   }
   for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
@@ -1974,6 +2325,19 @@ function computeFefoMisses() {
     while (lo < hi) { var mid = (lo + hi) >> 1; if (arr[mid].t > t) hi = mid; else lo = mid + 1; }
     return base + arr.suffix[lo];
   }
+  _fefoIdxKey = key;
+  _fefoIdxCache = { idx: idx, byPart: byPart, picksByLot: picksByLot, balanceAt: balanceAt, key: key };
+  return _fefoIdxCache;
+}
+
+function computeFefoMisses() {
+  var rows = pickRows || [];
+  var key = rows.length + ':' + Object.keys(inventoryLotIndex || {}).length;
+  if (_fefoCache && _fefoCacheKey === key) return _fefoCache;
+
+  var ix = _fefoIndex();
+  var idx = ix.idx, byPart = ix.byPart, picksByLot = ix.picksByLot, balanceAt = ix.balanceAt;
+  var k, i, j;
   var strand = {}, events = 0;
   for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
     var used = idx[k];
@@ -9323,6 +9687,9 @@ function filterMaterials() {
   if (elAll) elAll.innerHTML = countAll;
   if (elShort) elShort.innerHTML = countShort;
   if (elExp) elExp.innerHTML = countExpiring;
+  // The pick log has no table rows of its own, so the loop above was a no-op for it;
+  // apply the same search query to its material groups instead.
+  _filterFefoOps(q);
   paintShortToggle();
 }
 
@@ -10815,6 +11182,17 @@ function renderMaterials() {
           +'<button type="button" class="seg-btn" data-fefo="1" onclick="setMaterialsFefoOnly(true)" title="Materials holding a lot that was picked past while an earlier-expiring lot was still usable, and that lot is now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days with at least '+FEFO_REVIEW_MIN_KG+' kg left." style="'+fefoBtnStyle(materialsFefoOnly)+'">FEFO review <span class="seg-count" id="shortCountFefo" style="font-size:10px;opacity:.75;">0</span></button>'
           +'<button type="button" class="seg-btn" data-expiring="1" onclick="setMaterialsExpiringOnly(true)" title="Materials holding stock that is already past date, expires within '+EXPIRY_SOON_DAYS+' days, or that first-expiry-first-out says will not be used in time." style="'+expiringBtnStyle(materialsExpiringOnly)+'">Expiring <span class="seg-count" id="shortCountExpiring" style="font-size:10px;opacity:.75;">0</span></button>'
         +'</div>'
+        // Second-level toggle, only while FEFO review is the active segment: the same
+        // pick data read two ways. "Lots at risk" is the remediation list (what to go
+        // move today); "Pick opportunities" is the period-scoped decision log used for
+        // training. Hidden otherwise — it would be meaningless next to Short only.
+        +(materialsFefoOnly
+          ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+            +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+              +'<button type="button" onclick="setFefoOpsView(false)" title="Lots sitting in stock that keep getting walked past and are now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days. What to go move today." style="'+_fefoOpsBtn(!fefoOpsView)+'">Lots at risk</button>'
+              +'<button type="button" onclick="setFefoOpsView(true)" title="The individual picks, by week/month/quarter, where an earlier-expiring lot was available and was passed over. A training view — it includes decisions that turned out fine, and says so." style="'+_fefoOpsBtn(fefoOpsView)+'">Pick opportunities</button>'
+            +'</div>'
+          : '')
       +'</div>'
       +zeroUsageCheckbox
     +'</div>'
@@ -10892,6 +11270,17 @@ function renderMaterials() {
         + '<span>' + _bits.join(' <span style="color:#3a3a38;">&middot;</span> ') + '</span>'
         + '</div>';
     }
+  }
+  // The pick log replaces the materials table rather than sitting under it: it answers a
+  // different question about the same data and shares none of the columns. The toolbar
+  // above it is unchanged, so the toggle back is always in reach. filterMaterials() at
+  // the end is safe with no table in the DOM — it guards every row lookup — and still
+  // fills the segment counts and paints the active segment.
+  if (materialsFefoOnly && fefoOpsView) {
+    content.innerHTML = pickerHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
+      + _fefoOpsPanelHTML();
+    filterMaterials();
+    return;
   }
   content.innerHTML = pickerHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
