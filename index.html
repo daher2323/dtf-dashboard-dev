@@ -8971,6 +8971,14 @@ function exportProcurement() {
 
 function isSoftgel(name) { return /softgel/i.test(name||''); }
 function matUnit(name) { return isSoftgel(name) ? 'softgels' : 'kg'; }
+// Column-safe unit for the dense Materials table. "softgels" is six characters longer
+// than "kg", and that table is table-layout:fixed with ~72px of content room per
+// numeric column — so the full word overflowed its cell and printed on top of the
+// neighbouring column ("153,400 softgels4,500 softgels"). "sg" occupies exactly the
+// same space as "kg", so every existing column width still holds. The full word stays
+// wherever there is room to spell it: the purple row badge, tooltips, the expanded
+// panel, and the export.
+function matUnitShort(name) { return isSoftgel(name) ? 'sg' : 'kg'; }
 
 // Largest-remainder apportionment: shares that sum to EXACTLY 100 at the given
 // decimal precision. Rounding each share independently can total 100.1% on a skewed
@@ -9118,6 +9126,10 @@ function matIsExpiring(m) {
 // amber soon, muted fine) so the two read as one stock-position cluster.
 function renderExpiryCell(m, unit) {
   var e = m && m.expiry;
+  // `unit` is the spelled-out word, used in the title tooltips below where length is
+  // free. The two visible sub-badges sit inside a 104px fixed column, so they use the
+  // abbreviation for the same reason the numeric columns do.
+  var unitS = matUnitShort(m && m.name);
   var pad = 'text-align:center;padding:8px 10px;white-space:nowrap;';
   // No lots at all: the material is tracked for usage but holds no stock.
   if (!e || !e.lots.length) return '<td style="' + pad + 'color:#5f5e5a;font-size:12px;">—</td>';
@@ -9150,13 +9162,13 @@ function renderExpiryCell(m, unit) {
   if (e.expiredKg > 0) {
     sub = '<span title="' + e.expiredLots + ' lot' + (e.expiredLots===1?'':'s') + ' past date, still holding stock. Not a projection — these dates have passed."'
       + ' style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#791F1F;color:#F09595;cursor:help;">'
-      + Math.round(e.expiredKg).toLocaleString() + ' ' + unit + ' expired</span>';
+      + Math.round(e.expiredKg).toLocaleString() + ' ' + unitS + ' expired</span>';
   } else if (e.riskKg >= EXPIRY_RISK_MIN_KG) {
     var why = e.hasRate
       ? ('At ' + Math.round(e.rate).toLocaleString() + ' ' + unit + '/mo, this much will still be on hand when it expires (first-expiry-first-out).')
-      : ('No usage in the selected window, so nothing is burning this down — every dated kg is exposed.');
+      : ('No usage in the selected window, so nothing is burning this down — every dated ' + unit + ' is exposed.');
     sub = '<span title="' + why + '" style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#4a3410;color:#FAC775;cursor:help;">'
-      + Math.round(e.riskKg).toLocaleString() + ' ' + unit + ' at risk' + (e.hasRate ? '' : ' · no usage') + '</span>';
+      + Math.round(e.riskKg).toLocaleString() + ' ' + unitS + ' at risk' + (e.hasRate ? '' : ' · no usage') + '</span>';
   } else if (e.badDateLots > 0) {
     sub = '<span title="' + e.badDateLots + ' lot' + (e.badDateLots===1?'':'s') + ' hold an expiry value that cannot be read (e.g. \u201c' + esc(e.badDateSample) + '\u201d) — a typo in the inventory sheet, not a missing date. Fix it there and it appears here."'
       + ' style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#4a2020;color:#F09595;cursor:help;">'
@@ -10649,8 +10661,10 @@ function renderMaterials() {
   var colSpan = 13; // #, Material, [On hand·Committed·Available·Cover·Expiry], [Last mo·3mo·6mo·trend·3<->6·total]
   var tableRows = matList.map(function(m,i){
     var isSelected = m.name===window._selectedMaterial;
-    var sg=isSoftgel(m.name), unit=matUnit(m.name);
-    function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unit:'—'; }
+    // unit spells the word out for tooltips and the badge; unitS is what goes in the
+    // numeric cells, where the column width is fixed and cannot absorb "softgels".
+    var sg=isSoftgel(m.name), unit=matUnit(m.name), unitS=matUnitShort(m.name);
+    function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unitS:'—'; }
     // Months of supply = on-hand ÷ 3-mo avg burn. Null (no usage history) → em dash.
     var monthsCover = computeMonthsOfCover(m.stock, m.avg3);
     // Grouped rows list the whole SKU-group roster on the subline, not just the parts
@@ -10685,7 +10699,9 @@ function renderMaterials() {
           // vertical space is far cheaper here than horizontal. Clamped at two lines so a
           // pathological name can't stretch the row, with the full text on hover.
           +'<span title="'+esc(m.name)+'" style="min-width:0;white-space:normal;overflow:hidden;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">'+esc(m.name)+'</span>'
-          +(sg?'<span style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#26215C;color:#AFA9EC;flex-shrink:0;">softgels</span>':'')
+          // The badge is the legend for the "sg" in this row's numeric cells — it says
+          // the word the columns don't have room for, so the tooltip spells out the link.
+          +(sg?'<span title="Counted in softgels, not kilograms &mdash; every quantity on this row is a softgel count, shown as &ldquo;sg&rdquo;." style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#26215C;color:#AFA9EC;flex-shrink:0;cursor:help;">softgels</span>':'')
           +(m.isGroup?'<span title="'+esc(partsBadgeTitle)+'" style="font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#0C2240;color:#85B7EB;flex-shrink:0;">'+partsBadge+'</span>':'')
         +'</div>'
         +(m.isGroup
@@ -10695,9 +10711,9 @@ function renderMaterials() {
           ?'<div style="font-size:10px;font-family:system-ui;margin-top:2px;max-width:250px;line-height:1.6;white-space:normal;">'+_partNumsHTML(rosterParts, dimSet)+'</div>'
           :(m.partNums.length?'<div style="font-size:10px;font-family:system-ui;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+_partNumsHTML(m.partNums)+'</div>':''))
       +'</td>'
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#85B7EB;white-space:nowrap;">'+(invLoading?'<span class="inv-skel" style="width:46px;"></span>':fmtStock(m.stock,unit))+'</td>'
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+(demLoading?'<span class="inv-skel" style="width:42px;"></span>':fmtDemand(m.demand,unit))+'</td>'
-      +'<td style="text-align:center;padding:8px 10px;white-space:nowrap;">'+((invLoading||demLoading)?'<span class="inv-skel" style="width:50px;"></span>':afterBadge(m.afterDemand,m.demand,unit))+'</td>'
+      +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#85B7EB;white-space:nowrap;">'+(invLoading?'<span class="inv-skel" style="width:46px;"></span>':fmtStock(m.stock,unitS))+'</td>'
+      +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+(demLoading?'<span class="inv-skel" style="width:42px;"></span>':fmtDemand(m.demand,unitS))+'</td>'
+      +'<td style="text-align:center;padding:8px 10px;white-space:nowrap;">'+((invLoading||demLoading)?'<span class="inv-skel" style="width:50px;"></span>':afterBadge(m.afterDemand,m.demand,unitS))+'</td>'
       +(invLoading?'<td class="mat-col-cover mat-seam" style="text-align:center;padding:8px 10px;"><span class="inv-skel" style="width:54px;"></span></td>':renderCoverCell(monthsCover))
       +(invLoading?'<td class="mat-seam" style="text-align:center;padding:8px 10px;"><span class="inv-skel" style="width:56px;"></span></td>':renderExpiryCell(m,unit))
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+fmt(m.lastMonth)+'</td>'
