@@ -3261,7 +3261,7 @@ function parseMaterials(text) {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
     var dateCol = keys[0]; // Google Forms: first column is always the timestamp
-    return rows.filter(function(r){
+    var out = rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
     }).map(function(r){
       var raw = (r[dateCol]||'').trim();
@@ -3278,7 +3278,46 @@ function parseMaterials(text) {
         qty: parseFloat(r['Qty Needed']||0)
       };
     }).filter(function(r){ return r.date && r.date >= MATERIALS_TRACKING_START; });
+    return _dedupeMaterialUsage(out);
   } catch(e) { return []; }
+}
+
+// Consumption is aggregated from Qty Needed — the requirement for a (production lot, part)
+// — NOT from the quantities picked off each T#. That distinction is what makes a FEFO
+// correction survivable: re-pulling the right lot does not add kilograms to a material's
+// usage by itself. What it does add is a second FORM ROW carrying the same requirement, and
+// summing rows would then count that requirement twice.
+//
+// So a requirement is counted once per (production lot, part, qty). A correction re-states
+// the same Qty Needed, so it collapses. A genuinely revised requirement states a different
+// number and both are kept, which is conservative and matches today's behaviour — the
+// alternative (keep only the latest) would silently discard a real second draw of the same
+// material on the same lot, and nothing in the feed distinguishes the two.
+//
+// The surviving row keeps the EARLIEST date of its group: the material was consumed when it
+// was first pulled, not when the paperwork was redone, and a correction logged the next day
+// could otherwise shift usage into the wrong month.
+//
+// This is not only about corrections. The feed already carries 55 duplicated pairs — around
+// 4,500 kg, 0.06% of 7.5 million — so the double count exists today and would simply grow
+// once inventory starts re-logging swapped pulls.
+function _dedupeMaterialUsage(rows) {
+  var byKey = {}, order = [], i, r, key;
+  for (i = 0; i < rows.length; i++) {
+    r = rows[i];
+    // qty is rounded into the key so 12.72 and 12.7200001 are the same requirement.
+    key = r.lot + '|' + r.partNum + '|' + Math.round(r.qty * 1000);
+    if (!byKey[key]) { byKey[key] = r; order.push(key); }
+    else if (r.date < byKey[key].date) { byKey[key] = r; }   // keep the earliest
+  }
+  if (order.length !== rows.length) {
+    console.warn('[DTF] Materials usage: collapsed ' + (rows.length - order.length)
+      + ' duplicate (production lot, part, qty) row(s) — re-logged picks state the same '
+      + 'requirement, and summing them would double-count consumption.');
+  }
+  var out = [];
+  for (i = 0; i < order.length; i++) out.push(byKey[order[i]]);
+  return out;
 }
 
 // ── Recall Tracking: positional pick-sheet parse ──────────────────────────
