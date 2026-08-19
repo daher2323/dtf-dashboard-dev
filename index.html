@@ -10627,19 +10627,27 @@ function renderMaterials() {
   // or 1,188 with zero-usage shown), so six divs per row would spend ~7,000 extra DOM
   // nodes on an identical picture.
   function sparkSVG(data, trend, labels, unitFull) {
-    var w=100, h=28, padX=2, padTop=3, gap=3;
+    // 7px bars on a 2px gap, lifted straight off the Jars/Bottles/Lids sparkline so the
+    // two read as the same chart. Stretching them to fill the column instead (13.5px)
+    // made the same data look heavier than the rest of Procurement. The group is
+    // centred in an unchanged 100px canvas rather than shrinking the SVG, which keeps
+    // the cell geometry — and the responsive rules keyed to this column — untouched.
+    var w=100, h=28, padTop=3, barW=7, gap=2;
     var n=data.length||1;
-    var barW=(w - padX*2 - gap*(n-1))/n;
+    var x0=(w - (n*barW + (n-1)*gap))/2;
     var max=Math.max.apply(null,data)||1;
     var usable=h-padTop;              // 3px headroom so the tallest bar isn't flush
     var col=trend==='up'?'#1D9E75':trend==='down'?'#E24B4A':trend==='volatile'?'#EF9F27':'#888780';
     var bars=data.map(function(v,i){
       var isZero=!(v>0);
-      var bh=isZero?2:Math.max(2,(v/max)*usable);
+      // Round the height first and derive y from it, rather than rounding both: doing
+      // them independently let a bar's bottom edge land 0.1px off the baseline, and a
+      // shared baseline is the entire reason one bar is comparable to the next.
+      var bh=+(isZero?2:Math.max(2,(v/max)*usable)).toFixed(1);
       // Most recent month at full strength, earlier ones stepped back — carries the
       // cue the old trailing dot gave without spending a separate mark on it.
       var op=isZero?'.28':(i===n-1?'1':'.72');
-      return '<rect x="'+(padX+i*(barW+gap)).toFixed(1)+'" y="'+(h-bh).toFixed(1)+'"'
+      return '<rect x="'+(x0+i*(barW+gap)).toFixed(1)+'" y="'+(h-bh).toFixed(1)+'"'
         +' width="'+barW.toFixed(1)+'" height="'+bh.toFixed(1)+'"'
         +' fill="'+(isZero?'#5f5e5a':col)+'" opacity="'+op+'" rx="1"/>';
     }).join('');
