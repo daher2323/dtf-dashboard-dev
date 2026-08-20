@@ -3030,20 +3030,49 @@ function computeFefoMisses() {
         if (rd && rd.getTime() > when) continue;      // not received yet
         if (!couldContribute(sn, when, mine[i].needed || 0)) continue;   // same test as the pick log
         hit = true;
-        if (!strand[sn]) strand[sn] = { skips: 0, last: null, alts: {}, events: [] };
-        strand[sn].skips++;
+        if (!strand[sn]) strand[sn] = { skips: 0, last: null, alts: {}, events: [], byDec: {} };
         strand[sn].alts[k] = true;
-        // The evidence behind the count: what was pulled instead, on what
-        // production lot, and how much of this lot was sitting there at the time.
-        // Without it "skipped 35x" is an accusation with nothing to check.
-        strand[sn].events.push({
-          when: when, usedLot: k, usedExp: used.exp,
-          orderLot: mine[i].orderLot || '', qty: mine[i].qty || 0,
-          // What this lot still holds today — a lower bound on what it held when it was
-          // passed over, since stock only falls. Replaces a reconstruction from QTY Picked,
-          // which does not reliably mean "amount consumed".
-          hadKg: stockNow[sn] > 0 ? stockNow[sn] : 0
-        });
+        // ── One event per DECISION: one run, on one day, that went past this lot ──
+        //
+        // The evidence behind the count: what was pulled instead, on what production lot,
+        // and how much of this lot was sitting there at the time. Without it "skipped 35x"
+        // is an accusation with nothing to check.
+        //
+        // A run that draws the same material from two newer drums used to charge this lot
+        // twice and print two rows (L-Glycine T31335: run 2608021 on 8/4 taking T34006 and
+        // T34905). Nobody's question is "how many drums went past this?" — the volume that
+        // went past is the kg column — and counting drums put this badge in a different
+        // unit from computeFefoOps, which merges the same way one screen over. Two numbers
+        // over the same events that will not reconcile is how a board loses its readers.
+        // Every drum is still listed inside the row, so no detail is lost by merging.
+        //
+        // Keyed on the day (`when` is already day-granular) plus the run. A pick with no
+        // production lot recorded falls back to a unique key rather than merging with every
+        // other unattributed pick that day.
+        var dk = when + '|' + (mine[i].orderLot || ('\u0000' + k + '|' + i));
+        var ei = strand[sn].byDec[dk];
+        if (ei === undefined) {
+          strand[sn].byDec[dk] = strand[sn].events.length;
+          strand[sn].events.push({
+            when: when, orderLot: mine[i].orderLot || '',
+            pulled: [{ lot: k, exp: used.exp, qty: mine[i].qty || 0 }],
+            qty: mine[i].qty || 0,
+            // What this lot still holds today — a lower bound on what it held when it was
+            // passed over, since stock only falls. Replaces a reconstruction from QTY Picked,
+            // which does not reliably mean "amount consumed".
+            hadKg: stockNow[sn] > 0 ? stockNow[sn] : 0
+          });
+          strand[sn].skips++;
+        } else {
+          var ev0 = strand[sn].events[ei], pj0, seen0 = false;
+          // Same drum again on the same run and day — two slips minutes apart, which the
+          // identical-timestamp guard in _fefoIndex does not catch. One line, quantities summed.
+          for (pj0 = 0; pj0 < ev0.pulled.length; pj0++) {
+            if (ev0.pulled[pj0].lot === k) { ev0.pulled[pj0].qty += mine[i].qty || 0; seen0 = true; break; }
+          }
+          if (!seen0) ev0.pulled.push({ lot: k, exp: used.exp, qty: mine[i].qty || 0 });
+          ev0.qty += mine[i].qty || 0;
+        }
         if (strand[sn].last == null || when > strand[sn].last) strand[sn].last = when;
       }
       if (hit) events++;
@@ -3078,6 +3107,8 @@ function computeFefoMisses() {
     var altN = 0, ak; for (ak in strand[k].alts) if (strand[k].alts.hasOwnProperty(ak)) altN++;
     // Newest first — the recent skips are the ones still worth asking about.
     var evs = (strand[k].events || []).slice().sort(function(a, b){ return b.when - a.when; });
+    // Earliest-expiring drum first inside each row, matching the order the rest of the view reads in.
+    for (var pi2 = 0; pi2 < evs.length; pi2++) evs[pi2].pulled.sort(function(a, b){ return (a.exp || 0) - (b.exp || 0); });
     var rec2 = {
       lot: L.row.lot, part: L.part, material: L.material || '', qty: L.row.qty,
       exp: exp, days: days, loc: L.row.loc, supplier: L.row.supplier, batch: L.row.batch,
@@ -10909,31 +10940,44 @@ function _matLocShort(loc) {
     + esc(bins.slice(0, MAT_LOC_SHOW).join(', '))
     + ' <span style="color:#5f5e5a;">+' + (bins.length - MAT_LOC_SHOW) + '</span></span>';
 }
-// Evidence for one "skipped N x" badge: every pick that went past this lot, what
-// was pulled instead and when. Receipt is proven two ways — the lot's own receiving
-// date precedes the pick, and its reconstructed balance was positive — so the
-// "had on hand" column is the answer to "were we sure we had it?".
+// Evidence for one "skipped N x" badge: every RUN that went past this lot, what was
+// pulled instead and when. One row per (day, production lot) — the same unit
+// computeFefoOps counts in, so the two screens reconcile; the drums that run took are
+// listed inside the row. Receipt is proven two ways — the lot's own receiving date
+// precedes the pick, and its reconstructed balance was positive — so the "had on hand"
+// column is the answer to "were we sure we had it?".
 function _fefoDetailRowHTML(miss, unit, nCols) {
   var evs = miss.events || [];
   if (!evs.length) return '';
   var th = 'text-align:left;padding:3px 8px;font-size:9px;color:#5f5e5a;font-weight:500;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;';
   var thR = th.replace('text-align:left', 'text-align:right');
+  // One row per decision, so a run that drew from several newer drums stacks them inside the
+  // three drum-level columns rather than repeating the run. The three stacks share a line
+  // height and the cells are top-aligned, so drum N of "used instead" sits on the same line as
+  // drum N of its expiry and its quantity. Everything else on the row is a property of the
+  // run, not of a drum, and stays on one line.
   var rows = evs.map(function(ev){
-    var td = 'padding:3px 8px;font-size:11px;white-space:nowrap;';
+    var td = 'padding:3px 8px;font-size:11px;white-space:nowrap;vertical-align:top;';
+    var lh = 'line-height:1.55;';
+    var pulled = ev.pulled || [];
+    var cLot = pulled.map(function(p){ return '<div style="' + lh + '">' + _blendCopyCell(p.lot) + '</div>'; }).join('');
+    var cExp = pulled.map(function(p){ return '<div style="' + lh + '">' + (p.exp != null ? _matExpDateStr(p.exp) : '—') + '</div>'; }).join('');
+    var cQty = pulled.map(function(p){ return '<div style="' + lh + '">' + (p.qty ? fmtStockQty(p.qty) + ' ' + unit : '—') + '</div>'; }).join('');
     // Days of life this lot still had when it was passed over — the crux of it.
     var lifeLeft = (miss.exp != null) ? Math.round((miss.exp - ev.when) / _EXPIRY_MS_PER_DAY) : null;
     return '<tr>'
       + '<td style="' + td + 'color:#cfcdc7;">' + _matExpDateStr(ev.when) + '</td>'
       + '<td style="' + td + 'color:#888780;">' + (ev.orderLot ? esc(ev.orderLot) : '—') + '</td>'
-      + '<td style="' + td + '">' + _blendCopyCell(ev.usedLot) + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#888780;">' + (ev.usedExp != null ? _matExpDateStr(ev.usedExp) : '—') + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + (ev.qty ? fmtStockQty(ev.qty) + ' ' + unit : '—') + '</td>'
+      + '<td style="' + td + '">' + cLot + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + cExp + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + cQty + '</td>'
       + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(ev.hadKg) + ' ' + unit + '</td>'
       + '<td style="' + td + 'text-align:right;color:' + (lifeLeft != null && lifeLeft <= 90 ? '#FAC775' : '#888780') + ';">'
         + (lifeLeft == null ? '—' : (lifeLeft < 0 ? 'past date' : lifeLeft + 'd')) + '</td>'
       + '</tr>';
   }).join('');
-  var note = 'Reconstructed from the pick sheet. "We had" is this lot\u2019s balance that day (current stock plus everything picked from it since)'
+  var note = 'One row per run: a run that drew from several newer drums counts once, with every drum listed. '
+    + 'Reconstructed from the pick sheet. "We had" is this lot\u2019s balance that day (current stock plus everything picked from it since)'
     + (miss.received ? '; it was received ' + esc(miss.received) : '')
     + '. Skipping a lot can be legitimate — allergen segregation, a customer-specific lot, a hold — so read this as a prompt to look, not a verdict.';
   if (miss.eventsTotal > evs.length) note = (miss.eventsTotal - evs.length) + ' earlier skips not shown. ' + note;
@@ -11011,7 +11055,7 @@ function matLotTableHTML(m, unit) {
     var missMatters = miss && miss.skips > 0 && L.days != null && L.days <= FEFO_REVIEW_HORIZON_DAYS;
     if (missMatters) {
       var lastTxt = miss.lastSkip ? _matExpDateStr(miss.lastSkip) : '';
-      missTag = ' <span title="Passed over ' + miss.skips + ' time' + (miss.skips===1?'':'s')
+      missTag = ' <span title="Passed over on ' + miss.skips + ' run' + (miss.skips===1?'':'s')
         + ' in favour of ' + miss.altLots + ' later-expiring lot' + (miss.altLots===1?'':'s')
         + (lastTxt ? ', most recently ' + lastTxt : '')
         + '. Reconstructed from the pick sheet — legitimate reasons exist (allergen segregation, a customer-specific lot, a hold), so treat it as a prompt to look, not a verdict."'
