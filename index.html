@@ -10992,7 +10992,12 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
     // the visible area, so the one column that says whether the lot was in date was the one
     // you had to scroll for. Auto width packs the columns together and the whole row reads
     // without scrolling; the wrapper keeps overflow-x for the genuinely narrow case.
-    + '<div style="overflow-x:auto;"><table style="border-collapse:collapse;">'
+    //
+    // width:auto has to be stated. The stylesheet carries a bare `table { width: 100% }`, so
+    // dropping the inline width does nothing at all — the element just inherits the same 100%
+    // from the rule. Every other table in this file wants that default; this one is the
+    // exception and has to say so.
+    + '<div style="overflow-x:auto;"><table style="width:auto;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="' + th + '">Date</th><th style="' + th + '">Production lot</th><th style="' + th + '">Used instead</th>'
       + '<th style="' + thR + '">Its expiry</th><th style="' + thR + '">Kg pulled</th>'
