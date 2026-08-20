@@ -10985,7 +10985,14 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
     + '<div style="background:#0f1012;border-left:2px solid #FAC775;padding:8px 12px 10px 12px;">'
     + '<div style="font-size:10px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:5px;">'
       + 'What was picked instead &middot; ' + miss.skips + ' skip' + (miss.skips===1?'':'s') + '</div>'
-    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    // Shrink-to-content, NOT width:100%. This table is nested in a colspan cell of the lot
+    // table, so 100% meant "as wide as the lot table" — which is itself wider than the panel
+    // on a zoomed or narrow screen. Seven nowrap columns then got stretched across that width
+    // with ~200px of dead air between them, and the last two (We had, Life left) fell outside
+    // the visible area, so the one column that says whether the lot was in date was the one
+    // you had to scroll for. Auto width packs the columns together and the whole row reads
+    // without scrolling; the wrapper keeps overflow-x for the genuinely narrow case.
+    + '<div style="overflow-x:auto;"><table style="border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="' + th + '">Date</th><th style="' + th + '">Production lot</th><th style="' + th + '">Used instead</th>'
       + '<th style="' + thR + '">Its expiry</th><th style="' + thR + '">Kg pulled</th>'
