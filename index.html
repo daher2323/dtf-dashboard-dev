@@ -2616,8 +2616,27 @@ function _fefoOpsPanelHTML() {
       if (!open) return wrapOpen + head + '</div>';
       var th = 'text-align:left;padding:5px 10px;font-size:9px;color:#5f5e5a;font-weight:500;font-family:system-ui;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;';
       var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;font-family:system-ui;';
+      // Every material group is its own table, and an auto-layout table sizes its columns to
+      // its own content — so a long product name in one group pushed Pulled and everything
+      // right of it out of line with the group above. table-layout:fixed plus one shared
+      // colgroup pins all groups to the same grid, which is what makes the list scannable
+      // down a column rather than row by row.
+      //
+      // min-width keeps the columns at their intended sizes instead of letting a narrow
+      // viewport squeeze them until content spills its cell (fixed layout does not reflow to
+      // fit); the wrapper scrolls horizontally in that case.
       var body = '<div style="background:#141618;border-bottom:0.5px solid #2c2c2a;overflow-x:auto;">'
-        + '<table style="width:100%;border-collapse:collapse;">'
+        + '<table style="width:100%;min-width:1124px;table-layout:fixed;border-collapse:collapse;">'
+        + '<colgroup>'
+          + '<col style="width:76px;">'     // Picked on
+          + '<col style="width:240px;">'    // Production lot (+ brand · product beneath)
+          + '<col style="width:150px;">'    // Pulled
+          + '<col style="width:205px;">'    // Should have pulled
+          + '<col style="width:70px;">'     // Apart
+          + '<col style="width:155px;">'    // Qty (+ swap/top-up note beneath)
+          + '<col style="width:92px;">'     // Fixed
+          + '<col style="width:136px;">'    // Outcome
+        + '</colgroup>'
         + '<thead><tr>'
           + '<th style="' + th + '">Picked on</th>'
           + '<th style="' + th + '">Production lot</th>'
@@ -2640,7 +2659,9 @@ function _fefoOpsPanelHTML() {
                 // Brand and product on a second line: this is the whole point of the
                 // "this week" read — knowing which product it was is what lets someone
                 // go and correct the pick before the run closes out.
-                + (nm ? '<div style="font-size:10px;margin-top:1px;max-width:250px;overflow:hidden;text-overflow:ellipsis;">'
+                // 100% of the (now fixed) column rather than a hard 250px, so the ellipsis
+                // lands at the real column edge.
+                + (nm ? '<div style="font-size:10px;margin-top:1px;max-width:100%;overflow:hidden;text-overflow:ellipsis;">'
                         + (nm.brand ? '<span style="color:#85B7EB;">' + esc(nm.brand) + '</span>' : '')
                         + (nm.brand && nm.product ? '<span style="color:#3a3a38;"> &middot; </span>' : '')
                         + (nm.product ? '<span style="color:#888780;">' + esc(nm.product) + '</span>' : '')
