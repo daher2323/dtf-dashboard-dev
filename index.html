@@ -2683,6 +2683,14 @@ function _fefoOpsPanelHTML() {
                     ? '<div title="' + esc(d.shouldLot) + ' holds ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ', more than the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed. Taking the older lot was straightforwardly possible." style="font-size:10px;color:#9FE1CB;margin-top:1px;cursor:help;">swap was possible</div>'
                     : d.couldCover === false
                     ? '<div title="' + esc(d.shouldLot) + ' held only ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' against the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed, and nothing has been drawn from it since, so that figure is exact. First-expiry-first-out here meant taking that remainder and topping up from ' + esc(d.pickedLot) + ', not swapping." style="font-size:10px;color:#FAC775;margin-top:1px;cursor:help;">top-up only &middot; had ' + fmtStockQty(d.heldAtLeast) + '</div>'
+                    // Third state, stated rather than left blank. Where the lot still holds
+                    // less than the run needed, a reader sees a small on-shelf figure beside a
+                    // large quantity and expects a top-up label; getting nothing reads as an
+                    // oversight. It is not — the lot was drawn from again on or after this
+                    // date, so what it held at the time is not recorded and may well have been
+                    // plenty. 110 flagged rows sit here, so the silence needed a reason.
+                    : (d.needed > 0 && d.heldAtLeast > 0 && d.heldAtLeast < d.needed)
+                    ? '<div title="' + esc(d.shouldLot) + ' holds ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' now, less than the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed — but it was drawn from again on or after this date, so what it held at the time is not recorded. It may have covered the run outright. Neither swap nor top-up can be claimed." style="font-size:10px;color:#5f5e5a;margin-top:1px;cursor:help;">drawn from since</div>'
                     : '')
               + '</td>'
               // The indicator: a later entry on this production lot named the right T#.
@@ -13964,7 +13972,7 @@ function exportMaterials() {
         + ' A pick is only checkable when the lot pulled AND an earlier-expiring sibling of the same part are both still in the inventory feed, so these counts are a floor rather than a total.'],
       ['Corrected = a later pick entry for the same production lot and part named the lot that should have been pulled, i.e. the pull was put right. OPEN = no such entry exists, so as far as the pick sheet knows it was never corrected.'],
       ['Qty Needed is the formula requirement for this material on this production lot — the amount actually consumed. The form\'s QTY Picked column is not used: it routinely records the drum brought to the floor instead (24 kg logged against a 19 g requirement on micro-ingredients).'],
-      ['Swap Possible = YES where the passed-over lot holds more than the run needed. NO where it held less AND nothing has been drawn from it since, so that shortfall is exact and first-expiry-first-out meant a top-up rather than a swap. Blank means unprovable — the lot has been drawn from since, and nothing records what it held at the time.'],
+      ['Swap Possible = YES where the passed-over lot holds more than the run needed. NO where it held less AND nothing has been drawn from it since, so that shortfall is exact and first-expiry-first-out meant a top-up rather than a swap. UNKNOWN where it now holds less than was needed but was drawn from again on or after the pick date, so what it held at the time is not recorded — it may have covered the run outright. Blank where the lot is spent and no comparison of quantities is possible.'],
       ['Outcome is today’s position of the lot that was passed over, not a projection: EXPIRED = still on the shelf and now past date; ON SHELF = still in stock and in date; USED UP = no stock left, consumed later anyway, no loss.'
         + ' "Its Stock Now" is the quantity behind that word. Legitimate reasons to pass over a lot exist (allergen segregation, a customer-specific lot, a hold) — review, do not assume.'],
       [],
@@ -13983,7 +13991,10 @@ function exportMaterials() {
           d.shouldLot, d.shouldExp == null ? '' : _matExpDateStr(d.shouldExp),
           d.lifeLeft, Math.round(d.gapDays / 30),
           d.needed > 0 ? Math.round(d.needed * 1000) / 1000 : '',
-          d.couldCover === true ? 'YES' : (d.couldCover === false ? 'NO — top-up only' : ''),
+          d.couldCover === true ? 'YES'
+            : d.couldCover === false ? 'NO — top-up only'
+            : (d.needed > 0 && d.heldAtLeast > 0 && d.heldAtLeast < d.needed) ? 'UNKNOWN — drawn from since'
+            : '',
           d.fixedAt ? _matExpDateStr(d.fixedAt) : 'OPEN',
           _opsOutcomeWord[d.outcome] || d.outcome,
           d.outcome === 'consumed' ? 0 : Math.round(d.leftKg * 100) / 100
