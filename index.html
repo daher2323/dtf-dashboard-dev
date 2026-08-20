@@ -2041,10 +2041,11 @@ function _fefoPickDate(v) {
 // the UI says so. It also means counts are NOT comparable across periods — older
 // months under-detect because their lots have been purged — so this view scopes to one
 // period at a time and draws no trend.
-// Defaults chosen for the way this view is actually used: a weekly board, read while material
-// is being pulled the day before each blend. 90/90 is deliberately looser on the gap than the
-// 180 it started at — over a single week the point is to catch everything worth a second look,
-// not to rank the worst offenders across a quarter.
+// Defaults chosen for the way this view is actually used: a live board, read while material is
+// being pulled. 90/90 is deliberately looser on the gap than the 180 it started at — over a
+// single day or week the point is to catch everything worth a second look, not to rank the
+// worst offenders across a quarter. The thresholds do not change with the granularity: what
+// counts as worth looking at is a property of the pick, not of how far back you are reading.
 var FEFO_OPS_LIFE_DAYS = 90;     // default: skipped lot was this close to expiry at pick time
 var FEFO_OPS_GAP_DAYS = 90;      // default: and what got picked expired at least this much later
 // (There is deliberately no quantity floor on the outcome. Whether the skipped lot still
@@ -2226,7 +2227,11 @@ function computeFefoOps() {
 
 // ── FEFO opportunities view: state, period window, rendering ──────────────
 var fefoOpsView = false;      // false = the stranded-lot review list, true = the pick log
-var fefoOpsGran = 'week';     // 'week' | 'month' | 'quarter' — the board is read weekly
+// 'day' | 'week' | 'month' | 'quarter'. Daily by default because this is a monitoring view
+// before it is a reporting one: a mispick caught the same day can still be put right — the
+// older lot is on the shelf and the run is in front of you — while by Thursday a Monday miss
+// is history. The wider periods are for reading progress, not for working the queue.
+var fefoOpsGran = 'day';
 var fefoOpsAnchor = null;     // a Date inside the selected period; null = current period
 var fefoOpsLife = FEFO_OPS_LIFE_DAYS;
 var fefoOpsGap = FEFO_OPS_GAP_DAYS;
@@ -2238,7 +2243,11 @@ var fefoOpsAllOpen = false;   // default stance for groups with no override
 function _fefoOpsPeriod(anchorOverride) {
   var a = anchorOverride ? new Date(anchorOverride) : (fefoOpsAnchor ? new Date(fefoOpsAnchor) : new Date());
   var s, e, label;
-  if (fefoOpsGran === 'week') {
+  if (fefoOpsGran === 'day') {
+    s = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+    e = new Date(a.getFullYear(), a.getMonth(), a.getDate(), 23, 59, 59, 999);
+    label = a.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
+  } else if (fefoOpsGran === 'week') {
     var dow = a.getDay(), back = dow === 0 ? 6 : dow - 1;   // Monday-anchored, as elsewhere
     s = new Date(a.getFullYear(), a.getMonth(), a.getDate() - back);
     e = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 6, 23, 59, 59, 999);
@@ -2258,8 +2267,8 @@ function _fefoOpsPeriod(anchorOverride) {
 }
 // Expansion is a stance, not per-render state. fefoOpsAllOpen is the default for every
 // group; fefoOpsOpen holds explicit per-material overrides on top of it. Both are sticky
-// across period navigation on purpose: the intended use is a weekly board left up all
-// week, so stepping to the next week should not silently collapse everything you were
+// across period navigation on purpose: the intended use is a board left up on a screen, so
+// stepping to the next day or week should not silently collapse everything you were
 // watching. Keys are part #s, so overrides left behind for a material absent from the new
 // period are inert.
 function _fefoOpsIsOpen(part) {
@@ -2277,7 +2286,8 @@ function setFefoOpsGran(g) { fefoOpsGran = g; fefoOpsAnchor = null; renderMateri
 // Anchor one period away from the current one, in the current granularity.
 function _fefoOpsStep(delta) {
   var a = new Date(_fefoOpsPeriod().start);
-  if (fefoOpsGran === 'week') a.setDate(a.getDate() + delta*7);
+  if (fefoOpsGran === 'day') a.setDate(a.getDate() + delta);
+  else if (fefoOpsGran === 'week') a.setDate(a.getDate() + delta*7);
   else if (fefoOpsGran === 'quarter') a.setMonth(a.getMonth() + delta*3);
   else a.setMonth(a.getMonth() + delta);
   return a;
@@ -2488,6 +2498,7 @@ function _fefoOpsPanelHTML() {
         + (P.isCurrent ? '' : '<button onclick="goFefoOpsLive()" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;">Jump to current</button>')
         + '<span style="width:1px;height:16px;background:#2c2c2a;"></span>'
         + '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          + '<button onclick="setFefoOpsGran(\'day\')" style="'     + _fefoOpsBtn(fefoOpsGran==='day')     + '">Day</button>'
           + '<button onclick="setFefoOpsGran(\'week\')" style="'    + _fefoOpsBtn(fefoOpsGran==='week')    + '">Week</button>'
           + '<button onclick="setFefoOpsGran(\'month\')" style="'   + _fefoOpsBtn(fefoOpsGran==='month')   + '">Month</button>'
           + '<button onclick="setFefoOpsGran(\'quarter\')" style="' + _fefoOpsBtn(fefoOpsGran==='quarter') + '">Quarter</button>'
@@ -2647,7 +2658,12 @@ function _fefoOpsPanelHTML() {
     h += '<div style="padding:28px 14px;text-align:center;color:#5f5e5a;font-size:12px;font-family:system-ui;">'
       + (inPeriod.length
           ? 'Nothing egregious in ' + esc(P.label) + '. ' + inPeriod.length.toLocaleString() + ' pick' + (inPeriod.length===1?'':'s') + ' had an earlier lot available, but none met both thresholds — loosen them above to see the near misses.'
-          : 'No checkable picks in ' + esc(P.label) + '.')
+          // An empty day still in progress is not the same statement as an empty day that is
+          // over. On a board watched through the shift, "none logged yet" has to be
+          // distinguishable from "none happened", or an early-morning glance reads as a clean day.
+          : (fefoOpsGran === 'day' && P.isCurrent
+              ? 'No checkable picks logged yet today. The board fills as pick slips come in.'
+              : 'No checkable picks in ' + esc(P.label) + '.'))
       + '</div>';
   } else {
     h += order.map(function(part){
