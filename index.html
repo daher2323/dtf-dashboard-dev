@@ -2516,11 +2516,15 @@ function _fefoOpsPanelHTML() {
       // the board does not teach the loop the loop does not happen — and "0 corrected" then
       // reads as nobody fixing anything, rather than nobody having been told how to record it.
       //
-      // Two details are load-bearing and both are stated explicitly. The production lot # and
-      // part # must match the original, because that pair is what byLotPart keys on; a swap
-      // logged under a different lot number will not match and the row stays open. And it has
-      // to be a NEW entry — editing the original Form response makes the mispick vanish from
-      // the feed rather than turn green, leaving no confirmation and no audit trail.
+      // The production lot # and part # must match the original, because that pair is what
+      // byLotPart keys on; a swap logged under a different lot number will not match and the
+      // row stays open. Hence "re-log", which is also a new Form entry rather than an edit —
+      // editing the original makes the mispick vanish from the feed instead of turning green.
+      //
+      // That last point was spelled out here and has been deliberately removed: it doubled as
+      // instructions for making a mispick disappear. The goal is corrected, not hidden, so the
+      // line only says what to do. An edit still fails silently — the row simply stays open —
+      // which is the safer failure of the two. Don't add the warning back.
       //
       // Shown only while something is actually open, so a fully-corrected week does not carry
       // an instruction with nothing to apply it to.
@@ -2529,8 +2533,7 @@ function _fefoOpsPanelHTML() {
             + '<span style="color:#9FE1CB;font-weight:500;">Pulled the wrong lot?</span> '
             + 'Re-log the pick with the correct T# &mdash; '
             + 'same <span style="color:#e8e6e0;">production lot&nbsp;#</span> and <span style="color:#e8e6e0;">part&nbsp;#</span> '
-            + '&mdash; and this row turns green. '
-            + '<span style="color:#5f5e5a;">Editing the original entry instead makes the pick disappear rather than show as corrected.</span>'
+            + '&mdash; and this row turns green.'
             + '</div>'
           : '')
     + '</div>';
