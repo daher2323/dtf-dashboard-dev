@@ -2050,7 +2050,7 @@ function computeFefoOps() {
   var ix = _fefoIndex();
   if (_fefoOpsCache && _fefoOpsKey === ix.key) return _fefoOpsCache;
   var idx = ix.idx, byPart = ix.byPart, picksByLot = ix.picksByLot;
-  var wasPresent = ix.wasPresent, stockNow = ix.stockNow;
+  var couldContribute = ix.couldContribute, stockAt = ix.stockAt, stockNow = ix.stockNow;
 
   // Today's position for the outcome verdict. lotRows covers in-stock lots only, so a
   // lot absent here was consumed — which is the "no harm done" case, not missing data.
@@ -2081,7 +2081,8 @@ function computeFefoOps() {
         if (sib.exp < when) continue;                  // already expired — skipping was right
         var rd = parseInvDate(sib.received);
         if (rd && rd.getTime() > when) continue;       // not received yet
-        if (!wasPresent(sn, when)) continue;           // was it on the floor at all?
+        // On the floor, and holding enough to have been worth taking for THIS run.
+        if (!couldContribute(sn, when, mine[i].needed || 0)) continue;
         if (best === null || sib.exp < bestExp) { best = sn; bestExp = sib.exp; }
       }
       if (best === null) continue;
@@ -2123,7 +2124,8 @@ function computeFefoOps() {
         // What we can state without guessing: the older lot still holds this much TODAY, and
         // stock only falls, so it held at least this much when it was passed over. A lower
         // bound, not a reconstruction. 0 when the lot is spent and nothing can be claimed.
-        heldAtLeast: stockNow[best] > 0 ? stockNow[best] : 0,
+        heldAtLeast: stockAt(best, when).qty,
+        heldExact: stockAt(best, when).exact,
         needed: mine[i].needed || 0,
         // Ground truth, not a projection: 'expired' = it went off with stock left,
         // 'sitting' = still on the shelf, 'consumed' = used anyway, no harm done.
@@ -2173,7 +2175,12 @@ function computeFefoOps() {
   // usually the drum brought to the floor, and called a 19 g pull a 24 kg one.
   for (oi = 0; oi < merged.length; oi++) {
     var m0 = merged[oi];
-    m0.couldCover = (m0.needed > 0 && m0.heldAtLeast >= m0.needed) ? true : null;
+    if (!(m0.needed > 0)) { m0.couldCover = null; continue; }
+    if (m0.heldAtLeast >= m0.needed) { m0.couldCover = true; continue; }   // provably enough
+    // Short of the requirement. Only a verdict when the figure is exact — nothing was drawn
+    // from that lot since, so today's stock IS what it held. Otherwise unknown, and the row
+    // says nothing rather than guessing.
+    m0.couldCover = m0.heldExact ? false : null;
   }
   out = merged;
   // Worst first: realised cost, then how egregious the swap was.
@@ -2331,7 +2338,7 @@ function _fefoOpsGroups() {
   if (!cov.enough) {
     return { P:P, cov:cov, belowFloor:true, inPeriod:[], flagged:[], groups:{}, order:[],
              evaluable:0, oc:{expired:0,sitting:0,consumed:0}, splitPulls:0,
-             fixedTotal:0, openTotal:0, swapProven:0 };
+             fixedTotal:0, openTotal:0, swapProven:0, topUpOnly:0 };
   }
   var all = computeFefoOps();
   var inPeriod = all.filter(function(d){ return d.when >= P.start && d.when <= P.end; });
@@ -2403,15 +2410,16 @@ function _fefoOpsGroups() {
   });
 
   var oc = { expired:0, sitting:0, consumed:0 };
-  var fixedTotal = 0, swapProven = 0;
+  var fixedTotal = 0, swapProven = 0, topUpOnly = 0;
   flagged.forEach(function(d){
     oc[d.outcome]++;
     if (d.fixedAt) fixedTotal++;
     if (d.couldCover === true) swapProven++;
+    else if (d.couldCover === false) topUpOnly++;
   });
   return { P:P, cov:cov, belowFloor:false, inPeriod:inPeriod, flagged:flagged, groups:groups,
            order:order, evaluable:evaluable, oc:oc, splitPulls:splitPulls.length,
-           fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal, swapProven:swapProven };
+           fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal, swapProven:swapProven, topUpOnly:topUpOnly };
 }
 
 // The panel that replaces the materials table when the pick log is showing.
@@ -2520,7 +2528,11 @@ function _fefoOpsPanelHTML() {
   // held enough at the time. Stated because it is the subset with no room for argument.
   if (G.swapProven) {
     h += '<span style="color:#3a3a38;">&middot;</span>'
-      + '<span title="On these picks the earlier-expiring lot still holds more stock today than the run required, and stock only falls — so it definitely held enough when it was passed over. Simply taking the older lot would have worked." style="color:#9FE1CB;cursor:help;">' + G.swapProven + ' where the older lot clearly had enough</span>';
+      + '<span title="On these picks the earlier-expiring lot holds more stock than the run required, so simply taking it would have worked." style="color:#9FE1CB;cursor:help;">' + G.swapProven + ' where the older lot clearly had enough</span>';
+  }
+  if (G.topUpOnly) {
+    h += '<span style="color:#3a3a38;">&middot;</span>'
+      + '<span title="Here the earlier-expiring lot held less than the run needed, and nothing has been drawn from it since, so that shortfall is exact. First-expiry-first-out meant taking its remainder and topping up from the newer lot — not a swap." style="color:#FAC775;cursor:help;">' + G.topUpOnly + ' needing a top-up rather than a swap</span>';
   }
   // Split pulls, stated rather than silently dropped: they were excluded before the
   // thresholds because drawing the older lot on the same slip is FEFO, not a skip.
@@ -2647,7 +2659,9 @@ function _fefoOpsPanelHTML() {
                     ? '<span title="Qty Needed for this material on this production lot — the amount consumed. The form\'s QTY Picked column often records the drum brought out instead, so it is not used here.">' + fmtStockQty(d.needed) + '</span>'
                     : '<span style="color:#5f5e5a;">&mdash;</span>')
                 + (d.couldCover === true
-                    ? '<div title="' + esc(d.shouldLot) + ' still holds ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' today, and stock only falls, so it held at least that much when it was passed over — comfortably more than the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed. Taking the older lot was straightforwardly possible." style="font-size:10px;color:#9FE1CB;margin-top:1px;cursor:help;">swap was possible</div>'
+                    ? '<div title="' + esc(d.shouldLot) + ' holds ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ', more than the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed. Taking the older lot was straightforwardly possible." style="font-size:10px;color:#9FE1CB;margin-top:1px;cursor:help;">swap was possible</div>'
+                    : d.couldCover === false
+                    ? '<div title="' + esc(d.shouldLot) + ' held only ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' against the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed, and nothing has been drawn from it since, so that figure is exact. First-expiry-first-out here meant taking that remainder and topping up from ' + esc(d.pickedLot) + ', not swapping." style="font-size:10px;color:#FAC775;margin-top:1px;cursor:help;">top-up only &middot; had ' + fmtStockQty(d.heldAtLeast) + '</div>'
                     : '')
               + '</td>'
               // The indicator: a later entry on this production lot named the right T#.
@@ -2696,7 +2710,8 @@ function _filterFefoOps(q) {
 //   byPart      part # -> its lot T#s, so a pick can be compared against its siblings
 //   picksByLot  T# -> its picks, ascending
 //   stockNow    T# -> stock it holds today, straight from the inventory sheet
-//   wasPresent  was this lot on the floor at a past moment (no quantity arithmetic)
+//   stockAt     what a lot held at a past moment, and whether that figure is exact
+//   couldContribute  was it there AND holding enough to matter for a given requirement
 var _fefoIdxCache = null, _fefoIdxKey = '';
 function _fefoIndex() {
   var rows = pickRows || [];
@@ -2772,8 +2787,8 @@ function _fefoIndex() {
   // QTY Picked does not reliably mean "amount consumed" (median 1.5x the requirement, p90
   // 12x, and 24 kg logged against a 19 g requirement), so summing it overstated past
   // balances: T35172 came out at ~174 kg a year ago on a 25 kg drum that still holds 26.4.
-  // wasPresent() below answers the question that was actually being asked, without needing
-  // any quantity at all.
+  // stockAt() below answers the question that was actually being asked, using the inventory
+  // sheet's own figure and no arithmetic on the pick form's quantities.
 
   // Stock a lot holds TODAY. Reliable — it comes from the inventory sheet, not the pick form.
   var stockNow = {};
@@ -2783,27 +2798,48 @@ function _fefoIndex() {
     for (var si = 0; si < slr.length; si++) stockNow[(slr[si].lot || '').toUpperCase()] = slr[si].qty;
   }
 
-  // Was this lot on the floor and usable at time t?
+  // What this lot held at time t, and whether that figure is exact.
   //
-  // This replaces a balance reconstruction (current stock + every pick after t) that could
-  // not be trusted, because QTY Picked does not consistently mean "amount consumed" — it is
-  // often the drum brought out, sometimes a scale reading. T35172 shows six picks of ~24-25 kg
-  // against a 25 kg drum that still holds 26.4 kg; summing those put its balance a year ago at
-  // ~174 kg. Overstated balances make lots look available that were not, which over-reports
-  // mispicks — the wrong direction to be wrong in.
+  // Replaces a balance reconstruction (current stock + every pick after t) that could not be
+  // trusted, because QTY Picked does not consistently mean "amount consumed" — it is often the
+  // drum brought out, sometimes a scale reading. T35172 shows six picks of ~24-25 kg against a
+  // 25 kg drum that still holds 26.4 kg; summing those put its balance a year ago at ~174 kg.
   //
-  // So this asks a question the sheet answers reliably instead, using no quantity arithmetic:
-  //   • it still holds stock today, so it certainly held some earlier (stock only falls), or
-  //   • it was drawn from at or after t, which proves it existed and was in use then.
-  // A lot depleted before t and never touched again fails both, correctly.
+  // The insight that avoids the arithmetic entirely: if nothing has been drawn from a lot since
+  // t, its stock has not moved since t, so today's figure IS its figure then — exactly, from
+  // the inventory sheet. Only when it HAS been drawn from since must we fall back to treating
+  // today's stock as a lower bound, and there we decline to guess.
   //
-  // It errs toward under-reporting: a lot written off after t (rather than picked) reads as
-  // absent when it was there. Under is the safe direction here.
-  function wasPresent(lotNo, t) {
-    if (stockNow[lotNo] > 0) return true;
+  //   present  it still holds stock, or it was drawn from at or after t (so it existed then)
+  //   qty      stock today
+  //   exact    nothing drawn at or after t, so qty is what it held at t, not a bound
+  //
+  // Same-day picks count as "drawn after", conservatively: a lot drawn down on the day of the
+  // decision has an uncertain balance at the moment of it.
+  function stockAt(lotNo, t) {
     var arr = picksByLot[lotNo];
-    if (!arr || !arr.length) return false;
-    return arr[arr.length - 1].t >= t;         // sorted ascending, so this is the latest pick
+    var now = stockNow[lotNo] || 0;
+    var touched = !!(arr && arr.length && arr[arr.length - 1].t >= t);
+    return { qty: now, exact: !touched, present: now > 0 || touched };
+  }
+
+  // Could this lot have contributed anything worth having to a run needing `needed`?
+  //
+  // Only applied when stockAt is exact, because otherwise we do not know. Inositol T30908 is
+  // the case that forced this: 0.1 kg, untouched since 7/7/2026, flagged four times as the lot
+  // that should have been pulled for runs needing 28.8 and 42.6 kg. It could not have supplied
+  // those, and a hundred grams of dust is not an opportunity.
+  //
+  // The bar is min(needed, FEFO_MIN_KG) rather than a flat kilo, because the requirement is
+  // what makes a quantity meaningful: 0.5 kg is ample for a 19 g run and useless for a 30 kg
+  // one. Both directions were wrong before — a flat 1 kg floor discarded real opportunities on
+  // micro-ingredients, and no floor at all admitted dust like this.
+  function couldContribute(lotNo, t, needed) {
+    var sa = stockAt(lotNo, t);
+    if (!sa.present) return false;
+    if (!sa.exact) return true;                      // unknown; do not rule it out
+    var bar = (needed > 0) ? Math.min(needed, FEFO_MIN_KG) : FEFO_MIN_KG;
+    return sa.qty >= bar;
   }
   for (k in byLotPart) { if (!byLotPart.hasOwnProperty(k)) continue;
     byLotPart[k].sort(function(a, b){ return a.t - b.t; });
@@ -2828,7 +2864,8 @@ function _fefoIndex() {
   _fefoIdxKey = key;
   _fefoIdxCache = { idx: idx, byPart: byPart, picksByLot: picksByLot, byLotPart: byLotPart,
                     slots: slots, firstSlot: firstSlot,
-                    stockNow: stockNow, wasPresent: wasPresent, key: key };
+                    stockNow: stockNow, stockAt: stockAt, couldContribute: couldContribute,
+                    key: key };
   return _fefoIdxCache;
 }
 
@@ -2866,7 +2903,7 @@ function computeFefoMisses() {
 
   var ix = _fefoIndex();
   var idx = ix.idx, byPart = ix.byPart, picksByLot = ix.picksByLot;
-  var wasPresent = ix.wasPresent, stockNow = ix.stockNow;
+  var couldContribute = ix.couldContribute, stockNow = ix.stockNow;
   var k, i, j;
   var strand = {}, events = 0;
   for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
@@ -2885,7 +2922,7 @@ function computeFefoMisses() {
         if (sib.exp < when) continue;                 // already expired then — skipping was right
         var rd = parseInvDate(sib.received);
         if (rd && rd.getTime() > when) continue;      // not received yet
-        if (!wasPresent(sn, when)) continue;      // same presence test as the pick log
+        if (!couldContribute(sn, when, mine[i].needed || 0)) continue;   // same test as the pick log
         hit = true;
         if (!strand[sn]) strand[sn] = { skips: 0, last: null, alts: {}, events: [] };
         strand[sn].skips++;
@@ -13906,7 +13943,7 @@ function exportMaterials() {
         + ' A pick is only checkable when the lot pulled AND an earlier-expiring sibling of the same part are both still in the inventory feed, so these counts are a floor rather than a total.'],
       ['Corrected = a later pick entry for the same production lot and part named the lot that should have been pulled, i.e. the pull was put right. OPEN = no such entry exists, so as far as the pick sheet knows it was never corrected.'],
       ['Qty Needed is the formula requirement for this material on this production lot — the amount actually consumed. The form\'s QTY Picked column is not used: it routinely records the drum brought to the floor instead (24 kg logged against a 19 g requirement on micro-ingredients).'],
-      ['Swap Possible = YES where the passed-over lot still holds more stock today than the run needed, so it certainly held enough at the time. Blank means unprovable, NOT that a swap was impossible — nothing records how much a lot held before it was drawn down.'],
+      ['Swap Possible = YES where the passed-over lot holds more than the run needed. NO where it held less AND nothing has been drawn from it since, so that shortfall is exact and first-expiry-first-out meant a top-up rather than a swap. Blank means unprovable — the lot has been drawn from since, and nothing records what it held at the time.'],
       ['Outcome is today’s position of the lot that was passed over, not a projection: EXPIRED = still on the shelf and now past date; ON SHELF = still in stock and in date; USED UP = no stock left, consumed later anyway, no loss.'
         + ' "Its Stock Now" is the quantity behind that word. Legitimate reasons to pass over a lot exist (allergen segregation, a customer-specific lot, a hold) — review, do not assume.'],
       [],
@@ -13925,7 +13962,7 @@ function exportMaterials() {
           d.shouldLot, d.shouldExp == null ? '' : _matExpDateStr(d.shouldExp),
           d.lifeLeft, Math.round(d.gapDays / 30),
           d.needed > 0 ? Math.round(d.needed * 1000) / 1000 : '',
-          d.couldCover === true ? 'YES' : '',
+          d.couldCover === true ? 'YES' : (d.couldCover === false ? 'NO — top-up only' : ''),
           d.fixedAt ? _matExpDateStr(d.fixedAt) : 'OPEN',
           _opsOutcomeWord[d.outcome] || d.outcome,
           d.outcome === 'consumed' ? 0 : Math.round(d.leftKg * 100) / 100
