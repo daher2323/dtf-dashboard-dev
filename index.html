@@ -10981,7 +10981,14 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
     + (miss.received ? '; it was received ' + esc(miss.received) : '')
     + '. Skipping a lot can be legitimate — allergen segregation, a customer-specific lot, a hold — so read this as a prompt to look, not a verdict.';
   if (miss.eventsTotal > evs.length) note = (miss.eventsTotal - evs.length) + ' earlier skips not shown. ' + note;
+  // Same width-neutrality the inline panel needs one level up (see mat-inline), for the same
+  // reason: without it this cell's content width is fed back into the lot table's columns, and
+  // a colspan cell spreads that across EVERY column. The lot table measured 2008px inside a
+  // 1350px panel — ~285px of pressure on each of its seven columns — which pushed Supplier /
+  // batch and Received out of sight and made the evidence table, sized at 100% of that cell,
+  // 1982px wide. width:0 contributes nothing; min-width:100% fills the cell afterwards.
   return '<tr><td colspan="' + nCols + '" style="padding:0;">'
+    + '<div style="width:0;min-width:100%;">'
     + '<div style="background:#0f1012;border-left:2px solid #FAC775;padding:8px 12px 10px 12px;">'
     + '<div style="font-size:10px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:5px;">'
       + 'What was picked instead &middot; ' + miss.skips + ' skip' + (miss.skips===1?'':'s') + '</div>'
@@ -10997,7 +11004,7 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
       + '<th style="' + thR + '">We had</th><th style="' + thR + '">Life left</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
     + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">' + note + '</div>'
-    + '</div></td></tr>';
+    + '</div></div></td></tr>';
 }
 // Expand/collapse one lot's skip evidence, then repaint just the open material's
 // panel — the table lives inside it, so no full re-render is needed.
