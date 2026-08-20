@@ -10985,19 +10985,12 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
     + '<div style="background:#0f1012;border-left:2px solid #FAC775;padding:8px 12px 10px 12px;">'
     + '<div style="font-size:10px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:5px;">'
       + 'What was picked instead &middot; ' + miss.skips + ' skip' + (miss.skips===1?'':'s') + '</div>'
-    // Shrink-to-content, NOT width:100%. This table is nested in a colspan cell of the lot
-    // table, so 100% meant "as wide as the lot table" — which is itself wider than the panel
-    // on a zoomed or narrow screen. Seven nowrap columns then got stretched across that width
-    // with ~200px of dead air between them, and the last two (We had, Life left) fell outside
-    // the visible area, so the one column that says whether the lot was in date was the one
-    // you had to scroll for. Auto width packs the columns together and the whole row reads
-    // without scrolling; the wrapper keeps overflow-x for the genuinely narrow case.
-    //
-    // width:auto has to be stated. The stylesheet carries a bare `table { width: 100% }`, so
-    // dropping the inline width does nothing at all — the element just inherits the same 100%
-    // from the rule. Every other table in this file wants that default; this one is the
-    // exception and has to say so.
-    + '<div style="overflow-x:auto;"><table style="width:auto;border-collapse:collapse;">'
+    // Full width, like every other table here. This briefly ran at width:auto to escape a
+    // stretched layout, which treated the symptom: the container was over-wide because the
+    // inline panel cell had no width constraint (see mat-inline above). Shrink-wrapping left
+    // the table stranded in the left third of the card. With the cell fixed, 100% is the
+    // frame width and the columns distribute across it.
+    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="' + th + '">Date</th><th style="' + th + '">Production lot</th><th style="' + th + '">Used instead</th>'
       + '<th style="' + thR + '">Its expiry</th><th style="' + thR + '">Kg pulled</th>'
@@ -11955,7 +11948,16 @@ function renderMaterials() {
       +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.totalKg)+'</td>'
       +'</tr>'
       +'<tr id="mat-inline-row-'+i+'" style="display:'+(isSelected?'':'none')+';">'
-        +'<td colspan="'+colSpan+'" style="padding:0;"><div id="mat-inline-'+i+'"></div></td>'
+        // width:0 + min-width:100% keeps the expanded panel OUT of the table's width
+        // calculation. Without it every table inside the panel — the lot table, the skip
+        // evidence, the parts breakdown — added its own content width to this colspan cell,
+        // which auto table layout distributes back across the columns above: expanding a
+        // material shifted its whole row right and pushed the last column (Supplier / Batch)
+        // off the frame, and everything inside the panel inherited that over-wide cell, so a
+        // width:100% child rendered wider than the visible card and had to be scrolled.
+        // width:0 makes the panel contribute nothing intrinsically; min-width:100% then fills
+        // the cell once the table has sized itself from the collapsed rows alone.
+        +'<td colspan="'+colSpan+'" style="padding:0;"><div id="mat-inline-'+i+'" style="width:0;min-width:100%;"></div></td>'
       +'</tr>';
   }).join('');
   if (!tableRows) {
