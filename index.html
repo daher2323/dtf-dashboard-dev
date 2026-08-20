@@ -2507,6 +2507,32 @@ function _fefoOpsPanelHTML() {
         + '</div>'
         + '<span>later.</span>'
       + '</div>'
+      // ── How to close one out ──
+      // The Fixed column is the only thing here with no adoption: it reads em-dash on every
+      // row, and the one historical match is almost certainly coincidence. Until this session
+      // nothing told anyone a mispick had happened, so nobody had reason to re-log a swap.
+      //
+      // The instruction existed only as a tooltip on that grey dash, which nobody hovers. If
+      // the board does not teach the loop the loop does not happen — and "0 corrected" then
+      // reads as nobody fixing anything, rather than nobody having been told how to record it.
+      //
+      // Two details are load-bearing and both are stated explicitly. The production lot # and
+      // part # must match the original, because that pair is what byLotPart keys on; a swap
+      // logged under a different lot number will not match and the row stays open. And it has
+      // to be a NEW entry — editing the original Form response makes the mispick vanish from
+      // the feed rather than turn green, leaving no confirmation and no audit trail.
+      //
+      // Shown only while something is actually open, so a fully-corrected week does not carry
+      // an instruction with nothing to apply it to.
+      + (G.openTotal > 0
+          ? '<div style="margin-top:9px;padding-top:9px;border-top:0.5px solid #2c2c2a;font-size:11px;color:#888780;font-family:system-ui;line-height:1.55;">'
+            + '<span style="color:#9FE1CB;font-weight:500;">Pulled the wrong lot?</span> '
+            + 'Re-log the pick with the correct T# &mdash; '
+            + 'same <span style="color:#e8e6e0;">production lot&nbsp;#</span> and <span style="color:#e8e6e0;">part&nbsp;#</span> '
+            + '&mdash; and this row turns green. '
+            + '<span style="color:#5f5e5a;">Editing the original entry instead makes the pick disappear rather than show as corrected.</span>'
+            + '</div>'
+          : '')
     + '</div>';
 
   // ── Below the coverage floor: say so instead of showing a short list ──
