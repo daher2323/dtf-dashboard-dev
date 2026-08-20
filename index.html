@@ -2145,28 +2145,54 @@ function computeFefoOps() {
       });
     }
   }
-  // ── One row per DECISION, not per draw ──
-  // A picker can draw the same drum more than once in a day for the same production lot —
-  // two weighings, two submissions, hours apart. That is one choice of lot (this one over
-  // that one), so it belongs on one row with the quantities summed. Left split it rendered as
-  // two identical-looking rows, since the date column shows only the day, and it inflated the
-  // open count: the DMAE example read "2 open" for a single decision.
+  // ── One row per DECISION: one older lot passed over, on one run, on one day ──
   //
-  // Keyed on the day rather than the timestamp because `when` is already day-granular
-  // (_fefoPickDate drops the time). bothPulled ORs across the day: if the earlier-expiring lot
-  // was drawn on ANY slip that day then FEFO was followed, whichever slip it was on.
-  // couldCover is computed here, against the day's TOTAL, because whether a swap was possible
-  // depends on the whole pull and not on one weighing of it.
+  // The finding is "for run 2608038 you should have used T27882 and didn't". That is a single
+  // fact however many newer drums the run drew from, so the key is the lot that SHOULD have
+  // been pulled — not the drum that was. Keying on the drum instead produced a row per draw,
+  // which mis-stated the view in three ways: a run split across three drums read as three
+  // separate failures, the group badge said "2 open" for one, and Qty Needed — a property of
+  // the (run, material), not of a drum — was repeated on every sibling row (319 of 1,065
+  // flagged) or summed across duplicate submissions (19 more), so the column could not be read
+  // down the page.
+  //
+  // Keyed on the day, not the timestamp, because `when` is already day-granular
+  // (_fefoPickDate drops the time).
+  //
+  //   needed    MAX across contributing rows, never the sum. Sibling drums on one slip each
+  //             carry that slip's requirement; a re-submitted slip restates the same one; a
+  //             revised requirement (63 -> 88 exists in the feed) is best represented by the
+  //             larger. Max is also the safe direction — a bigger requirement makes "the older
+  //             lot could have covered it" harder to prove, so it under-claims rather than over.
+  //   pulled    every drum taken instead, with its expiry, so no detail is lost by merging
+  //   gapDays   the WORST gap among those drums, which is what the threshold and sort should
+  //             judge; gapMin carries the other end so the row can show a range
+  //   bothPulled  ORs: if the older lot was drawn on ANY slip that day, FEFO was followed
   var merged = [], byDecision = {};
   for (var oi = 0; oi < out.length; oi++) {
     var d0 = out[oi];
-    var dk = d0.when + '|' + d0.orderLot + '|' + d0.part + '|' + d0.pickedLot + '|' + d0.shouldLot;
-    if (byDecision[dk] === undefined) { byDecision[dk] = merged.length; merged.push(d0); continue; }
+    var dk = d0.when + '|' + d0.orderLot + '|' + d0.part + '|' + d0.shouldLot;
+    if (byDecision[dk] === undefined) {
+      byDecision[dk] = merged.length;
+      d0.pulled = [{ lot: d0.pickedLot, exp: d0.pickedExp }];
+      d0.gapMin = d0.gapDays;
+      merged.push(d0);
+      continue;
+    }
     var prev = merged[byDecision[dk]];
+    var seenLot = false;
+    for (var pj = 0; pj < prev.pulled.length; pj++) if (prev.pulled[pj].lot === d0.pickedLot) { seenLot = true; break; }
+    if (!seenLot) prev.pulled.push({ lot: d0.pickedLot, exp: d0.pickedExp });
     prev.qty += d0.qty;
-    prev.needed += d0.needed;
+    if (d0.needed > prev.needed) prev.needed = d0.needed;
+    if (d0.gapDays > prev.gapDays) prev.gapDays = d0.gapDays;
+    if (d0.gapDays < prev.gapMin) prev.gapMin = d0.gapDays;
     if (d0.bothPulled) prev.bothPulled = true;
     if (d0.fixedAt != null && (prev.fixedAt == null || d0.fixedAt < prev.fixedAt)) prev.fixedAt = d0.fixedAt;
+  }
+  // Earliest-expiring drum first, so the cell reads in the same order as the rest of the view.
+  for (oi = 0; oi < merged.length; oi++) {
+    merged[oi].pulled.sort(function(a, b){ return (a.exp || 0) - (b.exp || 0); });
   }
   // Was a straight swap provably possible? Compare the REQUIREMENT against what the older
   // lot demonstrably still holds. Both sides are trustworthy: Qty Needed is what consumption
@@ -2406,7 +2432,9 @@ function _fefoOpsGroups() {
     var g = groups[part];
     var hay = (g.material || '') + ' ' + part;
     g.rows.forEach(function(d){
-      hay += ' ' + d.pickedLot + ' ' + d.shouldLot + ' ' + d.orderLot;
+      hay += ' ' + d.shouldLot + ' ' + d.orderLot;
+        // Every drum taken, so a T# search still reaches the decision it was part of.
+        for (var pk = 0; pk < d.pulled.length; pk++) hay += ' ' + d.pulled[pk].lot;
       var nm = _fefoOpsLotName(d.orderLot);
       if (nm) hay += ' ' + nm.brand + ' ' + nm.product;
     });
@@ -2647,7 +2675,9 @@ function _fefoOpsPanelHTML() {
           + '<th style="' + th + '">Pulled</th>'
           + '<th style="' + th + '">Should have pulled</th>'
           + '<th style="' + th + 'text-align:right;">Apart</th>'
-          + '<th style="' + th + 'text-align:right;">Qty</th>'
+          // "Qty" invited reading it as the amount from this drum. It never was: the figure
+          // is the run's requirement for the material, which is why it belongs on one row.
+          + '<th style="' + th + 'text-align:right;">Run needed</th>'
           + '<th style="' + th + 'text-align:center;">Fixed</th>'
           + '<th style="' + th + 'text-align:right;padding-right:14px;">Outcome</th>'
         + '</tr></thead><tbody>'
@@ -2672,9 +2702,26 @@ function _fefoOpsPanelHTML() {
                         + '</div>'
                       : '')
               + '</td>'
-              + '<td style="' + td + '">' + _blendCopyCell(d.pickedLot) + ' <span style="color:#5f5e5a;font-size:10px;">exp ' + _fefoOpsShortDate(d.pickedExp) + '</span></td>'
+              // Every drum taken instead of the older lot, each with its own expiry. A run
+              // split across three drums is one decision, but which drums it was is exactly
+              // the detail that must survive the merge.
+              + '<td style="' + td + 'vertical-align:top;">'
+                + d.pulled.map(function(pl, pi){
+                    return (pi ? '<div style="margin-top:2px;">' : '<div>')
+                      + _blendCopyCell(pl.lot)
+                      + ' <span style="color:#5f5e5a;font-size:10px;">exp ' + _fefoOpsShortDate(pl.exp) + '</span>'
+                      + '</div>';
+                  }).join('')
+              + '</td>'
               + '<td style="' + td + '">' + _blendCopyCell(d.shouldLot) + ' <span style="color:#FAC775;font-size:10px;">exp ' + _fefoOpsShortDate(d.shouldExp) + ' &middot; ' + d.lifeLeft + 'd left</span></td>'
-              + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">' + Math.round(d.gapDays/30) + ' mo</td>'
+              // A range where the drums taken expire at different removes from the older
+              // lot — picking one figure would misreport the others.
+              + (function(){
+                  var hi = Math.round(d.gapDays/30), lo = Math.round(d.gapMin/30);
+                  var txt = (lo === hi) ? hi + ' mo' : lo + '\u2013' + hi + ' mo';
+                  var tip = (lo === hi) ? '' : ' title="The drums taken expire between ' + lo + ' and ' + hi + ' months later than ' + esc(d.shouldLot) + '."';
+                  return '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;vertical-align:top;"' + tip + '>' + txt + '</td>';
+                })()
               // The REQUIREMENT, not QTY Picked. QTY Picked routinely records the drum
               // brought to the floor rather than the amount consumed — 24 kg logged against
               // a 19 g requirement — so showing it made every micro-ingredient look like a
@@ -2686,7 +2733,7 @@ function _fefoOpsPanelHTML() {
                 + (d.couldCover === true
                     ? '<div title="' + esc(d.shouldLot) + ' holds ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ', more than the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed. Taking the older lot was straightforwardly possible." style="font-size:10px;color:#9FE1CB;margin-top:1px;cursor:help;">swap was possible</div>'
                     : d.couldCover === false
-                    ? '<div title="' + esc(d.shouldLot) + ' held only ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' against the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed, and nothing has been drawn from it since, so that figure is exact. First-expiry-first-out here meant taking that remainder and topping up from ' + esc(d.pickedLot) + ', not swapping." style="font-size:10px;color:#FAC775;margin-top:1px;cursor:help;">top-up only &middot; had ' + fmtStockQty(d.heldAtLeast) + '</div>'
+                    ? '<div title="' + esc(d.shouldLot) + ' held only ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' against the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed, and nothing has been drawn from it since, so that figure is exact. First-expiry-first-out here meant taking that remainder and topping up from what was pulled instead, not swapping." style="font-size:10px;color:#FAC775;margin-top:1px;cursor:help;">top-up only &middot; had ' + fmtStockQty(d.heldAtLeast) + '</div>'
                     // Third state, stated rather than left blank. Where the lot still holds
                     // less than the run needed, a reader sees a small on-shelf figure beside a
                     // large quantity and expects a top-up label; getting nothing reads as an
@@ -13954,7 +14001,7 @@ function exportMaterials() {
   var _opsN = 0;
   _opsOrder.forEach(function(p){ _opsN += _ops.groups[p].rows.length; });
   if (_opsN) {
-    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Pulled T#','Pulled Expires','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart','Qty Needed','Swap Possible','Corrected','Outcome','Its Stock Now'];
+    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Lots Pulled Instead','Their Expiries','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart (worst)','Run Needed','Swap Possible','Corrected','Outcome','Its Stock Now'];
     var s5Rows = [
       ['FEFO pick opportunities — ' + _ops.P.label],
       ['Exported: '+dateStr+' · '+_opsN+' flagged pick'+(_opsN===1?'':'s')+' across '+_opsOrder.length+' material'+(_opsOrder.length===1?'':'s')
@@ -13975,7 +14022,8 @@ function exportMaterials() {
       ['Of '+_ops.inPeriod.length+' picks in this period that had an earlier lot available, out of '+_ops.evaluable+' checkable picks.'
         + ' A pick is only checkable when the lot pulled AND an earlier-expiring sibling of the same part are both still in the inventory feed, so these counts are a floor rather than a total.'],
       ['Corrected = a later pick entry for the same production lot and part named the lot that should have been pulled, i.e. the pull was put right. OPEN = no such entry exists, so as far as the pick sheet knows it was never corrected.'],
-      ['Qty Needed is the formula requirement for this material on this production lot — the amount actually consumed. The form\'s QTY Picked column is not used: it routinely records the drum brought to the floor instead (24 kg logged against a 19 g requirement on micro-ingredients).'],
+      ['One row per decision: one older lot passed over, on one run, on one day. Where the run drew from several newer drums they are listed together in "Lots Pulled Instead", because that is one FEFO failure and not several.'],
+      ['Run Needed is the formula requirement for this material on this production lot — the amount actually consumed, and a property of the run rather than of any one drum. Where slips disagree the larger figure is used. The form\'s QTY Picked column is not used at all: it routinely records the drum brought to the floor instead (24 kg logged against a 19 g requirement on micro-ingredients).'],
       ['Swap Possible = YES where the passed-over lot holds more than the run needed. NO where it held less AND nothing has been drawn from it since, so that shortfall is exact and first-expiry-first-out meant a top-up rather than a swap. UNKNOWN where it now holds less than was needed but was drawn from again on or after the pick date, so what it held at the time is not recorded — it may have covered the run outright. Blank where the lot is spent and no comparison of quantities is possible.'],
       ['Outcome is today’s position of the lot that was passed over, not a projection: EXPIRED = still on the shelf and now past date; ON SHELF = still in stock and in date; USED UP = no stock left, consumed later anyway, no loss.'
         + ' "Its Stock Now" is the quantity behind that word. Legitimate reasons to pass over a lot exist (allergen segregation, a customer-specific lot, a hold) — review, do not assume.'],
@@ -13985,13 +14033,16 @@ function exportMaterials() {
     var _opsOutcomeWord = { expired:'EXPIRED', sitting:'ON SHELF', consumed:'USED UP' };
     _opsOrder.forEach(function(p){
       var g = _ops.groups[p];
-      g.rows.slice().sort(function(a,b){ return b.when - a.when; }).forEach(function(d){
+      // Order already settled in _fefoOpsGroups (still-open first, then newest) so the sheet
+      // and the screen agree; re-sorting here would quietly break that.
+      g.rows.forEach(function(d){
         var nm = _fefoOpsLotName(d.orderLot);
         s5Rows.push([
           _matExpDateStr(d.when),
           g.material || '', d.part, d.orderLot || '',
           nm ? nm.brand : '', nm ? nm.product : '',
-          d.pickedLot, d.pickedExp == null ? '' : _matExpDateStr(d.pickedExp),
+          d.pulled.map(function(pl){ return pl.lot; }).join(', '),
+          d.pulled.map(function(pl){ return pl.exp == null ? '' : _matExpDateStr(pl.exp); }).join(', '),
           d.shouldLot, d.shouldExp == null ? '' : _matExpDateStr(d.shouldExp),
           d.lifeLeft, Math.round(d.gapDays / 30),
           d.needed > 0 ? Math.round(d.needed * 1000) / 1000 : '',
@@ -14014,7 +14065,8 @@ function exportMaterials() {
       {s:{r:3,c:0},e:{r:3,c:s5Headers.length-1}},
       {s:{r:4,c:0},e:{r:4,c:s5Headers.length-1}},
       {s:{r:5,c:0},e:{r:5,c:s5Headers.length-1}},
-      {s:{r:6,c:0},e:{r:6,c:s5Headers.length-1}}
+      {s:{r:6,c:0},e:{r:6,c:s5Headers.length-1}},
+      {s:{r:7,c:0},e:{r:7,c:s5Headers.length-1}}
     ];
     XLSX.utils.book_append_sheet(wb, ws5, 'Pick Opportunities');
   }
