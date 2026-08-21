@@ -5464,9 +5464,13 @@ function _logiRefCell(text, kind, link) {
     // Neutral, NOT blue. Blue means clickable everywhere else in this app, and a BOL has
     // nowhere to go — carrier pages want the PRO/tracking value. Sitting one separator away
     // from a real tracking link, the old #a8c7e8 was close enough to #85B7EB to read as the
-    // same thing, so people tried to click it. Weight 500 in the primary text colour keeps it
-    // prominent (it is the brightest colour in the palette) while promising nothing; the
-    // missing external-link icon and the copy button say what it is instead.
+    // same thing, so people tried to click it.
+    //
+    // Secondary text weight, not emphasis. The first pass used #e8e6e0 at weight 500 and
+    // over-corrected: the number stopped looking clickable and started looking important,
+    // which it is not — a BOL is the one value on the line with nothing to do. It should be
+    // legible when you go looking for it and quiet when you are not. The missing external-link
+    // icon and the copy button carry the meaning instead.
     //
     // This also correctly catches a Tracking # whose carrier has no link pattern: it is not
     // clickable, so it must not look clickable. Blue is reserved for the ones that work.
@@ -5474,7 +5478,7 @@ function _logiRefCell(text, kind, link) {
     // Deliberately local to Logistics. #a8c7e8 is still the identifier colour in Quality's
     // blend/recall cells (_blendCopyCell), where nothing adjacent is a link and there is no
     // ambiguity to resolve.
-    val = '<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;">' + esc(text) + '</span>';
+    val = '<span onclick="event.stopPropagation();" style="user-select:text;-webkit-user-select:text;cursor:text;color:#cfcdc7;font-variant-numeric:tabular-nums;">' + esc(text) + '</span>';
   }
   return tag + val
     + '<button onclick="event.stopPropagation();_logiCopy(' + jsStr(text) + ',this)" title="Copy tracking / BOL" style="margin-left:4px;background:transparent;border:none;cursor:pointer;color:#5f5e5a;padding:0;vertical-align:-1px;" onmouseover="this.style.color=\'#85B7EB\'" onmouseout="this.style.color=\'#5f5e5a\'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/></svg></button>';
