@@ -5309,11 +5309,63 @@ function _logiTrendAvg(data) {
   for (i = 0; i < data.length; i++) { if (data[i] > 0) { s += data[i]; c++; } }
   return c ? Math.round(s / c) : 0;
 }
+// Bar colours live here rather than inline because the value-label plugin reads them back to
+// work out which bucket is the selected one — one source of truth beats a second copy of the
+// selected index that could drift from the bars.
+var LOGI_TREND_BAR = '#3987e5', LOGI_TREND_BAR_SEL = '#85B7EB';
+// Value on top of each bar. Written as an inline plugin instead of pulling in
+// chartjs-plugin-datalabels: one hook, no new CDN dependency to keep pinned.
+//
+// The point is reading a difference at a glance. Comparing bar heights against a gridline and
+// then holding two numbers in your head is work, and the tooltip only answers for one bar at a
+// time — you cannot compare with it, which is exactly what this chart is for.
+//
+// Three things it has to get right:
+//   fit      Labels are drawn only when the text fits the category pitch. Daily granularity
+//            over a long window packs bars a few pixels apart, where labels would overlap into
+//            mush; they drop out instead. The tooltip still answers there, and the aria-label
+//            still carries every value.
+//   zeros    An empty bucket gets no label. A row of floating "0"s above nothing is noise, and
+//            the absent bar already says it.
+//   legible  Labels sit above the bar top, which is where the dashed average line often is.
+//            Stroking the text in the card background first gives it a halo, so it stays
+//            readable crossing the average line or a gridline without drawing a box.
+var _LOGI_TREND_LABELS = {
+  id: 'logiTrendLabels',
+  afterDatasetsDraw: function(chart) {
+    var meta = chart.getDatasetMeta(0);                 // dataset 0 is the bars; 1 is the average line
+    if (!meta || meta.hidden || !meta.data || !meta.data.length) return;
+    var ds = chart.data.datasets[0], ctx = chart.ctx, i;
+    // Category pitch, not bar width: bars are capped at 24px but sit in much wider slots.
+    var pitch = meta.data.length > 1
+      ? Math.abs(meta.data[1].x - meta.data[0].x)
+      : (chart.chartArea.right - chart.chartArea.left);
+    var bg = Array.isArray(ds.backgroundColor) ? ds.backgroundColor : [];
+    ctx.save();
+    ctx.font = '500 10px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineJoin = 'round';
+    for (i = 0; i < meta.data.length; i++) {
+      var v = ds.data[i];
+      if (!v) continue;
+      var txt = Math.round(v).toLocaleString();
+      if (ctx.measureText(txt).width > pitch - 4) continue;
+      var el = meta.data[i], y = el.y - 5;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#1e2124';                      // card background — a halo, not a box
+      ctx.strokeText(txt, el.x, y);
+      ctx.fillStyle = bg[i] === LOGI_TREND_BAR_SEL ? '#e8e6e0' : '#888780';
+      ctx.fillText(txt, el.x, y);
+    }
+    ctx.restore();
+  }
+};
 function _drawLogiTrendChart(trend) {
   var cv = document.getElementById('logiTrendChart');
   if (!cv || typeof Chart === 'undefined') return;
   var data = trend[logiTrendMetric], colors = [], i;
-  for (i = 0; i < data.length; i++) colors.push(i === trend.selectedIndex ? '#85B7EB' : '#3987e5');
+  for (i = 0; i < data.length; i++) colors.push(i === trend.selectedIndex ? LOGI_TREND_BAR_SEL : LOGI_TREND_BAR);
   var avg = _logiTrendAvg(data), avgData = [];
   for (i = 0; i < data.length; i++) avgData.push(avg);
   charts.logiTrend = new Chart(cv, {
@@ -5322,8 +5374,12 @@ function _drawLogiTrendChart(trend) {
       { type: 'bar', data: data, backgroundColor: colors, borderRadius: 4, maxBarThickness: 24, order: 2 },
       { type: 'line', label: 'avg', data: avgData, borderColor: '#EF9F27', borderWidth: 1.5, borderDash: [3,3], pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0, order: 1 }
     ]},
+    plugins: [_LOGI_TREND_LABELS],
     options: {
       responsive: true, maintainAspectRatio: false,
+      // Headroom for the tallest bar's label. The y scale tops out at the highest value, so
+      // without this the label above it would sit off-canvas whenever the max lands on a tick.
+      layout: { padding: { top: 16 } },
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx){ if (ctx.dataset.label === 'avg') return 'avg: ' + Math.round(ctx.raw).toLocaleString(); return ctx.raw.toLocaleString(); } } } },
       scales: {
         x: { ticks: { color: '#888780', font: { size: 10 }, autoSkip: false, maxRotation: 45 }, grid: { display: false } },
@@ -5340,7 +5396,7 @@ function _updateLogiTrend() {
   var ch = charts.logiTrend;
   if (!ch) return;
   var data = trend[logiTrendMetric], colors = [], i;
-  for (i = 0; i < data.length; i++) colors.push(i === trend.selectedIndex ? '#85B7EB' : '#3987e5');
+  for (i = 0; i < data.length; i++) colors.push(i === trend.selectedIndex ? LOGI_TREND_BAR_SEL : LOGI_TREND_BAR);
   var avg = _logiTrendAvg(data), avgData = [];
   for (i = 0; i < data.length; i++) avgData.push(avg);
   ch.data.labels = trend.labels;
