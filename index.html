@@ -2273,7 +2273,11 @@ function computeFefoOps() {
 }
 
 // ── FEFO opportunities view: state, period window, rendering ──────────────
-var fefoOpsView = false;      // false = the stranded-lot review list, true = the pick log
+// true = the pick log, false = the stranded-lot review list. The pick log leads because it is
+// the day-to-day monitoring surface: it names decisions made in the last few hours, while
+// material is still on the floor and a swap is still possible. Lots at risk is a remediation
+// list — real work, but work that keeps. Landing on the queue rather than the backlog.
+var fefoOpsView = true;
 // 'day' | 'week' | 'month' | 'quarter'. Daily by default because this is a monitoring view
 // before it is a reporting one: a mispick caught the same day can still be put right — the
 // older lot is on the shelf and the run is in front of you — while by Thursday a Monday miss
@@ -10579,6 +10583,10 @@ function setMaterialsAllSegment() {
 function setMaterialsFefoOnly(v) {
   materialsFefoOnly = !!v;
   if (materialsFefoOnly) {
+    // Always arrive on the pick log. fefoOpsView is sticky within a session, so without this a
+    // trip to Lots at risk an hour ago decides what the next person sees when they open FEFO
+    // review — and the whole point of the segment is to land on today's queue.
+    fefoOpsView = true;
     matInlineTab = 'lots';        // ditto — the evidence lives on the Lots tab
     materialsShortOnly = false;
     materialsExpiringOnly = false;
@@ -12208,8 +12216,8 @@ function renderMaterials() {
         +(materialsFefoOnly
           ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
             +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+              +'<button type="button" onclick="setFefoOpsView(true)" title="The individual picks — by day, week, month or quarter — where an earlier-expiring lot was available and was passed over. Caught the same day, a pick can still be put right; it also includes decisions that turned out fine, and says so." style="'+_fefoOpsBtn(fefoOpsView)+'">Pick opportunities</button>'
               +'<button type="button" onclick="setFefoOpsView(false)" title="Lots sitting in stock that keep getting walked past and are now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days. What to go move today." style="'+_fefoOpsBtn(!fefoOpsView)+'">Lots at risk</button>'
-              +'<button type="button" onclick="setFefoOpsView(true)" title="The individual picks, by week/month/quarter, where an earlier-expiring lot was available and was passed over. A training view — it includes decisions that turned out fine, and says so." style="'+_fefoOpsBtn(fefoOpsView)+'">Pick opportunities</button>'
             +'</div>'
           : '')
       +'</div>'
