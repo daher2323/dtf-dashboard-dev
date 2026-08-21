@@ -2014,6 +2014,29 @@ function _fefoPickDate(v) {
   if (!s) return null;
   return parseInvDate(s.split(' ')[0]);
 }
+// The same stamp to the second. Every bucketing decision in this view is day-level and stays
+// that way — this exists for ONE question: was a pick put right afterwards? Corrections are
+// same-day by necessity (material is pulled one day and blended the next, so a miss not fixed
+// today cannot be fixed at all), and a day-level clock cannot tell a correction from the
+// mistake it corrects. Returns null when there is no readable time, so callers fall back to
+// the date comparison rather than inventing an ordering.
+function _fefoPickTs(v) {
+  var s = (v == null ? '' : String(v)).trim();
+  if (!s) return null;
+  var sp = s.split(/\s+/);
+  var d = parseInvDate(sp[0]);
+  if (!d) return null;
+  if (sp.length < 2) return null;
+  var hms = sp[1].split(':');
+  var h = parseInt(hms[0], 10), mi = parseInt(hms[1], 10), se = parseInt(hms[2], 10);
+  if (isNaN(h) || isNaN(mi)) return null;
+  // Google Forms stamps 24-hour time, but tolerate a trailing AM/PM if the sheet's locale changes.
+  var ap = (sp[2] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  else if (ap === 'AM' && h === 12) h = 0;
+  if (h > 23 || mi > 59) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi, isNaN(se) ? 0 : se).getTime();
+}
 // ── FEFO opportunities: the pick decisions themselves ─────────────────────
 // computeFefoMisses answers "which lots are stranded and at risk today" — a
 // remediation list. This answers a different question for the same data: in a given
@@ -2107,12 +2130,26 @@ function computeFefoOps() {
       // production lot and part that names the lot which should have been pulled. Reads
       // zero across all history because nothing was telling anyone a mispick had happened;
       // it starts counting the first time someone re-logs a swapped pull.
+      //
+      // "Later" is measured on the SUBMISSION CLOCK, not the calendar day. This compared
+      // day-level stamps and so could never see a same-day correction — which is every
+      // correction that matters: material is pulled one day and blended the next, so a miss
+      // caught today and swapped this afternoon is the whole exercise. The board told people to
+      // re-log the pick and watch the row turn green, and in the one case they would actually
+      // hit, nothing happened.
+      //
+      // Falls back to the date when either stamp has no readable time, which keeps the old
+      // behaviour for those rows rather than dropping them. An identical stamp is not later, so
+      // a form re-submitted twice in the same second still cannot correct itself.
       var fixedAt = null;
       var lpRows = ix.byLotPart[mine[i].lpKey] || [];
+      var myTs = mine[i].tf;
       for (var fi = 0; fi < lpRows.length; fi++) {
-        if (lpRows[fi].t <= when) continue;                 // must be a later slip
+        var rowTs2 = lpRows[fi].tf;
+        var later = (myTs != null && rowTs2 != null) ? (rowTs2 > myTs) : (lpRows[fi].t > when);
+        if (!later) continue;
         if (lpRows[fi].ts.indexOf(best) === -1) continue;   // must name the right lot
-        fixedAt = lpRows[fi].t;
+        fixedAt = rowTs2 != null ? rowTs2 : lpRows[fi].t;
         break;                                             // earliest correction wins
       }
       out.push({
@@ -2347,6 +2384,17 @@ function _fefoOpsShortDate(ms) {
   if (ms == null) return '—';
   var d = new Date(ms);
   return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
+}
+// How a correction is stamped. Same-day corrections are the norm — and the point — so showing
+// the date next to a pick from that same date says nothing; the time does. Older corrections
+// keep the date, where the day is the useful part and the clock is noise.
+function _fefoOpsFixedStamp(fixedMs, pickMs) {
+  if (fixedMs == null) return '—';
+  var f = new Date(fixedMs), p = new Date(pickMs);
+  if (f.toDateString() !== p.toDateString()) return _fefoOpsShortDate(fixedMs);
+  var h = f.getHours(), mi = f.getMinutes(), ap = h < 12 ? 'am' : 'pm';
+  h = h % 12; if (h === 0) h = 12;
+  return h + ':' + (mi < 10 ? '0' : '') + mi + ap;
 }
 // "used since" used to sit on any lot under 25 kg, including ones that had already expired.
 // The wording now follows the lot's actual state, and the badge carries the quantity so it
@@ -2792,7 +2840,7 @@ function _fefoOpsPanelHTML() {
               // The indicator: a later entry on this production lot named the right T#.
               + '<td style="' + td + 'text-align:center;">'
                 + (d.fixedAt
-                    ? '<span title="Corrected ' + _fefoOpsShortDate(d.fixedAt) + ' — a later pick entry for this production lot and part named ' + esc(d.shouldLot) + '." style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:#085041;color:#9FE1CB;cursor:help;">&#10003; ' + _fefoOpsShortDate(d.fixedAt) + '</span>'
+                    ? '<span title="Corrected ' + _fefoOpsShortDate(d.fixedAt) + ' at ' + new Date(d.fixedAt).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }) + ' — a later pick entry for this production lot and part named ' + esc(d.shouldLot) + '." style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:#085041;color:#9FE1CB;cursor:help;">&#10003; ' + _fefoOpsFixedStamp(d.fixedAt, d.when) + '</span>'
                     : '<span title="No later pick entry for this production lot and part names ' + esc(d.shouldLot) + '. Re-log the pick once the drum is swapped and this turns green." style="color:#5f5e5a;cursor:help;">&mdash;</span>')
               + '</td>'
               // Badge carries the quantity still on the skipped lot, so the word can never
@@ -2866,7 +2914,7 @@ function _fefoIndex() {
   for (i = 0; i < rows.length; i++) {
     var d = _fefoPickDate(rows[i].date);
     if (!d) continue;
-    var t = d.getTime(), slots = rows[i].slots || [];
+    var t = d.getTime(), tf = _fefoPickTs(rows[i].date), slots = rows[i].slots || [];
     // Every DISTINCT T# on this one slip, with the slip's quantities for that lot summed.
     //
     // The form carries four T#/qty pairs, and a picker weighing a drum out in two draws
@@ -2888,7 +2936,7 @@ function _fefoIndex() {
     }
     var lpKey = (rows[i].orderLot || '') + '|' + (rows[i].part || '');
     if (!byLotPart[lpKey]) byLotPart[lpKey] = [];
-    byLotPart[lpKey].push({ t: t, ts: rowTs });
+    byLotPart[lpKey].push({ t: t, tf: tf, ts: rowTs });
     for (j = 0; j < rowTs.length; j++) {
       var tn = rowTs[j];
       if (!idx[tn]) continue;
@@ -2898,7 +2946,7 @@ function _fefoIndex() {
       if (!picksByLot[tn]) picksByLot[tn] = [];
       // material/part ride along for the ops log, which groups by material and never
       // has a live inventory row to read them off. rowTs/lpKey carry the slip context.
-      picksByLot[tn].push({ t: t, qty: rowQty[tn], orderLot: rows[i].orderLot,
+      picksByLot[tn].push({ t: t, tf: tf, qty: rowQty[tn], orderLot: rows[i].orderLot,
                             material: rows[i].material || '', pickPart: rows[i].part || '',
                             needed: rows[i].needed || 0, rowTs: rowTs, lpKey: lpKey });
     }
