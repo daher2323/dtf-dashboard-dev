@@ -14737,14 +14737,97 @@ function exportRecall() {
 
 // Every component (part / material / T#) a production lot consumed, across all
 // pick lines whose Order Lot matches. One entry per T# slot.
+// ── Superseded pulls ──────────────────────────────────────────────────────
+// The pick sheet records what was PULLED, never what was returned. When a mispick is put right
+// the corrected entry is added and the wrong drum's entry stays, so a blend reads as containing
+// a drum that went back on the shelf. That is materially wrong for the view QA uses to trace a
+// blend's inputs without the batch record.
+//
+// A re-log is identifiable: a LATER submission for the same production lot, the same part, and
+// the SAME requirement. Qty Needed is the discriminator and it is doing real work — a genuine
+// second draw or a top-up states a different requirement, and must not be marked. This is
+// deliberately the same (lot, part, qty) identity _dedupeMaterialUsage collapses on, so Blend
+// Lookup and the Materials usage totals cannot disagree about how many pulls a run made.
+//
+// A T# named again by the latest submission is NOT superseded — re-submitting a slip unchanged
+// supersedes nothing. Only drums the latest entry drops are marked, and they stay on screen:
+// the pull happened, it is in the batch record, and hiding it would be its own falsification.
+function _blendSupersededMap(mine) {
+  var byPQ = {}, i, j, k, r, ts;
+  for (i = 0; i < mine.length; i++) {
+    r = mine[i];
+    ts = _fefoPickTs(r.date);
+    if (ts == null) { var d0 = _fefoPickDate(r.date); ts = d0 ? d0.getTime() : null; }
+    if (ts == null) continue;                       // no readable stamp: cannot order, so leave alone
+    k = (r.part || '') + '|' + Math.round((r.needed || 0) * 1000);
+    if (!byPQ[k]) byPQ[k] = [];
+    byPQ[k].push({ r: r, ts: ts });
+  }
+  // Only ONE dropped drum can be named with confidence, and the distinction is the whole point.
+  //
+  // The board tells people to re-log the corrected pull alone — same lot, same part, right T# —
+  // so a correction entry is partial by design. Run 2608109 shows what that costs: the original
+  // slip pulled T35631 (25 kg) and T35821 (103.7 kg) against an 81 kg requirement, and the
+  // correction named only T36345. Marking everything absent from the later entry would strike
+  // out T35821, which was almost certainly consumed. Quantities cannot settle it either — QTY
+  // Picked records the drum brought to the floor, not what went in.
+  //
+  // So: exactly one dropped drum is a replacement and is struck through. More than one is
+  // reported as an ambiguity against the ingredient — the pulls stay plain, and the row says a
+  // re-log happened and which drums it could have replaced. Overstating here would put a false
+  // negative into the one view QA uses to reconstruct a blend.
+  var sup = {}, amb = {};        // sup: "part|T#" -> {...}; amb: part -> { at, by, dropped }
+  for (k in byPQ) { if (!byPQ.hasOwnProperty(k)) continue;
+    var g = byPQ[k];
+    if (g.length < 2) continue;
+    var latest = g[0].ts;
+    for (i = 1; i < g.length; i++) if (g[i].ts > latest) latest = g[i].ts;
+    // Every T# the latest submission(s) name. Ties keep both — a duplicate submission in the
+    // same second is not one superseding the other.
+    var current = {}, currentList = [];
+    for (i = 0; i < g.length; i++) {
+      if (g[i].ts !== latest) continue;
+      for (j = 0; j < g[i].r.slots.length; j++) {
+        var tc = g[i].r.slots[j].t;
+        if (tc && !current[tc]) { current[tc] = 1; currentList.push(tc); }
+      }
+    }
+    if (!currentList.length) continue;
+    var dropped = [], droppedPart = '';
+    for (i = 0; i < g.length; i++) {
+      if (g[i].ts === latest) continue;
+      for (j = 0; j < g[i].r.slots.length; j++) {
+        var te = g[i].r.slots[j].t;
+        if (!te || current[te]) continue;
+        if (dropped.indexOf(te) === -1) { dropped.push(te); droppedPart = g[i].r.part || ''; }
+      }
+    }
+    if (!dropped.length) continue;
+    if (dropped.length === 1) {
+      sup[droppedPart + '|' + dropped[0]] = { at: latest, by: currentList };
+    } else {
+      amb[droppedPart] = { at: latest, by: currentList, dropped: dropped };
+    }
+  }
+  return { sup: sup, amb: amb };
+}
 function traceLotComponents(rows, query) {
   var q = normT(query);
   if (q === '') return [];
-  var out = [], i, j, r;
-  for (i = 0; i < rows.length; i++) {
-    r = rows[i];
-    if (normT(r.orderLot) !== q) continue;
-    for (j = 0; j < r.slots.length; j++) out.push({ part: r.part, material: r.material, t: r.slots[j].t, qty: r.slots[j].qty || 0 });
+  var mine = [], out = [], i, j, r;
+  for (i = 0; i < rows.length; i++) if (normT(rows[i].orderLot) === q) mine.push(rows[i]);
+  var S = _blendSupersededMap(mine);
+  for (i = 0; i < mine.length; i++) {
+    r = mine[i];
+    var ab = S.amb[r.part || ''] || null;
+    for (j = 0; j < r.slots.length; j++) {
+      var sp = S.sup[(r.part || '') + '|' + r.slots[j].t] || null;
+      // The ambiguity rides on the ingredient, so it is attached to every hit for that part and
+      // collapsed by the renderer into one note rather than repeated per drum.
+      out.push({ part: r.part, material: r.material, t: r.slots[j].t, qty: r.slots[j].qty || 0,
+                 superseded: !!sp, supAt: sp ? sp.at : null, supBy: sp ? sp.by : null,
+                 relog: ab });
+    }
   }
   return out;
 }
@@ -14758,11 +14841,22 @@ function buildBlendResult(hits, lot) {
   for (i = 0; i < hits.length; i++) {
     h = hits[i];
     k = (h.part || '') + '|' + (h.material || '') + '|' + (h.t || '');
-    if (!seen[k]) { seen[k] = { part: h.part, material: h.material, t: h.t, qty: 0 }; rows.push(seen[k]); }
+    if (!seen[k]) {
+      seen[k] = { part: h.part, material: h.material, t: h.t, qty: 0,
+                  superseded: !!h.superseded, supAt: h.supAt || null, supBy: h.supBy || null,
+                  relog: h.relog || null };
+      rows.push(seen[k]);
+    } else if (!h.superseded) {
+      // The same drum pulled again on a slip that stands: it was used, whatever an earlier
+      // entry did. Any single surviving pull clears the flag.
+      seen[k].superseded = false; seen[k].supAt = null; seen[k].supBy = null;
+    }
     seen[k].qty += (h.qty || 0);   // kg pulled for this exact part/material/T#
     if (h.part) partSet[h.part] = 1;
     if (h.material) matSet[h.material] = 1;
-    if (h.t) tSet[h.t] = 1;
+    // Superseded drums are excluded from the lot count — the header states how many material
+    // lots are IN the blend, and a returned drum is not one of them. They stay in the table.
+    if (h.t && !h.superseded) tSet[h.t] = 1;
   }
   // Resolve product name via the same chain the recall trace uses (both years'
   // production data, then the Lot # index) so it agrees with those views.
@@ -14770,7 +14864,10 @@ function buildBlendResult(hits, lot) {
   var product = maps.productByLot[lot] || (lotMap[lot] && lotMap[lot].product)
     || (lotIndex[lot] && (lotIndex[lot].combined || lotIndex[lot].product)) || null;
   var units = maps.unitsByLot.hasOwnProperty(lot) ? maps.unitsByLot[lot] : null;   // total Final Units for the lot
-  return { rows: rows, lot: lot, product: product, units: units, parts: countKeys(partSet), materials: countKeys(matSet), tnums: countKeys(tSet) };
+  var supN = 0;
+  for (i = 0; i < rows.length; i++) if (rows[i].superseded) supN++;
+  return { rows: rows, lot: lot, product: product, units: units, parts: countKeys(partSet),
+           materials: countKeys(matSet), tnums: countKeys(tSet), superseded: supN };
 }
 
 function onBlendInput(v) { blendQuery = v; }
@@ -14894,10 +14991,14 @@ function renderBlendTableHTML(res) {
   for (i = 0; i < res.rows.length; i++) {
     r = res.rows[i];
     k = (r.part || '') + '|' + (r.material || '');
-    if (!gIndex.hasOwnProperty(k)) { gIndex[k] = groups.length; groups.push({ part: r.part, material: r.material, ts: [], qty: 0 }); }
+    if (!gIndex.hasOwnProperty(k)) { gIndex[k] = groups.length; groups.push({ part: r.part, material: r.material, ts: [], sup: {}, relog: null, qty: 0 }); }
     var g0 = groups[gIndex[k]];
     if (r.t && g0.ts.indexOf(r.t) === -1) g0.ts.push(r.t);
-    g0.qty += (r.qty || 0);
+    if (r.t && r.superseded) g0.sup[r.t] = r;
+    if (r.relog && !g0.relog) g0.relog = r.relog;
+    // Superseded kg is left out of the ordering weight: the rows are sorted heaviest-first as a
+    // dosage proxy, and a drum that went back on the shelf is not part of the dose.
+    if (!r.superseded) g0.qty += (r.qty || 0);
   }
   // Heaviest pull first; ties fall back to ingredient name for stable order.
   groups.sort(function(a, b) {
@@ -14920,9 +15021,37 @@ function renderBlendTableHTML(res) {
   var tSep = '<span style="color:#4a4d4a;"> \xb7 </span>';
   for (i = 0; i < groups.length; i++) {
     var g = groups[i];
-    var tCell = g.ts.length
-      ? g.ts.slice().sort().map(function(t){ return _blendCopyCell(t); }).join(tSep)
+    // Superseded drums last, struck through and dimmed, with the replacement named. They are
+    // not hidden: the pull is in the batch record and the sheet has no "returned" event, so the
+    // honest statement is "this was pulled, then a later entry replaced it" — which is also what
+    // someone reconciling against the paperwork needs to see.
+    var tsSorted = g.ts.slice().sort(function(a, b){
+      var as = g.sup[a] ? 1 : 0, bs = g.sup[b] ? 1 : 0;
+      if (as !== bs) return as - bs;
+      return String(a).localeCompare(String(b));
+    });
+    var tCell = tsSorted.length
+      ? tsSorted.map(function(t){
+          var sp = g.sup[t];
+          if (!sp) return _blendCopyCell(t);
+          var when = sp.supAt ? new Date(sp.supAt).toLocaleString('en-US', { month:'numeric', day:'numeric', hour:'numeric', minute:'2-digit' }) : '';
+          var by = (sp.supBy || []).join(', ');
+          var tip = 'Superseded' + (when ? ' ' + when : '') + ': a later pick entry for this lot and part, stating the same requirement, named '
+            + (by || 'a different lot') + ' instead. The sheet records pulls and not returns, so read this drum as replaced rather than consumed — confirm against the batch record.';
+          return '<span title="' + esc(tip) + '" style="opacity:.55;text-decoration:line-through;cursor:help;">' + _blendCopyCell(t) + '</span>'
+            + '<span title="' + esc(tip) + '" style="margin-left:4px;font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#3a2323;color:#F09595;cursor:help;text-decoration:none;font-family:system-ui;">replaced</span>';
+        }).join(tSep)
       : '<span style="color:#5f5e5a;">—</span>';
+    // Ambiguous re-log: say a replacement happened and which drums it could have been, without
+    // striking any of them. Naming the wrong drum as returned would be worse than saying "check".
+    if (g.relog) {
+      var rWhen = g.relog.at ? new Date(g.relog.at).toLocaleString('en-US', { month:'numeric', day:'numeric', hour:'numeric', minute:'2-digit' }) : '';
+      tCell += '<div style="margin-top:5px;font-size:10px;line-height:1.5;color:#FAC775;font-family:system-ui;">'
+        + 'Re-logged' + (rWhen ? ' ' + esc(rWhen) : '') + ': a later entry stating the same requirement named '
+        + esc((g.relog.by || []).join(', ')) + '. One of ' + esc((g.relog.dropped || []).join(', '))
+        + ' was likely replaced rather than consumed &mdash; confirm against the batch record.'
+        + '</div>';
+    }
     out += '<tr style="border-top:0.5px solid #232629;">'
       + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;vertical-align:top;">'+_blendCopyCell(g.part)+'</td>'
       + '<td title="'+esc(g.material || '')+'" style="padding:8px 14px;color:#e8e6e0;vertical-align:top;">'+esc(g.material || '—')+'</td>'
@@ -14943,10 +15072,11 @@ function exportBlend() {
     ['DTF Blend Components — Lot #: ' + (res.lot || '')],
     ['Product: ' + (res.product || '(unavailable)')],
     ['Ingredients: ' + res.materials + ' · Material lots: ' + res.tnums
-      + ' · Units produced: ' + (res.units != null ? Math.round(res.units) : 'n/a')],
+      + ' · Units produced: ' + (res.units != null ? Math.round(res.units) : 'n/a')
+      + (res.superseded ? ' · Excludes ' + res.superseded + ' replaced pull' + (res.superseded === 1 ? '' : 's') + ', listed below' : '')],
     ['Exported: ' + dateStr],
     [],
-    ['Part #', 'Ingredient', 'Material Lot (T#)']
+    ['Part #', 'Ingredient', 'Material Lot (T#)', 'Status']
   ];
   // Order to match the on-screen table: heaviest total kg pulled first (dosage
   // proxy), then ingredient, then T#. The kg value itself is not exported.
@@ -14959,9 +15089,22 @@ function exportBlend() {
     if (m !== 0) return m;
     return String(a.t || '').localeCompare(String(b.t || ''));
   });
-  sorted.forEach(function(r) { rows.push([r.part || '', r.material || '', r.t || '']); });
+  // Status names the replacement rather than just saying "replaced": a workbook is read away
+  // from the screen, where the tooltip that carries that detail does not exist.
+  sorted.forEach(function(r) {
+    var st = '';
+    if (r.superseded) st = 'REPLACED by ' + ((r.supBy || []).join(', ') || 'a later entry');
+    else if (r.relog && (r.relog.dropped || []).indexOf(r.t) !== -1) st = 'CHECK — re-logged, may have been replaced by ' + ((r.relog.by || []).join(', ') || 'a later entry');
+    rows.push([r.part || '', r.material || '', r.t || '', st]);
+  });
+  if (sorted.some(function(r){ return r.superseded || (r.relog && (r.relog.dropped || []).indexOf(r.t) !== -1); })) {
+    rows.push([]);
+    rows.push(['REPLACED = a later pick entry for this lot and part, stating the same requirement, named one different material lot, so this drum was replaced rather than consumed.']);
+    rows.push(['CHECK = the same kind of re-log, but more than one drum was dropped from the later entry, so which of them was replaced cannot be told from the pick sheet.']);
+    rows.push(['The pick sheet records pulls and never returns. Confirm either against the batch record before relying on this for a blend reconstruction.']);
+  }
   var ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:14},{wch:34},{wch:18}];
+  ws['!cols'] = [{wch:14},{wch:34},{wch:18},{wch:30}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Blend Components');
   var safe = String(res.lot || 'unknown').replace(/[^A-Za-z0-9]/g, '') || 'unknown';
