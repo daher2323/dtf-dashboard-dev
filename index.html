@@ -5313,54 +5313,82 @@ function _logiTrendAvg(data) {
 // work out which bucket is the selected one — one source of truth beats a second copy of the
 // selected index that could drift from the bars.
 var LOGI_TREND_BAR = '#3987e5', LOGI_TREND_BAR_SEL = '#85B7EB';
-// Value on top of each bar. Written as an inline plugin instead of pulling in
-// chartjs-plugin-datalabels: one hook, no new CDN dependency to keep pinned.
+// ── Value labels on top of bars ───────────────────────────────────────────
+// Shared by the Weekly Output chart and the Logistics throughput trend, which had grown two
+// separate implementations in two different palettes. Written as an inline Chart.js plugin
+// rather than pulling in chartjs-plugin-datalabels: one hook, no new CDN dependency to pin.
 //
 // The point is reading a difference at a glance. Comparing bar heights against a gridline and
-// then holding two numbers in your head is work, and the tooltip only answers for one bar at a
-// time — you cannot compare with it, which is exactly what this chart is for.
+// then holding two numbers in your head is work, and a tooltip only answers for one bar at a
+// time — you cannot compare with it, which is what these charts are for.
 //
 // Three things it has to get right:
-//   fit      Labels are drawn only when the text fits the category pitch. Daily granularity
-//            over a long window packs bars a few pixels apart, where labels would overlap into
-//            mush; they drop out instead. The tooltip still answers there, and the aria-label
+//   fit      Labels draw only when the text fits the category pitch. Logistics at daily
+//            granularity packs bars a few pixels apart, where labels would overlap into mush;
+//            they drop out instead. Tooltips still answer there, and Logistics' aria-label
 //            still carries every value.
 //   zeros    An empty bucket gets no label. A row of floating "0"s above nothing is noise, and
 //            the absent bar already says it.
-//   legible  Labels sit above the bar top, which is where the dashed average line often is.
-//            Stroking the text in the card background first gives it a halo, so it stays
-//            readable crossing the average line or a gridline without drawing a box.
-var _LOGI_TREND_LABELS = {
-  id: 'logiTrendLabels',
-  afterDatasetsDraw: function(chart) {
-    var meta = chart.getDatasetMeta(0);                 // dataset 0 is the bars; 1 is the average line
-    if (!meta || meta.hidden || !meta.data || !meta.data.length) return;
-    var ds = chart.data.datasets[0], ctx = chart.ctx, i;
-    // Category pitch, not bar width: bars are capped at 24px but sit in much wider slots.
-    var pitch = meta.data.length > 1
-      ? Math.abs(meta.data[1].x - meta.data[0].x)
-      : (chart.chartArea.right - chart.chartArea.left);
-    var bg = Array.isArray(ds.backgroundColor) ? ds.backgroundColor : [];
-    ctx.save();
-    ctx.font = '500 10px system-ui, -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.lineJoin = 'round';
-    for (i = 0; i < meta.data.length; i++) {
-      var v = ds.data[i];
-      if (!v) continue;
-      var txt = Math.round(v).toLocaleString();
-      if (ctx.measureText(txt).width > pitch - 4) continue;
-      var el = meta.data[i], y = el.y - 5;
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#1e2124';                      // card background — a halo, not a box
-      ctx.strokeText(txt, el.x, y);
-      ctx.fillStyle = bg[i] === LOGI_TREND_BAR_SEL ? '#e8e6e0' : '#888780';
-      ctx.fillText(txt, el.x, y);
+//   legible  Labels sit above the bar top, which is where a dashed target or average line
+//            often is. Stroking the text in the card background first gives it a halo, so it
+//            reads across those lines without needing a box behind it.
+//
+// Grey by default so the labels annotate the bars rather than compete with them. colorFor
+// leaves the emphasis to each chart, because "this bar is different" does not mean the same
+// thing in both: in Logistics the odd bar out is the period you are viewing (brighter), while
+// on Weekly Output it is the current week, still in progress and deliberately faded so nobody
+// reads a part-week as a downturn (dimmer). Same styling, opposite emphasis, on purpose.
+var BAR_LABEL = '#888780';         // default
+var BAR_LABEL_ON = '#e8e6e0';      // the bucket being viewed
+var BAR_LABEL_OFF = '#5f5e5a';     // an incomplete bucket — do not invite comparison
+function barValueLabels(opts) {
+  opts = opts || {};
+  var colorFor = opts.colorFor || function(){ return BAR_LABEL; };
+  var format = opts.format || function(v){ return Math.round(v).toLocaleString(); };
+  var font = opts.font || '500 10px system-ui, -apple-system, sans-serif';
+  // The halo has to be the colour actually behind the text, so it has to be passed in: the
+  // Materials usage chart sits on the expanded panel (#141618), not on a card (#1e2124).
+  var halo = opts.halo || '#1e2124';
+  return {
+    id: opts.id || 'barValueLabels',
+    afterDatasetsDraw: function(chart) {
+      var meta = chart.getDatasetMeta(0);          // dataset 0 is the bars; the lines follow
+      if (!meta || meta.hidden || !meta.data || !meta.data.length) return;
+      var ds = chart.data.datasets[0], ctx = chart.ctx, i;
+      // Category pitch, not bar width: bars are capped well below their slot width.
+      var pitch = meta.data.length > 1
+        ? Math.abs(meta.data[1].x - meta.data[0].x)
+        : (chart.chartArea.right - chart.chartArea.left);
+      ctx.save();
+      ctx.font = font;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.lineJoin = 'round';
+      for (i = 0; i < meta.data.length; i++) {
+        var v = ds.data[i];
+        if (!v) continue;
+        var txt = format(v, i);
+        if (ctx.measureText(txt).width > pitch - 4) continue;
+        var el = meta.data[i], y = el.y - 5;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = halo;                     // the background behind it — a halo, not a box
+        ctx.strokeText(txt, el.x, y);
+        ctx.fillStyle = colorFor(i, chart);
+        ctx.fillText(txt, el.x, y);
+      }
+      ctx.restore();
     }
-    ctx.restore();
+  };
+}
+// Selection is read back off the bar colours rather than kept as a second copy of the index,
+// which could drift from the bars it is meant to describe.
+var _LOGI_TREND_LABELS = barValueLabels({
+  id: 'logiTrendLabels',
+  colorFor: function(i, chart) {
+    var bg = chart.data.datasets[0].backgroundColor;
+    return (Array.isArray(bg) && bg[i] === LOGI_TREND_BAR_SEL) ? BAR_LABEL_ON : BAR_LABEL;
   }
-};
+});
 function _drawLogiTrendChart(trend) {
   var cv = document.getElementById('logiTrendChart');
   if (!cv || typeof Chart === 'undefined') return;
@@ -7339,7 +7367,13 @@ function renderWeekly() {
       {type:'line',label:'8-week avg',data:weeks8.map(function(){return week8Avg;}),borderColor:'#EF9F27',borderWidth:1.5,borderDash:[3,3],pointRadius:0,fill:false,tension:0,order:2}
     ]},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){if(ctx.dataset.label==='Weekly target') return 'Target: '+chartStaticTarget.toLocaleString(); if(ctx.dataset.label==='8-week avg') return '8-wk avg: '+week8Avg.toLocaleString(); return 'Units: '+ctx.raw.toLocaleString();}}}},scales:{x:{ticks:{color:'#888780',font:{size:10},maxRotation:20},grid:{color:'#2c2c2a'}},y:{suggestedMax:weekChartMax,ticks:{color:'#888780',callback:function(v){return(v/1000).toFixed(0)+'k';}},grid:{color:'#2c2c2a'}}}},
-    plugins:[{id:'wkLabels',afterDatasetsDraw:function(chart){var ctx2=chart.ctx,meta=chart.getDatasetMeta(0);ctx2.save();ctx2.font='500 10px system-ui,sans-serif';ctx2.textAlign='center';ctx2.textBaseline='bottom';meta.data.forEach(function(bar,i){ctx2.fillStyle=weeks8[i].mon.toDateString()===wkMon.toDateString()?'rgba(133,183,235,0.7)':'#85B7EB';ctx2.fillText(weekData[i].toLocaleString(),bar.x,bar.y-4);});ctx2.restore();}}]
+    // Shared with the Logistics trend so both charts read the same. The current week's label is
+    // dimmed to match its faded bar — it is a part week, and inviting comparison with eight
+    // finished ones is how a Monday reads as a collapse.
+    plugins:[barValueLabels({
+      id:'wkLabels',
+      colorFor:function(i){ return weeks8[i].mon.toDateString()===wkMon.toDateString() ? BAR_LABEL_OFF : BAR_LABEL; }
+    })]
   });
 
   // Celebrate hitting/exceeding the weekly target — pulse the % of target number.
@@ -11541,16 +11575,11 @@ function renderMatInline(m, idx) {
         x:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},autoSkip:skipLabels,maxRotation:skipLabels?45:0},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}},
         y:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},callback:function(v){return Math.round(v).toLocaleString();}},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}}
       }},
-    plugins:[{id:'topLabels',afterDatasetsDraw:function(chart){
-      if(skipLabels) return;
-      var c2=chart.ctx;c2.save();c2.font='500 9px system-ui';c2.fillStyle='#888780';c2.textAlign='center';
-      chart.data.datasets[0].data.forEach(function(val,i){
-        if(!val) return;
-        var bar=chart.getDatasetMeta(0).data[i];
-        c2.fillText(Math.round(val).toLocaleString(),bar.x,bar.y-4);
-      });
-      c2.restore();
-    }}]
+    // Shared with the Weekly Output and Logistics trend charts. Keeps 9px — this one lives in a
+    // 160px panel chart, not a full-width card. No longer gated on skipLabels (>12 months):
+    // the shared plugin drops a label when the text will not fit its slot, which is the actual
+    // question, so a 13-month window with room to spare keeps its numbers.
+    plugins:[barValueLabels({id:'topLabels',font:'500 9px system-ui',halo:'#141618'})]
   });
 }
 
