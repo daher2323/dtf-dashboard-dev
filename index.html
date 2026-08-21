@@ -5338,14 +5338,21 @@ var LOGI_TREND_BAR = '#3987e5', LOGI_TREND_BAR_SEL = '#85B7EB';
 // thing in both: in Logistics the odd bar out is the period you are viewing (brighter), while
 // on Weekly Output it is the current week, still in progress and deliberately faded so nobody
 // reads a part-week as a downturn (dimmer). Same styling, opposite emphasis, on purpose.
-var BAR_LABEL = '#888780';         // default
+// Contrast does most of the work here, not weight. The first pass used #888780 at 9-10px, which
+// asked the eye to resolve a small mid-grey against a dark panel — legible if you looked at it,
+// but not at a glance, which is the whole point of putting the number on the bar. These labels
+// ARE the data, so secondary-text brightness is right; they are not competing with anything
+// else in the plot area, since the bars themselves are muted.
+var BAR_LABEL = '#cfcdc7';         // default
 var BAR_LABEL_ON = '#e8e6e0';      // the bucket being viewed
-var BAR_LABEL_OFF = '#5f5e5a';     // an incomplete bucket — do not invite comparison
+var BAR_LABEL_OFF = '#888780';     // an incomplete bucket — dimmer, but still readable
 function barValueLabels(opts) {
   opts = opts || {};
   var colorFor = opts.colorFor || function(){ return BAR_LABEL; };
   var format = opts.format || function(v){ return Math.round(v).toLocaleString(); };
-  var font = opts.font || '500 10px system-ui, -apple-system, sans-serif';
+  // 600, and 10px everywhere — the 9px the Materials chart used to carry saved nothing (its
+  // bars sit ~200px apart) and cost the most legibility of the three.
+  var font = opts.font || '600 10px system-ui, -apple-system, sans-serif';
   // The halo has to be the colour actually behind the text, so it has to be passed in: the
   // Materials usage chart sits on the expanded panel (#141618), not on a card (#1e2124).
   var halo = opts.halo || '#1e2124';
@@ -11575,11 +11582,12 @@ function renderMatInline(m, idx) {
         x:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},autoSkip:skipLabels,maxRotation:skipLabels?45:0},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}},
         y:{ticks:{color:'#5f5e5a',font:{size:10,family:'system-ui'},callback:function(v){return Math.round(v).toLocaleString();}},grid:{color:'#1a1a1a'},border:{color:'#2c2c2a'}}
       }},
-    // Shared with the Weekly Output and Logistics trend charts. Keeps 9px — this one lives in a
-    // 160px panel chart, not a full-width card. No longer gated on skipLabels (>12 months):
-    // the shared plugin drops a label when the text will not fit its slot, which is the actual
-    // question, so a 13-month window with room to spare keeps its numbers.
-    plugins:[barValueLabels({id:'topLabels',font:'500 9px system-ui',halo:'#141618'})]
+    // Shared with the Weekly Output and Logistics trend charts, at the shared size — only the
+    // halo differs, because this chart sits on the expanded panel rather than a card. No longer
+    // gated on skipLabels (>12 months): the shared plugin drops a label when the text will not
+    // fit its slot, which is the actual question, so a 13-month window with room keeps its
+    // numbers.
+    plugins:[barValueLabels({id:'topLabels',halo:'#141618'})]
   });
 }
 
