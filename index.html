@@ -2127,9 +2127,19 @@ function computeFefoOps() {
       // the older one could not cover the whole quantity). 500 of ~6,600 decisions.
       var bothPulled = (mine[i].rowTs || []).indexOf(best) !== -1;
       // Was it put right afterwards? A correction is a LATER submission for the same
-      // production lot and part that names the lot which should have been pulled. Reads
-      // zero across all history because nothing was telling anyone a mispick had happened;
-      // it starts counting the first time someone re-logs a swapped pull.
+      // production lot and part that names the lot which should have been pulled.
+      //
+      // This column read empty across all history, which was put down to nobody having been
+      // told to re-log a swapped pull. That was most of it, but not all: a correction is by
+      // definition a second entry for the same lot and part, and the materials sync deduped on
+      // exactly that pair, so any correction that WAS logged got discarded before it reached
+      // the dashboard. Fixed 2026-08-21 in apps-script/materials-sync.gs; the backfill turned
+      // up one genuine historical correction (run 2608020, part 10-460, 8/4/26 7:32am).
+      //
+      // Read the tick as evidence, not as intent: a top-up drawn from the right lot on its own
+      // slip is indistinguishable from someone acting on this board. Both mean the run ended up
+      // using the lot it should have, which is the outcome either way — but it is not proof
+      // anyone looked here. The tooltip states the evidence rather than claiming the motive.
       //
       // "Later" is measured on the SUBMISSION CLOCK, not the calendar day. This compared
       // day-level stamps and so could never see a same-day correction — which is every
