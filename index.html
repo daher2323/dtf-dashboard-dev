@@ -2125,7 +2125,13 @@ function computeFefoOps() {
       // Split pull, not a skip: the earlier-expiring lot was drawn on the same slip, so
       // FEFO was followed and the pull was simply spread across two lots (usually because
       // the older one could not cover the whole quantity). 500 of ~6,600 decisions.
-      var bothPulled = (mine[i].rowTs || []).indexOf(best) !== -1;
+      // Only the FIRST slip for this (lot, part, requirement) can be a split pull. A correction
+      // that re-logs the whole pull necessarily names the right lot alongside the drums that
+      // stood, which is indistinguishable from a split pull on the slip alone — and reading it
+      // as one would delete the finding from the board at the moment it was put right, moving
+      // it into "N split pulls excluded" instead of showing the green tick. The exclusion is
+      // meant for FEFO followed at the time, not FEFO restored afterwards.
+      var bothPulled = mine[i].firstSlip !== false && (mine[i].rowTs || []).indexOf(best) !== -1;
       // Was it put right afterwards? A correction is a LATER submission for the same
       // production lot and part that names the lot which should have been pulled.
       //
@@ -2215,7 +2221,8 @@ function computeFefoOps() {
   //   pulled    every drum taken instead, with its expiry, so no detail is lost by merging
   //   gapDays   the WORST gap among those drums, which is what the threshold and sort should
   //             judge; gapMin carries the other end so the row can show a range
-  //   bothPulled  ORs: if the older lot was drawn on ANY slip that day, FEFO was followed
+  //   bothPulled  ORs: if the older lot was drawn on any ORIGINAL slip that day, FEFO was
+  //               followed. Corrective re-logs are excluded upstream — see the firstSlip test.
   var merged = [], byDecision = {};
   for (var oi = 0; oi < out.length; oi++) {
     var d0 = out[oi];
@@ -2594,6 +2601,15 @@ function _fefoOpsPanelHTML() {
       // row stays open. Hence "re-log", which is also a new Form entry rather than an edit —
       // editing the original makes the mispick vanish from the feed instead of turning green.
       //
+      // It asks for the WHOLE pull, not just the corrected drum, and qty needed has to match.
+      // Both earn their place. The requirement is what makes the entry a re-log rather than a
+      // second draw: _dedupeMaterialUsage collapses on (lot, part, qty), so a matching one keeps
+      // consumption counted once, and a different one would double it. Listing every drum makes
+      // the entry a complete statement of what went into the run, which is what lets Blend
+      // Lookup say which drum was replaced instead of naming two candidates and asking QA to
+      // check the batch record. A partial re-log still works here — this column only needs the
+      // right T# named — so historical partial entries lose nothing.
+      //
       // That last point was spelled out here and has been deliberately removed: it doubled as
       // instructions for making a mispick disappear. The goal is corrected, not hidden, so the
       // line only says what to do. An edit still fails silently — the row simply stays open —
@@ -2604,9 +2620,10 @@ function _fefoOpsPanelHTML() {
       + (G.openTotal > 0
           ? '<div style="margin-top:9px;padding-top:9px;border-top:0.5px solid #2c2c2a;font-size:11px;color:#888780;font-family:system-ui;line-height:1.55;">'
             + '<span style="color:#9FE1CB;font-weight:500;">Pulled the wrong lot?</span> '
-            + 'Re-log the pick with the correct T# &mdash; '
-            + 'same <span style="color:#e8e6e0;">production lot&nbsp;#</span> and <span style="color:#e8e6e0;">part&nbsp;#</span> '
-            + '&mdash; and this row turns green.'
+            + 'Re-log the <span style="color:#e8e6e0;">whole pull</span> for that part &mdash; '
+            + 'every T# that ended up in the run, including the drums that were right &mdash; with the '
+            + 'same <span style="color:#e8e6e0;">production lot&nbsp;#</span>, <span style="color:#e8e6e0;">part&nbsp;#</span> '
+            + 'and <span style="color:#e8e6e0;">qty needed</span>. This row turns green.'
             + '</div>'
           : '')
     + '</div>';
@@ -2911,6 +2928,17 @@ function _fefoIndex() {
     if (!byPart[pt]) byPart[pt] = [];
     byPart[pt].push(k);
   }
+  // Earliest submission per (production lot | part | requirement). A LATER submission naming the
+  // same three is a re-log, not a second draw — the identity _dedupeMaterialUsage collapses on
+  // and Blend Lookup reads for superseded pulls. Held here so computeFefoOps can tell an
+  // original split pull from a correction, which look identical on the slip itself.
+  var grpFirst = {};
+  for (i = 0; i < rows.length; i++) {
+    var gd = _fefoPickDate(rows[i].date); if (!gd) continue;
+    var gts = _fefoPickTs(rows[i].date); if (gts == null) gts = gd.getTime();
+    var gk = (rows[i].orderLot || '') + '|' + (rows[i].part || '') + '|' + Math.round((rows[i].needed || 0) * 1000);
+    if (grpFirst[gk] === undefined || gts < grpFirst[gk]) grpFirst[gk] = gts;
+  }
   var picksByLot = {};
   // (production lot | part #) -> its submissions, ascending. A correction is logged as a
   // NEW pick entry for the same lot and part naming the right T#, so answering "was this
@@ -2948,6 +2976,9 @@ function _fefoIndex() {
       if (rowQty[rt] === undefined) { rowQty[rt] = 0; rowTs.push(rt); }
       rowQty[rt] += slots[j].qty || 0;
     }
+    var gk2 = (rows[i].orderLot || '') + '|' + (rows[i].part || '') + '|' + Math.round((rows[i].needed || 0) * 1000);
+    // Ties count as first: two submissions in the same second are a duplicate, not a correction.
+    var firstSlip = (tf == null) ? true : (grpFirst[gk2] === undefined || tf <= grpFirst[gk2]);
     var lpKey = (rows[i].orderLot || '') + '|' + (rows[i].part || '');
     if (!byLotPart[lpKey]) byLotPart[lpKey] = [];
     byLotPart[lpKey].push({ t: t, tf: tf, ts: rowTs });
@@ -2960,7 +2991,7 @@ function _fefoIndex() {
       if (!picksByLot[tn]) picksByLot[tn] = [];
       // material/part ride along for the ops log, which groups by material and never
       // has a live inventory row to read them off. rowTs/lpKey carry the slip context.
-      picksByLot[tn].push({ t: t, tf: tf, qty: rowQty[tn], orderLot: rows[i].orderLot,
+      picksByLot[tn].push({ t: t, tf: tf, firstSlip: firstSlip, qty: rowQty[tn], orderLot: rows[i].orderLot,
                             material: rows[i].material || '', pickPart: rows[i].part || '',
                             needed: rows[i].needed || 0, rowTs: rowTs, lpKey: lpKey });
     }
@@ -14756,6 +14787,11 @@ function exportRecall() {
 // second draw or a top-up states a different requirement, and must not be marked. This is
 // deliberately the same (lot, part, qty) identity _dedupeMaterialUsage collapses on, so Blend
 // Lookup and the Materials usage totals cannot disagree about how many pulls a run made.
+//
+// The board now asks for the WHOLE pull to be re-logged, every drum that ended up in the run, so
+// entries made from 2026-08-21 resolve exactly: one drum dropped, one drum named. The ambiguous
+// branch below still matters for everything logged before that, when the instruction asked only
+// for the corrected T# and a correction was partial by design.
 //
 // A T# named again by the latest submission is NOT superseded — re-submitting a slip unchanged
 // supersedes nothing. Only drums the latest entry drops are marked, and they stay on screen:
