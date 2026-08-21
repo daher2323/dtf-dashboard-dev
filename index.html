@@ -5338,14 +5338,16 @@ var LOGI_TREND_BAR = '#3987e5', LOGI_TREND_BAR_SEL = '#85B7EB';
 // thing in both: in Logistics the odd bar out is the period you are viewing (brighter), while
 // on Weekly Output it is the current week, still in progress and deliberately faded so nobody
 // reads a part-week as a downturn (dimmer). Same styling, opposite emphasis, on purpose.
-// Contrast does most of the work here, not weight. The first pass used #888780 at 9-10px, which
-// asked the eye to resolve a small mid-grey against a dark panel — legible if you looked at it,
-// but not at a glance, which is the whole point of putting the number on the bar. These labels
-// ARE the data, so secondary-text brightness is right; they are not competing with anything
-// else in the plot area, since the bars themselves are muted.
-var BAR_LABEL = '#cfcdc7';         // default
-var BAR_LABEL_ON = '#e8e6e0';      // the bucket being viewed
-var BAR_LABEL_OFF = '#888780';     // an incomplete bucket — dimmer, but still readable
+// Highlight blue, which is where the Weekly Output chart started before all three were unified.
+// Grey was the intermediate step and read as chrome — the eye filed it with the axis ticks and
+// the gridlines instead of with the bars, so a number that is the point of the chart sat in the
+// same colour as its furniture. Blue ties each label to the series it annotates.
+//
+// Contrast still does most of the work: 600 at 10px with the background halo, so it holds up
+// against the dark panel. Grey at 9px failed on all three counts at once.
+var BAR_LABEL = '#85B7EB';                      // default
+var BAR_LABEL_ON = '#e8e6e0';                   // the bucket being viewed — near-white, not a fourth blue
+var BAR_LABEL_OFF = 'rgba(133,183,235,0.55)';   // an incomplete bucket — the same blue, faded like its bar
 function barValueLabels(opts) {
   opts = opts || {};
   var colorFor = opts.colorFor || function(){ return BAR_LABEL; };
