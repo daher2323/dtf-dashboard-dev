@@ -250,10 +250,27 @@ function _msNorm(v) {
   if (typeof v === 'number') return String(v);          // 350 and 350.00 are the same value
   return String(v == null ? '' : v).trim();
 }
-// Signature over every column, so ANY edited cell registers as a difference.
-function _msSig(row, width) {
+// ── What counts as "the same row" ─────────────────────────────────────────
+// NOT every column. The five (Check) columns are formulas that resolve the T# beside them
+// against the inventory sheet — T#1 (Check) returns the material name for T #. The destination
+// holds whatever they evaluated to at copy time, and the source re-evaluates them whenever
+// inventory changes, so comparing them would report drift on rows nobody touched and the
+// reconciler would delete and re-append them on every run, for ever.
+//
+// So the signature covers the columns a person actually enters. A derived column changing is
+// not an edit; a derived column is not evidence of one either.
+function _msIsDerivedHeader(h) {
+  h = String(h || '').trim();
+  return h === 'Check' || h.indexOf('(Check)') !== -1;
+}
+function _msSigCols(headers, width) {
+  var cols = [], i;
+  for (i = 0; i < width; i++) if (!_msIsDerivedHeader(headers[i])) cols.push(i);
+  return cols;
+}
+function _msSig(row, cols) {
   var p = [], i;
-  for (i = 0; i < width; i++) p.push(_msNorm(row[i]));
+  for (i = 0; i < cols.length; i++) p.push(_msNorm(row[cols[i]]));
   return p.join('␟');
 }
 function _msTs(v) {
@@ -315,6 +332,7 @@ function _msDiff(days) {
   var srcHeaders = source.getRange(1, 1, 1, width).getValues()[0];
   if (!_msHeadersMatch(dest, srcHeaders)) throw new Error('Headers differ; run syncMaterials first');
   var keyIdx = _msKeyIdx(srcHeaders);
+  var sigCols = _msSigCols(srcHeaders, width);
 
   var cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - (days || MS_RECONCILE_DAYS));
@@ -332,27 +350,31 @@ function _msDiff(days) {
   if (!srcRows.length && destRows.length) throw new Error('Source window empty, destination has '
     + destRows.length + ' row(s) — refusing to reconcile against what looks like a failed read');
 
-  // One block read per contiguous run beats one per row; the window is usually contiguous.
-  function loadFast(sheet, rows) {
+  // ONE read per sheet, first window row to last, filtered in memory.
+  //
+  // This used to issue a read per contiguous run of window rows, on the theory that the window
+  // is contiguous. It is not: spacer rows and out-of-order re-appends break it into runs, and
+  // each run is a round-trip. The window is bounded by MS_TAIL_SCAN_MAX either way, so reading
+  // it whole costs one call and cannot degrade with how scattered the rows are.
+  function loadWindow(sheet, rows) {
     if (!rows.length) return [];
-    var out = [], i = 0, start, end, block, b;
-    while (i < rows.length) {
-      start = rows[i];
-      while (i + 1 < rows.length && rows[i + 1] === rows[i] + 1) i++;
-      end = rows[i];
-      block = sheet.getRange(start, 1, end - start + 1, width).getValues();
-      for (b = 0; b < block.length; b++) {
-        if (_msIsBlankKey(block[b], keyIdx)) continue;
-        out.push({ row: start + b, values: block[b], sig: _msSig(block[b], width) });
-      }
-      i++;
+    var first = rows[0], last = rows[rows.length - 1], want = {}, i;
+    for (i = 0; i < rows.length; i++) want[rows[i]] = 1;
+    var block = sheet.getRange(first, 1, last - first + 1, width).getValues(), out = [];
+    for (i = 0; i < block.length; i++) {
+      if (!want[first + i]) continue;
+      if (_msIsBlankKey(block[i], keyIdx)) continue;
+      out.push({ row: first + i, values: block[i], sig: _msSig(block[i], sigCols) });
     }
     return out;
   }
 
   var t1 = Date.now();
-  var src = loadFast(source, srcRows), dst = loadFast(dest, destRows);
-  console.log('Row load: ' + (Date.now() - t1) + ' ms.');
+  var src = loadWindow(source, srcRows);
+  console.log('Source load: ' + (Date.now() - t1) + ' ms.');
+  var t2 = Date.now();
+  var dst = loadWindow(dest, destRows);
+  console.log('Destination load: ' + (Date.now() - t2) + ' ms.');
 
   // Multiset compare: a duplicate submission is legitimate (two draws on one slip), so counts
   // matter, not mere presence.
@@ -390,14 +412,23 @@ function auditMaterialsSync(days) {
   console.log('Window from ' + d.cutoff.toDateString() + ': source ' + d.src.length
     + ' row(s), destination ' + d.dst.length + ' row(s).');
   if (!d.missing.length && !d.stale.length) { console.log('In step — nothing to repair.'); return; }
+  // Capped: Apps Script throttles logging, and a few hundred console.log calls take longer than
+  // the comparison that produced them. The counts are the finding; the list is the evidence.
+  var CAP = 40, byRow = {}, j;
+  for (j = 0; j < d.dst.length; j++) byRow[d.dst[j].row] = d.dst[j];
+
   console.log(d.missing.length + ' row(s) in the source that the destination is missing:');
-  for (i = 0; i < d.missing.length; i++) console.log('  + src row ' + d.missing[i].row + ': ' + _msDescribe(d.missing[i], d.keyIdx));
-  console.log(d.stale.length + ' row(s) in the destination that no longer match the source:');
-  for (i = 0; i < d.stale.length; i++) {
-    var row = null, j;
-    for (j = 0; j < d.dst.length; j++) if (d.dst[j].row === d.stale[i]) row = d.dst[j];
-    console.log('  - dest row ' + d.stale[i] + ': ' + (row ? _msDescribe(row, d.keyIdx) : ''));
+  for (i = 0; i < Math.min(d.missing.length, CAP); i++) {
+    console.log('  + src row ' + d.missing[i].row + ': ' + _msDescribe(d.missing[i], d.keyIdx));
   }
+  if (d.missing.length > CAP) console.log('  ... and ' + (d.missing.length - CAP) + ' more.');
+
+  console.log(d.stale.length + ' row(s) in the destination that no longer match the source:');
+  for (i = 0; i < Math.min(d.stale.length, CAP); i++) {
+    console.log('  - dest row ' + d.stale[i] + ': '
+      + (byRow[d.stale[i]] ? _msDescribe(byRow[d.stale[i]], d.keyIdx) : ''));
+  }
+  if (d.stale.length > CAP) console.log('  ... and ' + (d.stale.length - CAP) + ' more.');
 }
 
 // Applies the repair: append what is missing, delete what the source no longer says.
