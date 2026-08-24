@@ -519,8 +519,11 @@ function reconcileMaterials(days, force) {
         + 'right, reconcileMaterials(days, true).');
       return;
     }
-    var ranges = _msDeleteRanges(d.stale);
-    for (i = 0; i < ranges.length; i++) { d.dest.deleteRows(ranges[i].start, ranges[i].count); n += ranges[i].count; }
+    // APPEND FIRST, then delete. Both orders can be interrupted — by the six-minute wall, by a
+    // failed write — and they fail differently. Deleting first and dying loses 73 rows outright.
+    // Appending first and dying leaves duplicates, which the next audit sees as stale and
+    // clears. One failure mode needs a restore from a backup; the other repairs itself.
+    // Appends land past the last row, so they never shift the row numbers queued for deletion.
     if (d.missing.length) {
       // The compare skipped the formula columns, so those cells are holes in what it read.
       // Fetch the rows about to be appended at full width — a handful of rows, unlike the
@@ -529,6 +532,8 @@ function reconcileMaterials(days, force) {
       var vals = _msFullRows(d.source, d.missing, d.width);
       d.dest.getRange(d.dest.getLastRow() + 1, 1, vals.length, d.width).setValues(vals);
     }
+    var ranges = _msDeleteRanges(d.stale);
+    for (i = 0; i < ranges.length; i++) { d.dest.deleteRows(ranges[i].start, ranges[i].count); n += ranges[i].count; }
     // Rows were removed from the middle of the destination, but the pointer counts SOURCE rows,
     // so it stays valid. Left alone deliberately.
     console.log('Reconciled: deleted ' + n + ', appended ' + d.missing.length + '.');
@@ -643,6 +648,9 @@ function msProbe() {
 function auditMaterialsNow() { auditMaterialsSync(MS_RECONCILE_DAYS); }
 function reconcileMaterialsNow() { reconcileMaterials(MS_RECONCILE_DAYS); }
 function explainMaterialsDriftNow() { explainMaterialsDrift(MS_RECONCILE_DAYS, 15); }
+// Lifts the deletion ceiling. Only after explainMaterialsDrift has shown what those rows are,
+// and only with a copy of the destination sheet saved.
+function reconcileMaterialsForceNow() { reconcileMaterials(MS_RECONCILE_DAYS, true); }
 
 // Point the time-based trigger at this instead of syncMaterials: copy new rows, then repair the
 // last few days. The short window keeps it to two narrow reads when nothing has drifted, which
