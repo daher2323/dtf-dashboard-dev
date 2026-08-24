@@ -408,6 +408,11 @@ function reconcileMaterials(days, force) {
   }
 }
 
+// The editor's Run button cannot pass arguments, so the two you click from the dropdown
+// take none and use the default window.
+function auditMaterialsNow() { auditMaterialsSync(MS_RECONCILE_DAYS); }
+function reconcileMaterialsNow() { reconcileMaterials(MS_RECONCILE_DAYS); }
+
 // Point the time-based trigger at this instead of syncMaterials: copy new rows, then repair the
 // last few days. The short window keeps it to two narrow reads when nothing has drifted, which
 // is almost always.
