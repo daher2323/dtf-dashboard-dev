@@ -310,6 +310,33 @@ function _msWindowRows(sheet, cutoffMs) {
   out.sort(function(a, b) { return a - b; });
   return out;
 }
+// Runs of row numbers to read as one block. A gap smaller than maxGap is cheaper to read
+// through than to issue a second call for; anything larger gets its own block, so one outlier
+// row cannot drag a block across the whole sheet.
+var MS_RUN_GAP = 100;
+function _msMergeRuns(rows, maxGap) {
+  if (!rows.length) return [];
+  var out = [], start = rows[0], prev = rows[0], i;
+  for (i = 1; i < rows.length; i++) {
+    if (rows[i] - prev > maxGap) { out.push({ start: start, count: prev - start + 1 }); start = rows[i]; }
+    prev = rows[i];
+  }
+  out.push({ start: start, count: prev - start + 1 });
+  return out;
+}
+// Runs of adjacent column indices, so the entered columns are fetched in two calls rather than
+// fourteen — and the formula columns between them are never touched.
+function _msColRuns(cols) {
+  var out = [], i = 0, start;
+  while (i < cols.length) {
+    start = cols[i];
+    while (i + 1 < cols.length && cols[i + 1] === cols[i] + 1) i++;
+    out.push({ start: start, len: cols[i] - start + 1 });
+    i++;
+  }
+  return out;
+}
+
 // Contiguous runs of row numbers, descending, so deletions are a handful of calls and never
 // shift a row this loop has yet to touch.
 function _msDeleteRanges(rows) {
@@ -323,6 +350,21 @@ function _msDeleteRanges(rows) {
   return out;
 }
 
+// Full-width values for a small set of rows, in source order, read per contiguous run.
+function _msFullRows(sheet, items, width) {
+  var rows = [], i;
+  for (i = 0; i < items.length; i++) rows.push(items[i].row);
+  rows.sort(function(a, b) { return a - b; });
+  var runs = _msMergeRuns(rows, MS_RUN_GAP), byRow = {}, r, block;
+  for (r = 0; r < runs.length; r++) {
+    block = sheet.getRange(runs[r].start, 1, runs[r].count, width).getValues();
+    for (i = 0; i < block.length; i++) byRow[runs[r].start + i] = block[i];
+  }
+  var out = [];
+  for (i = 0; i < items.length; i++) out.push(byRow[items[i].row] || items[i].values);
+  return out;
+}
+
 // Shared by the audit and the repair. Returns what differs; writes nothing.
 function _msDiff(days) {
   var source = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
@@ -333,6 +375,7 @@ function _msDiff(days) {
   if (!_msHeadersMatch(dest, srcHeaders)) throw new Error('Headers differ; run syncMaterials first');
   var keyIdx = _msKeyIdx(srcHeaders);
   var sigCols = _msSigCols(srcHeaders, width);
+  var colRuns = _msColRuns(sigCols);
 
   var cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - (days || MS_RECONCILE_DAYS));
@@ -350,30 +393,55 @@ function _msDiff(days) {
   if (!srcRows.length && destRows.length) throw new Error('Source window empty, destination has '
     + destRows.length + ' row(s) — refusing to reconcile against what looks like a failed read');
 
-  // ONE read per sheet, first window row to last, filtered in memory.
+  // Read the window in as few cells as possible, and never a formula cell.
   //
-  // This used to issue a read per contiguous run of window rows, on the theory that the window
-  // is contiguous. It is not: spacer rows and out-of-order re-appends break it into runs, and
-  // each run is a round-trip. The window is bounded by MS_TAIL_SCAN_MAX either way, so reading
-  // it whole costs one call and cannot degrade with how scattered the rows are.
-  function loadWindow(sheet, rows) {
+  // Two separate things made this the slow step, and both are addressed here.
+  //
+  // ROWS. Reading one block per contiguous run assumed the window is contiguous; spacers and
+  // out-of-order re-appends break it into runs and each run is a round-trip. Reading first-to-
+  // last in one call fixed that and introduced the opposite failure: one stray recent-looking
+  // timestamp high up in the sheet stretches that single block over thousands of rows. So runs
+  // separated by less than MS_RUN_GAP are merged and everything else is read as its own block —
+  // bounded read count AND bounded over-read.
+  //
+  // COLUMNS. The (Check) formulas resolve their T# against the inventory sheet, and reading
+  // them makes Sheets bring them up to date first. They are not compared (see _msSigCols) and
+  // the dashboard never parses them, so they are not read either: only the runs of columns a
+  // person enters. That is the same reason the sweep above is written in chunks — full-width
+  // reads of this source are what put it over six minutes in the first place.
+  function loadWindow(sheet, rows, label) {
     if (!rows.length) return [];
-    var first = rows[0], last = rows[rows.length - 1], want = {}, i;
+    var runs = _msMergeRuns(rows, MS_RUN_GAP), want = {}, out = [], i, r, c, block, colRun, rowsRead = 0;
     for (i = 0; i < rows.length; i++) want[rows[i]] = 1;
-    var block = sheet.getRange(first, 1, last - first + 1, width).getValues(), out = [];
-    for (i = 0; i < block.length; i++) {
-      if (!want[first + i]) continue;
-      if (_msIsBlankKey(block[i], keyIdx)) continue;
-      out.push({ row: first + i, values: block[i], sig: _msSig(block[i], sigCols) });
+    for (r = 0; r < runs.length; r++) rowsRead += runs[r].count;
+    console.log(label + ' window: rows ' + rows[0] + '-' + rows[rows.length - 1] + ', '
+      + rows.length + ' wanted, ' + runs.length + ' block(s), ' + rowsRead + ' row(s) read x '
+      + colRuns.length + ' column run(s).');
+    for (r = 0; r < runs.length; r++) {
+      var acc = [];
+      for (i = 0; i < runs[r].count; i++) acc.push([]);
+      for (c = 0; c < colRuns.length; c++) {
+        colRun = colRuns[c];
+        block = sheet.getRange(runs[r].start, colRun.start + 1, runs[r].count, colRun.len).getValues();
+        for (i = 0; i < block.length; i++) {
+          for (var j = 0; j < colRun.len; j++) acc[i][colRun.start + j] = block[i][j];
+        }
+      }
+      for (i = 0; i < acc.length; i++) {
+        var rowNum = runs[r].start + i;
+        if (!want[rowNum]) continue;
+        if (_msIsBlankKey(acc[i], keyIdx)) continue;
+        out.push({ row: rowNum, values: acc[i], sig: _msSig(acc[i], sigCols) });
+      }
     }
     return out;
   }
 
   var t1 = Date.now();
-  var src = loadWindow(source, srcRows);
+  var src = loadWindow(source, srcRows, 'Source');
   console.log('Source load: ' + (Date.now() - t1) + ' ms.');
   var t2 = Date.now();
-  var dst = loadWindow(dest, destRows);
+  var dst = loadWindow(dest, destRows, 'Destination');
   console.log('Destination load: ' + (Date.now() - t2) + ' ms.');
 
   // Multiset compare: a duplicate submission is legitimate (two draws on one slip), so counts
@@ -397,8 +465,8 @@ function _msDiff(days) {
     // Drop the LAST copies: the earliest occurrence is the one the sweep wrote in order.
     for (i = 0; i < extra; i++) stale.push(have[k][have[k].length - 1 - i]);
   }
-  return { dest: dest, width: width, cutoff: cutoff, keyIdx: keyIdx, src: src, dst: dst,
-           missing: missing, stale: stale };
+  return { source: source, dest: dest, width: width, cutoff: cutoff, keyIdx: keyIdx,
+           src: src, dst: dst, missing: missing, stale: stale };
 }
 
 function _msDescribe(r, keyIdx) {
@@ -448,8 +516,11 @@ function reconcileMaterials(days, force) {
     var ranges = _msDeleteRanges(d.stale);
     for (i = 0; i < ranges.length; i++) { d.dest.deleteRows(ranges[i].start, ranges[i].count); n += ranges[i].count; }
     if (d.missing.length) {
-      var vals = [];
-      for (i = 0; i < d.missing.length; i++) vals.push(d.missing[i].values);
+      // The compare skipped the formula columns, so those cells are holes in what it read.
+      // Fetch the rows about to be appended at full width — a handful of rows, unlike the
+      // window — so the mirror carries the same values a human sees in the source rather than
+      // blanks in the middle of every repaired row.
+      var vals = _msFullRows(d.source, d.missing, d.width);
       d.dest.getRange(d.dest.getLastRow() + 1, 1, vals.length, d.width).setValues(vals);
     }
     // Rows were removed from the middle of the destination, but the pointer counts SOURCE rows,
