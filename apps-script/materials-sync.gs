@@ -585,7 +585,13 @@ function syncMaterialsAndReconcile() {
   // The sweep is allowed to run to 4.5 minutes. Starting a reconcile after one of those walks
   // straight into the 6-minute wall and loses both. A backlog run gets the sweep to itself; the
   // next trigger, with nothing left to copy, does the reconcile.
-  if (Date.now() - t0 > 60000) {
+  //
+  // The threshold is 4 minutes, not the 1 it was, because on this source the first touch of the
+  // spreadsheet — getSheetByName, before a single row is read — measures ~130s while every read
+  // after it is ~2s. Both functions in this run share that one bind, so the reconcile costs
+  // seconds when it follows the sweep. At 1 minute the guard fired on the bind alone and the
+  // reconcile would never once have run.
+  if (Date.now() - t0 > 240000) {
     console.log('Sweep took ' + Math.round((Date.now() - t0) / 1000) + 's; reconcile deferred to the next trigger.');
     return;
   }
