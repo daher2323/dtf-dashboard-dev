@@ -534,6 +534,43 @@ function reconcileMaterials(days, force) {
   }
 }
 
+// ── Where does the time actually go ───────────────────────────────────────
+// Run this when a sync or audit hangs. Every line prints the moment it is measured, so the log
+// says which operation is slow instead of leaving a spinner and no evidence. Reads nothing but
+// tails and single cells, so it cannot itself be the slow thing.
+function msProbe() {
+  var t, ss, src, dest, lr, lc;
+  t = Date.now(); ss = SpreadsheetApp.getActiveSpreadsheet();
+  console.log('open active spreadsheet: ' + (Date.now() - t) + ' ms  (' + ss.getName() + ')');
+  t = Date.now(); src = ss.getSheetByName(SOURCE_SHEET_NAME);
+  console.log('getSheetByName: ' + (Date.now() - t) + ' ms');
+  if (!src) { console.error('Source sheet "' + SOURCE_SHEET_NAME + '" not found. Sheets here: '
+    + ss.getSheets().map(function(s) { return s.getName(); }).join(', ')); return; }
+  t = Date.now(); lr = src.getLastRow(); console.log('source getLastRow = ' + lr + ': ' + (Date.now() - t) + ' ms');
+  t = Date.now(); lc = src.getLastColumn(); console.log('source getLastColumn = ' + lc + ': ' + (Date.now() - t) + ' ms');
+
+  function timeRead(sheet, label, row, col, nr, nc) {
+    var t0 = Date.now(), v;
+    try { v = sheet.getRange(row, col, nr, nc).getValues(); }
+    catch (err) { console.error(label + ': FAILED after ' + (Date.now() - t0) + ' ms — ' + err); return; }
+    console.log(label + ' (' + nr + ' x ' + nc + '): ' + (Date.now() - t0) + ' ms');
+  }
+  // Entered columns only, then the same rows including a formula column, so the difference
+  // between the two lines is the cost of the (Check) lookups and nothing else.
+  timeRead(src, 'source 1 cell', lr, 1, 1, 1);
+  timeRead(src, 'source tail col A', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), 1);
+  timeRead(src, 'source tail entered cols', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), 6);
+  timeRead(src, 'source tail WITH formula col', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), 7);
+  timeRead(src, 'source tail full width', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), lc);
+
+  t = Date.now(); dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
+  console.log('open destination by id: ' + (Date.now() - t) + ' ms');
+  t = Date.now(); lr = dest.getLastRow(); console.log('destination getLastRow = ' + lr + ': ' + (Date.now() - t) + ' ms');
+  timeRead(dest, 'destination tail col A', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), 1);
+  timeRead(dest, 'destination tail full width', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), dest.getLastColumn());
+  console.log('Probe complete.');
+}
+
 // The editor's Run button cannot pass arguments, so the two you click from the dropdown
 // take none and use the default window.
 function auditMaterialsNow() { auditMaterialsSync(MS_RECONCILE_DAYS); }
