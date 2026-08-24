@@ -101,8 +101,22 @@ function onMaterialsFormSubmit(e) {
       var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
       if (!_msHeadersMatch(dest, headers)) { _msSetPointer(0); return; }  // let the sweep rebuild
       dest.getRange(dest.getLastRow() + 1, 1, 1, headers.length).setValues(values);
-      // Keep the pointer level with what has been written so the sweep does not re-append it.
-      if (row > _msGetPointer()) _msSetPointer(row);
+      // NO pointer advance here, deliberately. It used to move the pointer up to this row so the
+      // sweep would not re-read it, and that quietly punched permanent holes in the mirror:
+      //
+      //   row 100 submits, succeeds, pointer = 100
+      //   row 101 submits, THROWS  (this trigger fails ~7% of the time)
+      //   row 102 submits, succeeds, pointer = 102
+      //
+      // The sweep then starts at 103, and row 101 is never looked at again by anything. The
+      // pointer is a high-water mark, so a failure between two successes is skipped for ever.
+      // That is exactly the shape of the rows found missing: a steady ~1.5 a day, spread evenly,
+      // no clustering and nothing wrong with the rows themselves.
+      //
+      // Leaving the pointer alone costs the sweep a re-read of the rows since its last run, and
+      // it appends none of them — the key-set dedupe built from the destination already stops a
+      // re-append. That check was always doing this job; the advance was an optimisation that
+      // traded correctness for a read the sweep performs anyway.
     } finally {
       lock.releaseLock();
     }
