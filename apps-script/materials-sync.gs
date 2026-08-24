@@ -606,6 +606,27 @@ function explainMaterialsDrift(days, cap) {
   if (unmatched) console.log('  ' + unmatched + ' stale row(s) have no source row at all.');
 }
 
+// What is actually installed. The two paths need two triggers with different event sources,
+// and the difference between "the sweep is scheduled" and "the sweep exists in this file" is
+// invisible from the editor until you look.
+function msListTriggers() {
+  var t = ScriptApp.getProjectTriggers(), i, hasSweep = false, hasSubmit = false;
+  if (!t.length) { console.warn('No triggers installed at all.'); }
+  for (i = 0; i < t.length; i++) {
+    var fn = t[i].getHandlerFunction(), src = String(t[i].getEventType());
+    console.log(fn + '  —  ' + src + ' / ' + String(t[i].getTriggerSource()));
+    if (fn === 'syncMaterials' || fn === 'syncMaterialsAndReconcile') hasSweep = true;
+    if (fn === 'onMaterialsFormSubmit') hasSubmit = true;
+  }
+  if (!hasSubmit) console.warn('No onMaterialsFormSubmit trigger — nothing syncs at submit time.');
+  if (!hasSweep) {
+    console.warn('No time-based sweep trigger. The submit trigger is the ONLY path, and it does '
+      + 'not fire on edits, on imports, or once the quota is spent — every row it misses is lost '
+      + 'until something reconciles. This is the likeliest reason rows are absent from the mirror.');
+  }
+  console.log('Sync pointer (last source row known synced): ' + (_msGetPointer() || 'unset'));
+}
+
 // ── Where does the time actually go ───────────────────────────────────────
 // Run this when a sync or audit hangs. Every line prints the moment it is measured, so the log
 // says which operation is slow instead of leaving a spinner and no evidence. Reads nothing but
