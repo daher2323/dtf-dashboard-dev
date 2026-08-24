@@ -261,17 +261,36 @@ function _msTs(v) {
   var d = new Date(String(v || '').trim());
   return isNaN(d.getTime()) ? null : d.getTime();
 }
-// Row indices (1-based sheet rows) whose timestamp is at or after the cutoff. Scans the whole
-// timestamp column — one narrow read — because the destination is in append order, not date
-// order, so a recent row can sit above an older one.
+// Row indices (1-based sheet rows) whose timestamp is at or after the cutoff.
+//
+// This used to read the whole timestamp column of both sheets — 23k cells each — and that read
+// alone put the audit into "Exceeded maximum execution time". It is the same lesson the sweep
+// already learned above: cost must scale with the window, not with the log. So walk BACKWARDS
+// from the last row in blocks and stop once an entire block sits before the cutoff.
+//
+// Stopping on an entire block rather than on the first old row is deliberate. The destination is
+// in append order, not date order — a pointer reset re-appended a run of older rows near the
+// bottom — so a single pre-cutoff row is not the edge of the window. A whole block of them is.
+var MS_TAIL_BLOCK = 2000;      // rows per backwards read
+var MS_TAIL_SCAN_MAX = 12000;  // never look further back than this, whatever the dates say
+
 function _msWindowRows(sheet, cutoffMs) {
   var last = sheet.getLastRow();
   if (last < 2) return [];
-  var ts = sheet.getRange(2, 1, last - 1, 1).getValues(), out = [], i, t;
-  for (i = 0; i < ts.length; i++) {
-    t = _msTs(ts[i][0]);
-    if (t !== null && t >= cutoffMs) out.push(i + 2);
+  var floorRow = Math.max(2, last - MS_TAIL_SCAN_MAX + 1);
+  var out = [], row = last, start, vals, hit, i, t;
+  while (row >= floorRow) {
+    start = Math.max(floorRow, row - MS_TAIL_BLOCK + 1);
+    vals = sheet.getRange(start, 1, row - start + 1, 1).getValues();
+    hit = 0;
+    for (i = 0; i < vals.length; i++) {
+      t = _msTs(vals[i][0]);
+      if (t !== null && t >= cutoffMs) { out.push(start + i); hit++; }
+    }
+    row = start - 1;
+    if (!hit) break;
   }
+  out.sort(function(a, b) { return a - b; });
   return out;
 }
 // Contiguous runs of row numbers, descending, so deletions are a handful of calls and never
@@ -302,8 +321,11 @@ function _msDiff(days) {
   cutoff.setHours(0, 0, 0, 0);
   var cutoffMs = cutoff.getTime();
 
+  var t0 = Date.now();
   var srcRows = _msWindowRows(source, cutoffMs);
   var destRows = _msWindowRows(dest, cutoffMs);
+  console.log('Window scan: ' + srcRows.length + ' source / ' + destRows.length
+    + ' destination row(s) in ' + (Date.now() - t0) + ' ms.');
 
   // A source window that came back empty against a populated destination window means a bad
   // read, not a mass deletion. Never act on it.
@@ -328,7 +350,9 @@ function _msDiff(days) {
     return out;
   }
 
+  var t1 = Date.now();
   var src = loadFast(source, srcRows), dst = loadFast(dest, destRows);
+  console.log('Row load: ' + (Date.now() - t1) + ' ms.');
 
   // Multiset compare: a duplicate submission is legitimate (two draws on one slip), so counts
   // matter, not mere presence.
@@ -417,6 +441,14 @@ function reconcileMaterialsNow() { reconcileMaterials(MS_RECONCILE_DAYS); }
 // last few days. The short window keeps it to two narrow reads when nothing has drifted, which
 // is almost always.
 function syncMaterialsAndReconcile() {
+  var t0 = Date.now();
   syncMaterials();
+  // The sweep is allowed to run to 4.5 minutes. Starting a reconcile after one of those walks
+  // straight into the 6-minute wall and loses both. A backlog run gets the sweep to itself; the
+  // next trigger, with nothing left to copy, does the reconcile.
+  if (Date.now() - t0 > 60000) {
+    console.log('Sweep took ' + Math.round((Date.now() - t0) / 1000) + 's; reconcile deferred to the next trigger.');
+    return;
+  }
   try { reconcileMaterials(3); } catch (err) { console.error('reconcile step: ' + err); }
 }
