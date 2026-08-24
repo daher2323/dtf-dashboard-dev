@@ -466,11 +466,17 @@ function _msDiff(days) {
     for (i = 0; i < extra; i++) stale.push(have[k][have[k].length - 1 - i]);
   }
   return { source: source, dest: dest, width: width, cutoff: cutoff, keyIdx: keyIdx,
-           src: src, dst: dst, missing: missing, stale: stale };
+           headers: srcHeaders, sigCols: sigCols, src: src, dst: dst,
+           missing: missing, stale: stale };
 }
 
+function _msWhen(v) {
+  // Dates normalise to epoch ms for comparison; a log line wants the date back.
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'M/d/yy HH:mm:ss');
+  return _msNorm(v);
+}
 function _msDescribe(r, keyIdx) {
-  return _msNorm(r.values[0]) + ' \u00b7 lot ' + _msNorm(r.values[keyIdx[0]])
+  return _msWhen(r.values[0]) + ' \u00b7 lot ' + _msNorm(r.values[keyIdx[0]])
     + ' \u00b7 part ' + _msNorm(r.values[keyIdx[1]]);
 }
 
@@ -534,6 +540,67 @@ function reconcileMaterials(days, force) {
   }
 }
 
+// ── Which column drifted, and does it matter ──────────────────────────────
+// The audit reports that a row differs. It cannot report WHY without printing every column of
+// every row, which is unreadable at 73 rows. This pairs each stale destination row with the
+// source row carrying the same timestamp + lot + part and names only the columns that differ,
+// with both values.
+//
+// Run it before ever forcing a reconcile past the deletion ceiling. A column that differs on
+// every row is a normalisation artefact in this script and must be fixed here; a column that
+// differs on a scattered few is people correcting the sheet, and those are the repairs the
+// reconcile exists to carry.
+function explainMaterialsDrift(days, cap) {
+  var d = _msDiff(days || MS_RECONCILE_DAYS), i, j, c;
+  cap = cap || 15;
+  var bySig = {}, srcIx = {};
+  for (i = 0; i < d.src.length; i++) {
+    var sk = _msNorm(d.src[i].values[0]) + '||' + _msNorm(d.src[i].values[d.keyIdx[0]])
+           + '||' + _msNorm(d.src[i].values[d.keyIdx[1]]);
+    if (!srcIx[sk]) srcIx[sk] = [];
+    srcIx[sk].push(d.src[i]);
+  }
+  var byRow = {};
+  for (i = 0; i < d.dst.length; i++) byRow[d.dst[i].row] = d.dst[i];
+
+  var tally = {}, unmatched = 0, shown = 0;
+  for (i = 0; i < d.stale.length; i++) {
+    var dr = byRow[d.stale[i]];
+    if (!dr) continue;
+    var k = _msNorm(dr.values[0]) + '||' + _msNorm(dr.values[d.keyIdx[0]])
+          + '||' + _msNorm(dr.values[d.keyIdx[1]]);
+    var cands = srcIx[k];
+    if (!cands || !cands.length) {
+      unmatched++;
+      if (shown < cap) { console.log('dest row ' + dr.row + ': ' + _msDescribe(dr, d.keyIdx)
+        + ' — NO source row with this timestamp + lot + part (deleted or re-keyed at source)'); shown++; }
+      continue;
+    }
+    var sr = cands[0], diffs = [];
+    for (j = 0; j < d.sigCols.length; j++) {
+      c = d.sigCols[j];
+      if (_msNorm(dr.values[c]) !== _msNorm(sr.values[c])) {
+        diffs.push({ col: c, dest: _msNorm(dr.values[c]), src: _msNorm(sr.values[c]) });
+        tally[d.headers[c]] = (tally[d.headers[c]] || 0) + 1;
+      }
+    }
+    if (shown < cap) {
+      var parts = [];
+      for (j = 0; j < diffs.length; j++) {
+        parts.push('"' + d.headers[diffs[j].col] + '" dest=[' + diffs[j].dest + '] src=[' + diffs[j].src + ']');
+      }
+      console.log('dest row ' + dr.row + ' vs src row ' + sr.row + ': ' + parts.join('  |  '));
+      shown++;
+    }
+  }
+  console.log('--- columns that differ, across all ' + d.stale.length + ' stale row(s) ---');
+  var names = [];
+  for (var h in tally) if (tally.hasOwnProperty(h)) names.push(h);
+  names.sort(function(a, b) { return tally[b] - tally[a]; });
+  for (i = 0; i < names.length; i++) console.log('  ' + tally[names[i]] + ' x  "' + names[i] + '"');
+  if (unmatched) console.log('  ' + unmatched + ' stale row(s) have no source row at all.');
+}
+
 // ── Where does the time actually go ───────────────────────────────────────
 // Run this when a sync or audit hangs. Every line prints the moment it is measured, so the log
 // says which operation is slow instead of leaving a spinner and no evidence. Reads nothing but
@@ -575,6 +642,7 @@ function msProbe() {
 // take none and use the default window.
 function auditMaterialsNow() { auditMaterialsSync(MS_RECONCILE_DAYS); }
 function reconcileMaterialsNow() { reconcileMaterials(MS_RECONCILE_DAYS); }
+function explainMaterialsDriftNow() { explainMaterialsDrift(MS_RECONCILE_DAYS, 15); }
 
 // Point the time-based trigger at this instead of syncMaterials: copy new rows, then repair the
 // last few days. The short window keeps it to two narrow reads when nothing has drifted, which
