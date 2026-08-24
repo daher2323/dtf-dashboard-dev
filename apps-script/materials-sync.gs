@@ -214,3 +214,204 @@ function resetMaterialsSyncPointer() {
   _msProps().deleteProperty(PROP_LAST_ROW);
   console.log('Pointer cleared; the next syncMaterials run will re-check the whole source sheet.');
 }
+
+// ── Reconciliation: the mirror only ever grew ─────────────────────────────
+// Both paths above APPEND. Neither ever looks at a row it has already copied, so the two
+// sheets can only diverge, silently and permanently:
+//
+//   * A cell EDITED in the source after submission never reaches the destination. On 8/24/26 a
+//     pick submitted at 8:20:04 carried production lot 2608118 — the lot that operator had been
+//     picking an hour earlier — and was corrected in the source to 2608120 afterwards. The
+//     destination still says 2608118, so the dashboard put an L-Leucine pull on a run that never
+//     consumed it, and FEFO review flagged it there.
+//   * A row DELETED from the source stays in the destination for ever, so a retracted pick keeps
+//     being counted.
+//
+// Editing the source is not supposed to happen — a correction is meant to be a NEW form entry,
+// which is why the dedupe key carries the timestamp. But a wrong PRODUCTION LOT cannot be fixed
+// that way: byLotPart keys the supersede on lot + part, so a re-log under the right lot does not
+// retract the entry filed under the wrong one. There is no in-form route, so people edit the
+// sheet, and they will keep doing it. The mirror has to follow them.
+//
+// So: compare a trailing window of both sheets by full-row signature and repair the difference.
+// An edited row appears as one stale destination row plus one missing source row, and is fixed
+// by deleting the former and appending the latter. Order does not matter — the dashboard sorts
+// pick rows by timestamp, never by sheet position.
+//
+// The window bounds the blast radius. Rows older than it are never touched, which matters
+// because the destination carries a few hundred rows of pre-existing surplus from earlier key
+// schemes; a whole-sheet reconcile would delete them, and that is not a decision this function
+// should be making on its own.
+var MS_RECONCILE_DAYS = 21;      // how far back to compare
+var MS_MAX_DELETE = 50;          // refuse to delete more than this in one run; something is wrong
+
+function _msNorm(v) {
+  if (v instanceof Date) return String(v.getTime());
+  if (typeof v === 'number') return String(v);          // 350 and 350.00 are the same value
+  return String(v == null ? '' : v).trim();
+}
+// Signature over every column, so ANY edited cell registers as a difference.
+function _msSig(row, width) {
+  var p = [], i;
+  for (i = 0; i < width; i++) p.push(_msNorm(row[i]));
+  return p.join('␟');
+}
+function _msTs(v) {
+  if (v instanceof Date) return v.getTime();
+  var d = new Date(String(v || '').trim());
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+// Row indices (1-based sheet rows) whose timestamp is at or after the cutoff. Scans the whole
+// timestamp column — one narrow read — because the destination is in append order, not date
+// order, so a recent row can sit above an older one.
+function _msWindowRows(sheet, cutoffMs) {
+  var last = sheet.getLastRow();
+  if (last < 2) return [];
+  var ts = sheet.getRange(2, 1, last - 1, 1).getValues(), out = [], i, t;
+  for (i = 0; i < ts.length; i++) {
+    t = _msTs(ts[i][0]);
+    if (t !== null && t >= cutoffMs) out.push(i + 2);
+  }
+  return out;
+}
+// Contiguous runs of row numbers, descending, so deletions are a handful of calls and never
+// shift a row this loop has yet to touch.
+function _msDeleteRanges(rows) {
+  var s = rows.slice().sort(function(a, b) { return b - a; }), out = [], i, end;
+  for (i = 0; i < s.length; ) {
+    end = s[i];
+    while (i + 1 < s.length && s[i + 1] === s[i] - 1) i++;
+    out.push({ start: s[i], count: end - s[i] + 1 });
+    i++;
+  }
+  return out;
+}
+
+// Shared by the audit and the repair. Returns what differs; writes nothing.
+function _msDiff(days) {
+  var source = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
+  if (!source) throw new Error('Source sheet "' + SOURCE_SHEET_NAME + '" not found');
+  var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
+  var width = source.getLastColumn();
+  var srcHeaders = source.getRange(1, 1, 1, width).getValues()[0];
+  if (!_msHeadersMatch(dest, srcHeaders)) throw new Error('Headers differ; run syncMaterials first');
+  var keyIdx = _msKeyIdx(srcHeaders);
+
+  var cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - (days || MS_RECONCILE_DAYS));
+  cutoff.setHours(0, 0, 0, 0);
+  var cutoffMs = cutoff.getTime();
+
+  var srcRows = _msWindowRows(source, cutoffMs);
+  var destRows = _msWindowRows(dest, cutoffMs);
+
+  // A source window that came back empty against a populated destination window means a bad
+  // read, not a mass deletion. Never act on it.
+  if (!srcRows.length && destRows.length) throw new Error('Source window empty, destination has '
+    + destRows.length + ' row(s) — refusing to reconcile against what looks like a failed read');
+
+  // One block read per contiguous run beats one per row; the window is usually contiguous.
+  function loadFast(sheet, rows) {
+    if (!rows.length) return [];
+    var out = [], i = 0, start, end, block, b;
+    while (i < rows.length) {
+      start = rows[i];
+      while (i + 1 < rows.length && rows[i + 1] === rows[i] + 1) i++;
+      end = rows[i];
+      block = sheet.getRange(start, 1, end - start + 1, width).getValues();
+      for (b = 0; b < block.length; b++) {
+        if (_msIsBlankKey(block[b], keyIdx)) continue;
+        out.push({ row: start + b, values: block[b], sig: _msSig(block[b], width) });
+      }
+      i++;
+    }
+    return out;
+  }
+
+  var src = loadFast(source, srcRows), dst = loadFast(dest, destRows);
+
+  // Multiset compare: a duplicate submission is legitimate (two draws on one slip), so counts
+  // matter, not mere presence.
+  var have = {}, i, k;
+  for (i = 0; i < dst.length; i++) {
+    k = dst[i].sig;
+    if (!have[k]) have[k] = [];
+    have[k].push(dst[i].row);
+  }
+  var missing = [], want = {};
+  for (i = 0; i < src.length; i++) {
+    k = src[i].sig;
+    want[k] = (want[k] || 0) + 1;
+    if (!have[k] || have[k].length < want[k]) missing.push(src[i]);
+  }
+  var stale = [];
+  for (k in have) {
+    if (!have.hasOwnProperty(k)) continue;
+    var extra = have[k].length - (want[k] || 0);
+    // Drop the LAST copies: the earliest occurrence is the one the sweep wrote in order.
+    for (i = 0; i < extra; i++) stale.push(have[k][have[k].length - 1 - i]);
+  }
+  return { dest: dest, width: width, cutoff: cutoff, keyIdx: keyIdx, src: src, dst: dst,
+           missing: missing, stale: stale };
+}
+
+function _msDescribe(r, keyIdx) {
+  return _msNorm(r.values[0]) + ' \u00b7 lot ' + _msNorm(r.values[keyIdx[0]])
+    + ' \u00b7 part ' + _msNorm(r.values[keyIdx[1]]);
+}
+
+// Read-only. Run this first, and after any change to the source, to see what has drifted.
+function auditMaterialsSync(days) {
+  var d = _msDiff(days), i;
+  console.log('Window from ' + d.cutoff.toDateString() + ': source ' + d.src.length
+    + ' row(s), destination ' + d.dst.length + ' row(s).');
+  if (!d.missing.length && !d.stale.length) { console.log('In step — nothing to repair.'); return; }
+  console.log(d.missing.length + ' row(s) in the source that the destination is missing:');
+  for (i = 0; i < d.missing.length; i++) console.log('  + src row ' + d.missing[i].row + ': ' + _msDescribe(d.missing[i], d.keyIdx));
+  console.log(d.stale.length + ' row(s) in the destination that no longer match the source:');
+  for (i = 0; i < d.stale.length; i++) {
+    var row = null, j;
+    for (j = 0; j < d.dst.length; j++) if (d.dst[j].row === d.stale[i]) row = d.dst[j];
+    console.log('  - dest row ' + d.stale[i] + ': ' + (row ? _msDescribe(row, d.keyIdx) : ''));
+  }
+}
+
+// Applies the repair: append what is missing, delete what the source no longer says.
+// `force` lifts the MS_MAX_DELETE ceiling — only after auditMaterialsSync has shown you why.
+function reconcileMaterials(days, force) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) { console.log('Sync is mid-write; skipping this reconcile.'); return; }
+  try {
+    var d = _msDiff(days), i, n = 0;
+    if (!d.missing.length && !d.stale.length) return;
+    if (d.stale.length > MS_MAX_DELETE && !force) {
+      console.error('Reconcile stopped: ' + d.stale.length + ' destination row(s) would be deleted, '
+        + 'over the ' + MS_MAX_DELETE + ' ceiling. Run auditMaterialsSync() and, if it is genuinely '
+        + 'right, reconcileMaterials(days, true).');
+      return;
+    }
+    var ranges = _msDeleteRanges(d.stale);
+    for (i = 0; i < ranges.length; i++) { d.dest.deleteRows(ranges[i].start, ranges[i].count); n += ranges[i].count; }
+    if (d.missing.length) {
+      var vals = [];
+      for (i = 0; i < d.missing.length; i++) vals.push(d.missing[i].values);
+      d.dest.getRange(d.dest.getLastRow() + 1, 1, vals.length, d.width).setValues(vals);
+    }
+    // Rows were removed from the middle of the destination, but the pointer counts SOURCE rows,
+    // so it stays valid. Left alone deliberately.
+    console.log('Reconciled: deleted ' + n + ', appended ' + d.missing.length + '.');
+  } catch (err) {
+    console.error('reconcileMaterials failed: ' + (err && err.stack || err));
+    throw err;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Point the time-based trigger at this instead of syncMaterials: copy new rows, then repair the
+// last few days. The short window keeps it to two narrow reads when nothing has drifted, which
+// is almost always.
+function syncMaterialsAndReconcile() {
+  syncMaterials();
+  try { reconcileMaterials(3); } catch (err) { console.error('reconcile step: ' + err); }
+}
