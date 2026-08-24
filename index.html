@@ -2852,12 +2852,12 @@ function _fefoOpsPanelHTML() {
               // bulk pull and turned clean swaps into "top-ups" that were never real.
               + '<td style="' + td + 'text-align:right;color:#85B7EB;vertical-align:top;">'
                 + (d.needed > 0
-                    ? '<span title="Qty Needed for this material on this production lot — the amount consumed. The form\'s QTY Picked column often records the drum brought out instead, so it is not used here.">' + fmtStockQty(d.needed) + '</span>'
+                    ? '<span title="Qty Needed for this material on this production lot — the amount consumed. The form\'s QTY Picked column often records the drum brought out instead, so it is not used here.">' + fmtStockQty(d.needed) + ' <span style="font-size:10px;font-weight:400;opacity:.75;">' + _uS + '</span></span>'
                     : '<span style="color:#5f5e5a;">&mdash;</span>')
                 + (d.couldCover === true
                     ? '<div title="' + esc(d.shouldLot) + ' holds ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ', more than the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed. Taking the older lot was straightforwardly possible." style="font-size:10px;color:#9FE1CB;margin-top:1px;cursor:help;">swap was possible</div>'
                     : d.couldCover === false
-                    ? '<div title="' + esc(d.shouldLot) + ' held only ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' against the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed, and nothing has been drawn from it since, so that figure is exact. First-expiry-first-out here meant taking that remainder and topping up from what was pulled instead, not swapping." style="font-size:10px;color:#FAC775;margin-top:1px;cursor:help;">top-up only &middot; had ' + fmtStockQty(d.heldAtLeast) + '</div>'
+                    ? '<div title="' + esc(d.shouldLot) + ' held only ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + ' against the ' + fmtStockQty(d.needed) + ' ' + _uS + ' this run needed, and nothing has been drawn from it since, so that figure is exact. First-expiry-first-out here meant taking that remainder and topping up from what was pulled instead, not swapping." style="font-size:10px;color:#FAC775;margin-top:1px;cursor:help;">top-up only &middot; had ' + fmtStockQty(d.heldAtLeast) + ' ' + _uS + '</div>'
                     // Third state, stated rather than left blank. Where the lot still holds
                     // less than the run needed, a reader sees a small on-shelf figure beside a
                     // large quantity and expects a top-up label; getting nothing reads as an
