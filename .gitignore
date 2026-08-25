@@ -1,2 +1,7 @@
 # macOS Finder metadata
 .DS_Store
+
+# Claude Code runtime state: a live pid + session id, rewritten on every run and
+# meaningless on any other machine. (settings.local.json next to it is already excluded
+# machine-wide by ~/.config/git/ignore — it is per-machine permissions, not project config.)
+.claude/scheduled_tasks.lock
