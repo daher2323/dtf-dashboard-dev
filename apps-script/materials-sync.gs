@@ -7,7 +7,9 @@
 // Two paths, deliberately:
 //   onMaterialsFormSubmit  installable trigger, one row, ~1s. This is the live path — a
 //                          correction logged at 2pm is on the dashboard within its next 5-minute
-//                          poll rather than at the top of the next quarter hour.
+//                          poll rather than at the top of the next quarter hour. It builds the
+//                          row from the form event and never opens the source workbook, which
+//                          is what makes it ~1s again rather than ~130s (see below).
 //   syncMaterials          time-based sweep, every 15-30 min. A safety net for rows the submit
 //                          trigger missed (it does not fire on edits, imports, or while the
 //                          quota is exhausted), NOT the primary path.
@@ -82,46 +84,199 @@ function _msKeyIdx(headers) {
 //   function: onMaterialsFormSubmit, event source: From spreadsheet, type: On form submit.
 // Wrapped so a failure here can never block the form submission itself; the sweep will pick the
 // row up regardless, which is the entire reason the sweep still exists.
+//
+// Two properties of this function are load-bearing, and both come from failures in the log
+// rather than from anything visible in the code that used to be here.
+//
+// IT DOES NOT OPEN THE SOURCE WORKBOOK. The event already carries every answer the operator
+// typed — e.namedValues, keyed by the form question title, which is the sheet header — so the
+// row can be assembled without binding the source spreadsheet at all. The first touch of that
+// workbook measures ~130 s before a single row is read, so reading the submitted row back out
+// of the sheet spent over two minutes learning what the event had already said. That read is
+// what put this trigger over the six-minute wall ~9 times a day ("Exceeded maximum execution
+// time"), and every one of those was a row the live path did not deliver.
+//
+// IT NEVER HOLDS THE LOCK ACROSS A SOURCE READ. It used to take the script lock as its first
+// act, so each of those six-minute hangs sat on the lock for its entire life — and syncMaterials
+// opens with tryLock(10000) and returns quietly when it loses, so every sweep that overlapped a
+// hung submit silently no-opped. The safety net was down precisely when the live path was
+// failing, which is how rows went missing for weeks with neither function logging an error. The
+// lock now covers destination work only — one header read and one append, ~400 ms — and the
+// fallback below takes it after its slow reads, never before them.
+//
+// The event path is SELF-CHECKING and hands the row to the old source read whenever the mapping
+// is not provably right (see _msSubmitFromEvent). A wrong row is worse than a slow one.
 function onMaterialsFormSubmit(e) {
   try {
-    if (!e || !e.range) return;
-    var lock = LockService.getScriptLock();
-    if (!lock.tryLock(20000)) return;          // sweep is mid-write; let it carry the row
-    try {
-      var source = e.range.getSheet();
-      if (source.getName() !== SOURCE_SHEET_NAME) return;
-      var row = e.range.getRow();
-      if (row < 2) return;
-      var lastCol = source.getLastColumn();
-      var headers = source.getRange(1, 1, 1, lastCol).getValues()[0];
-      var values = source.getRange(row, 1, 1, lastCol).getValues();
-      var keyIdx = _msKeyIdx(headers);
-      if (_msIsBlankKey(values[0], keyIdx)) return;       // no lot and no part = nothing to sync
-
-      var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
-      if (!_msHeadersMatch(dest, headers)) { _msSetPointer(0); return; }  // let the sweep rebuild
-      dest.getRange(dest.getLastRow() + 1, 1, 1, headers.length).setValues(values);
-      // NO pointer advance here, deliberately. It used to move the pointer up to this row so the
-      // sweep would not re-read it, and that quietly punched permanent holes in the mirror:
-      //
-      //   row 100 submits, succeeds, pointer = 100
-      //   row 101 submits, THROWS  (this trigger fails ~7% of the time)
-      //   row 102 submits, succeeds, pointer = 102
-      //
-      // The sweep then starts at 103, and row 101 is never looked at again by anything. The
-      // pointer is a high-water mark, so a failure between two successes is skipped for ever.
-      // That is exactly the shape of the rows found missing: a steady ~1.5 a day, spread evenly,
-      // no clustering and nothing wrong with the rows themselves.
-      //
-      // Leaving the pointer alone costs the sweep a re-read of the rows since its last run, and
-      // it appends none of them — the key-set dedupe built from the destination already stops a
-      // re-append. That check was always doing this job; the advance was an optimisation that
-      // traded correctness for a read the sweep performs anyway.
-    } finally {
-      lock.releaseLock();
-    }
+    if (!e) return;
+    if (_msSubmitFromEvent(e)) return;
+    _msSubmitFromSource(e);
   } catch (err) {
     console.error('onMaterialsFormSubmit failed: ' + (err && err.stack || err));
+  }
+}
+
+// ── Why neither path advances the pointer ─────────────────────────────────
+// This trigger used to move the sweep's pointer up to the row it had just copied, so the sweep
+// would not re-read it, and that quietly punched permanent holes in the mirror:
+//
+//   row 100 submits, succeeds, pointer = 100
+//   row 101 submits, THROWS  (this trigger fails ~7% of the time)
+//   row 102 submits, succeeds, pointer = 102
+//
+// The sweep then starts at 103, and row 101 is never looked at again by anything. The pointer is
+// a high-water mark, so a failure between two successes is skipped for ever. That is exactly the
+// shape of the rows found missing: a steady ~1.5 a day, spread evenly, no clustering and nothing
+// wrong with the rows themselves.
+//
+// Leaving the pointer alone costs the sweep a re-read of the rows since its last run, and it
+// appends none of them — the key-set dedupe built from the destination already stops a
+// re-append. That check was always doing this job; the advance was an optimisation that traded
+// correctness for a read the sweep performs anyway.
+
+function _msTrim(v) { return String(v == null ? '' : v).trim(); }
+
+// The submitted timestamp, as a Date, out of the string the event carries.
+//
+// It has to be a Date and it has to be the same instant the source cell holds, because the
+// sweep's dedupe key is that value (_msStamp -> getTime()). A timestamp landing as text, or
+// shifted by a timezone, is not recognised as already-synced, so the sweep appends the row a
+// second time and the dashboard counts the pick twice. So the parse is round-tripped through the
+// script timezone and has to come back with the same fields; anything else returns null and
+// takes the source path, where the cell is read as a Date directly.
+//
+// This catches text, a shift, and an unexpected rendering (2-digit year, AM/PM). It cannot catch
+// a sheet whose locale swaps day and month — 8/9 parsed as Aug 9 round-trips as 8/9 either way.
+// This workbook is US-formatted throughout (the dashboard's dateKey is M/D/YYYY); if that ever
+// changes, this is the function to change with it.
+function _msEventStamp(raw) {
+  var s = _msTrim(raw);
+  if (!s) return null;
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  var want = _msDateFields(s);
+  if (!want) return null;
+  var back = Utilities.formatDate(d, Session.getScriptTimeZone(), 'M/d/yyyy H:mm:ss');
+  return want === _msDateFields(back) ? d : null;
+}
+function _msDateFields(s) {
+  var m = String(s || '').match(/(\d{1,4})\D+(\d{1,4})\D+(\d{1,4})\D+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp])?/);
+  if (!m) return null;
+  var y = +m[3]; if (y < 100) y += 2000;
+  var h = +m[4], ap = m[7] ? m[7].toLowerCase() : '';
+  if (ap === 'p' && h < 12) h += 12;
+  if (ap === 'a' && h === 12) h = 0;
+  return [+m[1], +m[2], y, h, +m[5], +(m[6] || 0)].join('/');
+}
+
+// One value per destination column, from the event's answers. Returns null when the header row
+// asks for something this mapping cannot answer honestly.
+//
+// Derived columns are left BLANK on purpose. The (Check) columns are formulas resolving a T#
+// against inventory; the event has no answer for them, the dashboard never parses them
+// (PICK_SLOT_IDX skips them), and the reconcile's signature excludes them (_msSigCols) — so a
+// blank there is inert, and it cannot read as drift. Inventing a value is the only way to make
+// that column matter.
+function _msEventRowFrom(named, names, stamp) {
+  var lookup = {}, seenName = {}, row = [], unmapped = [], k, i, h, v;
+  for (k in named) if (named.hasOwnProperty(k)) lookup[_msTrim(k)] = named[k];
+  // Two columns carrying the same header would both claim the same answer, and there is no way
+  // to tell from here which one the form wrote. Let the source read settle it.
+  for (i = 1; i < names.length; i++) {
+    h = names[i];
+    if (!h || _msIsDerivedHeader(h)) continue;
+    if (seenName[h]) return null;
+    seenName[h] = 1;
+  }
+  for (i = 0; i < names.length; i++) {
+    h = names[i];
+    if (i === 0) { row.push(stamp); continue; }             // Forms owns this header's name
+    if (_msIsDerivedHeader(h)) { row.push(''); continue; }
+    if (h && lookup.hasOwnProperty(h)) {
+      v = lookup[h];
+      row.push(v && v.join ? v.join(', ') : _msTrim(v));    // checkbox answers land comma-joined
+    } else {
+      row.push('');
+      if (h) unmapped.push(h);
+    }
+  }
+  return { values: row, unmapped: unmapped };
+}
+
+// Builds and appends the submitted row from the event alone. Returns true when the submission
+// has been dealt with — appended, or deliberately left to the sweep — and false when the caller
+// should fall back to reading the row out of the source sheet.
+function _msSubmitFromEvent(e) {
+  var named = e.namedValues;
+  if (!named) return false;
+  var stamp = _msEventStamp((e.values && e.values.length) ? e.values[0] : null);
+  if (!stamp) return false;
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return true;        // sweep is mid-write; let it carry the row
+  try {
+    // The destination's own header row is the write template: it is ~200 ms away, and it is the
+    // shape the destination actually has, which is the shape this append has to match. Reading
+    // it under the lock also means getLastRow() below cannot be a value the sweep has already
+    // moved past. If the form has since gained a column, the sweep sees the header mismatch and
+    // rebuilds the sheet from the source, so a row written to the older shape is not a dead end.
+    var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
+    if (dest.getLastRow() < 1) return false;    // no header row yet; let the sweep build it
+    var width = dest.getLastColumn();
+    var headers = dest.getRange(1, 1, 1, width).getValues()[0], names = [], i;
+    for (i = 0; i < width; i++) names.push(_msTrim(headers[i]));
+    var keyAt = [names.indexOf(KEY_HEADERS[0]), names.indexOf(KEY_HEADERS[1])];
+    if (keyAt[0] === -1 || keyAt[1] === -1) return false;
+
+    var built = _msEventRowFrom(named, names, stamp);
+    if (!built) return false;
+    // The self-check. A renamed form question, a header edited in the sheet, or a submission
+    // from some other tab's form all arrive here as a key column with no answer behind it — and
+    // a row with no lot and no part is indistinguishable from a spacer (_msIsBlankKey), so it
+    // must never be appended on a guess. Those go to the source path, which can see the sheet.
+    if (built.unmapped.indexOf(KEY_HEADERS[0]) !== -1) return false;
+    if (built.unmapped.indexOf(KEY_HEADERS[1]) !== -1) return false;
+    // Both key columns mapped and both came back empty: a genuine spacer, nothing to sync, and
+    // re-reading it from the source would reach the same conclusion 130 s later.
+    if (!_msTrim(built.values[keyAt[0]]) && !_msTrim(built.values[keyAt[1]])) return true;
+
+    dest.getRange(dest.getLastRow() + 1, 1, 1, width).setValues([built.values]);
+    if (built.unmapped.length) {
+      console.log('onMaterialsFormSubmit: no form answer for column(s) "'
+        + built.unmapped.join('", "') + '" — appended blank. Expected for columns filled in by '
+        + 'hand after submission; the reconcile carries whatever the source ends up holding.');
+    }
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// The old path, kept as the fallback: read the submitted row back out of the source sheet. It
+// pays the ~130 s bind, which is why it is no longer what runs first — but it sees the sheet as
+// it is, so it is the right answer whenever the event mapping cannot be trusted.
+function _msSubmitFromSource(e) {
+  if (!e.range) return;
+  var source = e.range.getSheet();
+  if (source.getName() !== SOURCE_SHEET_NAME) return;
+  var row = e.range.getRow();
+  if (row < 2) return;
+  var lastCol = source.getLastColumn();
+  var headers = source.getRange(1, 1, 1, lastCol).getValues()[0];
+  var values = source.getRange(row, 1, 1, lastCol).getValues();
+  var keyIdx = _msKeyIdx(headers);
+  if (_msIsBlankKey(values[0], keyIdx)) return;        // no lot and no part = nothing to sync
+
+  // Only now. Everything above is the slow part and none of it touches the destination, so
+  // there is nothing for the lock to protect until here.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return;                    // sweep is mid-write; let it carry the row
+  try {
+    var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
+    if (!_msHeadersMatch(dest, headers)) { _msSetPointer(0); return; }   // let the sweep rebuild
+    dest.getRange(dest.getLastRow() + 1, 1, 1, headers.length).setValues(values);
+  } finally {
+    lock.releaseLock();
   }
 }
 
