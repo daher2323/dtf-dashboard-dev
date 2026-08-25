@@ -2296,7 +2296,12 @@ var fefoOpsAnchor = null;     // a Date inside the selected period; null = curre
 var fefoOpsLife = FEFO_OPS_LIFE_DAYS;
 var fefoOpsGap = FEFO_OPS_GAP_DAYS;
 var fefoOpsOpen = {};         // part # -> explicit override of the expand/collapse stance
-var fefoOpsAllOpen = false;   // default stance for groups with no override
+// Groups start OPEN. A day is two or three materials and a handful of picks, and what is being
+// read is the evidence under each one — which lot was pulled, which should have been, whether
+// the older lot could have covered the run. Collapsed, that is a click per material to reach the
+// only thing on the row worth reading. Collapse all still sets the stance for the session, which
+// is what a wide period (a quarter, or a very loose life threshold) wants.
+var fefoOpsAllOpen = true;    // default stance for groups with no override
 
 // Bounds for the selected period. Self-contained rather than reusing the Logistics
 // navigator, whose bounds carry outbound/inbound baggage this has no use for.
