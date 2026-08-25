@@ -2065,11 +2065,13 @@ function _fefoPickTs(v) {
 // months under-detect because their lots have been purged — so this view scopes to one
 // period at a time and draws no trend.
 // Defaults chosen for the way this view is actually used: a live board, read while material is
-// being pulled. 90/90 is deliberately looser on the gap than the 180 it started at — over a
-// single day or week the point is to catch everything worth a second look, not to rank the
-// worst offenders across a quarter. The thresholds do not change with the granularity: what
-// counts as worth looking at is a property of the pick, not of how far back you are reading.
-var FEFO_OPS_LIFE_DAYS = 90;     // default: skipped lot was this close to expiry at pick time
+// being pulled. 180 on the life side opens the board on everything worth a second look rather
+// than on the worst cases only; narrow it from the panel as the review routine tightens up. The
+// gap is deliberately looser than the 180 it started at, for the same reason — over a single day
+// or week the point is to catch everything, not to rank offenders across a quarter. Neither
+// threshold changes with the granularity: what counts as worth looking at is a property of the
+// pick, not of how far back you are reading.
+var FEFO_OPS_LIFE_DAYS = 180;    // default: skipped lot was this close to expiry at pick time
 var FEFO_OPS_GAP_DAYS = 90;      // default: and what got picked expired at least this much later
 // (There is deliberately no quantity floor on the outcome. Whether the skipped lot still
 // holds stock is a fact to report, not a judgement to threshold — see computeFefoOps.)
