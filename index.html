@@ -2778,7 +2778,13 @@ function _fefoOpsPanelHTML() {
         + '</div>';
       if (!open) return wrapOpen + head + '</div>';
       var th = 'text-align:left;padding:5px 10px;font-size:9px;color:#5f5e5a;font-weight:500;font-family:system-ui;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;';
-      var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;font-family:system-ui;';
+      // vertical-align belongs on the shared style, not on each cell. A row is as tall as its
+      // tallest cell — a run split across four drums makes it four lines — and a table cell
+      // defaults to middle, so the three cells that had not said otherwise (Should have pulled,
+      // Fixed, Outcome) floated at half height while the other five sat on the first line. The
+      // whole point of the fixed grid above is reading down a column, and that needs every cell
+      // in a row to start on the same edge.
+      var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;font-family:system-ui;vertical-align:top;';
       // Every material group is its own table, and an auto-layout table sizes its columns to
       // its own content — so a long product name in one group pushed Pulled and everything
       // right of it out of line with the group above. table-layout:fixed plus one shared
@@ -2819,14 +2825,20 @@ function _fefoOpsPanelHTML() {
             var nm = _fefoOpsLotName(d.orderLot);
             var _uS = matUnitShort(d.material || g.material || '');
             return '<tr style="border-top:0.5px solid #2c2c2a;' + (d.fixedAt ? 'opacity:.62;' : '') + '">'
-              + '<td style="' + td + 'color:#cfcdc7;vertical-align:top;">' + _fefoOpsShortDate(d.when) + '</td>'
-              + '<td style="' + td + 'color:#888780;vertical-align:top;">' + (d.orderLot ? esc(d.orderLot) : '—')
+              + '<td style="' + td + 'color:#cfcdc7;">' + _fefoOpsShortDate(d.when) + '</td>'
+              + '<td style="' + td + 'color:#888780;">' + (d.orderLot ? esc(d.orderLot) : '—')
                 // Brand and product on a second line: this is the whole point of the
                 // "this week" read — knowing which product it was is what lets someone
                 // go and correct the pick before the run closes out.
-                // 100% of the (now fixed) column rather than a hard 250px, so the ellipsis
-                // lands at the real column edge.
-                + (nm ? '<div style="font-size:10px;margin-top:1px;max-width:100%;overflow:hidden;text-overflow:ellipsis;">'
+                // It WRAPS rather than ellipsing. Knowing which product it was is the reason
+                // this line exists, and one line of a fixed 240px column cannot hold a brand
+                // plus a name like "Creamy Rice Cereal Blueberry Ice Cream" — it cut off exactly
+                // where the name starts differing from its siblings. Clamped at two lines so a
+                // pathological name cannot stretch the row, and white-space has to be reset
+                // because the cell style sets nowrap for every other line in this table.
+                + (nm ? '<div style="font-size:10px;line-height:1.35;margin-top:1px;max-width:100%;'
+                        + 'white-space:normal;overflow-wrap:break-word;display:-webkit-box;'
+                        + '-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">'
                         + (nm.brand ? '<span style="color:#85B7EB;">' + esc(nm.brand) + '</span>' : '')
                         + (nm.brand && nm.product ? '<span style="color:#3a3a38;"> &middot; </span>' : '')
                         + (nm.product ? '<span style="color:#888780;">' + esc(nm.product) + '</span>' : '')
@@ -2836,7 +2848,7 @@ function _fefoOpsPanelHTML() {
               // Every drum taken instead of the older lot, each with its own expiry. A run
               // split across three drums is one decision, but which drums it was is exactly
               // the detail that must survive the merge.
-              + '<td style="' + td + 'vertical-align:top;">'
+              + '<td style="' + td + '">'
                 + d.pulled.map(function(pl, pi){
                     return (pi ? '<div style="margin-top:2px;">' : '<div>')
                       + _blendCopyCell(pl.lot)
@@ -2851,13 +2863,13 @@ function _fefoOpsPanelHTML() {
                   var hi = Math.round(d.gapDays/30), lo = Math.round(d.gapMin/30);
                   var txt = (lo === hi) ? hi + ' mo' : lo + '\u2013' + hi + ' mo';
                   var tip = (lo === hi) ? '' : ' title="The drums taken expire between ' + lo + ' and ' + hi + ' months later than ' + esc(d.shouldLot) + '."';
-                  return '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;vertical-align:top;"' + tip + '>' + txt + '</td>';
+                  return '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;"' + tip + '>' + txt + '</td>';
                 })()
               // The REQUIREMENT, not QTY Picked. QTY Picked routinely records the drum
               // brought to the floor rather than the amount consumed — 24 kg logged against
               // a 19 g requirement — so showing it made every micro-ingredient look like a
               // bulk pull and turned clean swaps into "top-ups" that were never real.
-              + '<td style="' + td + 'text-align:right;color:#85B7EB;vertical-align:top;">'
+              + '<td style="' + td + 'text-align:right;color:#85B7EB;">'
                 + (d.needed > 0
                     ? '<span title="Qty Needed for this material on this production lot — the amount consumed. The form\'s QTY Picked column often records the drum brought out instead, so it is not used here.">' + fmtStockQty(d.needed) + ' <span style="font-size:10px;font-weight:400;opacity:.75;">' + _uS + '</span></span>'
                     : '<span style="color:#5f5e5a;">&mdash;</span>')
