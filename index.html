@@ -2124,9 +2124,6 @@ function computeFefoOps() {
       // fortnight while the view called it consumed. lotRows only holds lots with qty > 0,
       // so membership here means "still has stock on it" and nothing has to be inferred.
       var onShelf = lq != null;
-      // One call, read three ways: what the lot held, whether that figure is exact, and
-      // whether its zero is unexplained. It was two identical calls before.
-      var sa = stockAt(best, when);
       // Split pull, not a skip: the earlier-expiring lot was drawn on the same slip, so
       // FEFO was followed and the pull was simply spread across two lots (usually because
       // the older one could not cover the whole quantity). 500 of ~6,600 decisions.
@@ -2187,18 +2184,12 @@ function computeFefoOps() {
         // What we can state without guessing: the older lot still holds this much TODAY, and
         // stock only falls, so it held at least this much when it was passed over. A lower
         // bound, not a reconstruction. 0 when the lot is spent and nothing can be claimed.
-        heldAtLeast: sa.qty,
-        heldExact: sa.exact,
+        heldAtLeast: stockAt(best, when).qty,
+        heldExact: stockAt(best, when).exact,
         needed: mine[i].needed || 0,
         // Ground truth, not a projection: 'expired' = it went off with stock left,
         // 'sitting' = still on the shelf, 'consumed' = used anyway, no harm done.
-        // liveZero is checked first, and it can only ever reclassify what would have been
-        // 'consumed': it requires no live stock, which is the same condition. The difference
-        // is that 'consumed' asserts the lot got used and nothing was lost, and here nobody
-        // can say that — the stock left the feed with no pick naming it.
-        outcome: sa.liveZero ? 'unaccounted'
-               : !onShelf ? 'consumed'
-               : (lx != null && lx < today ? 'expired' : 'sitting'),
+        outcome: !onShelf ? 'consumed' : (lx != null && lx < today ? 'expired' : 'sitting'),
         leftKg: onShelf ? lq : 0,
         bothPulled: bothPulled,
         fixedAt: fixedAt,
@@ -2439,14 +2430,7 @@ function _fefoOpsFixedStamp(fixedMs, pickMs) {
 var _FEFO_OUTCOME = {
   expired:  { bg:'#791F1F', fg:'#F09595', label:'expired',  tip:'The lot that was skipped is still on the shelf and is now past its expiry date. This one cost something.' },
   sitting:  { bg:'#4a3410', fg:'#FAC775', label:'on shelf', tip:'The lot that was skipped is still in stock and still in date — no loss yet, but it is older than what got used, so it should go first.' },
-  consumed: { bg:'#2c2c2a', fg:'#888780', label:'used up',  tip:'The lot that was skipped has no stock left — it was consumed later anyway, so nothing was lost.' },
-  // Deliberately NOT folded into "used up". That badge promises the lot got used and nothing
-  // was lost; this one is the case where nobody can say so. The lot is still listed in the
-  // inventory sheet at 0.00 and no pick names it, so the stock may have been consumed, written
-  // off or recounted — and it may well have been sitting there when it was passed over. Stated
-  // as unknown for the same reason an unreadable expiry date reads "bad date" rather than blank:
-  // the two need different actions. No quantity is appended, because there is none to state.
-  unaccounted: { bg:'#2a2f33', fg:'#9FB4C7', label:'unaccounted', tip:'The lot that was skipped is listed at 0 in the inventory sheet, but no pick records drawing it down — it may have been consumed, written off or recounted. What it held when it was passed over is not recorded. The finding is kept because an unexplained zero is not evidence the lot was unavailable.' }
+  consumed: { bg:'#2c2c2a', fg:'#888780', label:'used up',  tip:'The lot that was skipped has no stock left — it was consumed later anyway, so nothing was lost.' }
 };
 function _fefoOpsBtn(active) {
   return 'padding:3px 10px;border-radius:6px;border:1.5px solid '+(active?'#B8860B':'transparent')
@@ -2543,7 +2527,7 @@ function _fefoOpsGroups() {
     g.hay = hay.toLowerCase();
   });
 
-  var oc = { expired:0, sitting:0, consumed:0, unaccounted:0 };
+  var oc = { expired:0, sitting:0, consumed:0 };
   var fixedTotal = 0, swapProven = 0, topUpOnly = 0;
   flagged.forEach(function(d){
     oc[d.outcome]++;
@@ -2693,7 +2677,7 @@ function _fefoOpsPanelHTML() {
         + '<span title="No later pick entry for the same production lot and part names the correct lot, so as far as the pick sheet knows these were never put right." style="color:#FAC775;cursor:help;">' + G.openTotal + ' still open</span>';
     }
     h += '<span style="color:#3a3a38;">&middot;</span>'
-      + ['expired','sitting','consumed','unaccounted'].filter(function(o){ return oc[o]; }).map(function(o){
+      + ['expired','sitting','consumed'].filter(function(o){ return oc[o]; }).map(function(o){
           var C = _FEFO_OUTCOME[o];
           return '<span title="'+esc(C.tip)+'" style="color:'+C.fg+';cursor:help;">'+oc[o]+' '+C.label+'</span>';
         }).join('<span style="color:#3a3a38;"> &middot; </span>');
@@ -2912,7 +2896,7 @@ function _fefoOpsPanelHTML() {
               // Badge carries the quantity still on the skipped lot, so the word can never
               // overstate or understate what is actually sitting there.
               + '<td style="' + td + 'text-align:right;padding-right:14px;"><span title="' + esc(C.tip) + '" style="font-size:9px;font-weight:500;padding:1px 6px;border-radius:4px;background:' + C.bg + ';color:' + C.fg + ';cursor:help;">' + C.label
-                + (d.outcome === 'consumed' || d.outcome === 'unaccounted' ? '' : ' &middot; ' + fmtStockQty(d.leftKg) + ' ' + _uS)
+                + (d.outcome === 'consumed' ? '' : ' &middot; ' + fmtStockQty(d.leftKg) + ' ' + _uS)
                 + '</span></td>'
               + '</tr>';
           }).join('')
@@ -3073,25 +3057,7 @@ function _fefoIndex() {
     var arr = picksByLot[lotNo];
     var now = stockNow[lotNo] || 0;
     var touched = !!(arr && arr.length && arr[arr.length - 1].t >= t);
-    // An unexplained zero is UNKNOWN, not absent. A lot still listed in the live inventory
-    // sheet at 0.00 with no pick naming it did not get there by being consumed on a slip:
-    // someone zeroed it, wrote it off, or recounted it. Reading that as "the lot was never
-    // on the shelf" deleted the finding outright rather than reporting where the stock went,
-    // and it did so retroactively — a pick flagged at 8am vanished when the remnant was
-    // zeroed at lunchtime. Two measured cases on 8/25/26: T33399 (2.6 kg, last pick 8/14)
-    // and T34275 (9.94 kg, last pick 4/9), both zeroed with nothing recording it, both
-    // taking a real finding with them. T34275 also made the board flicker, because the
-    // published feed serves two snapshots and only one of them had reached zero.
-    //
-    // ARCHIVED lots are deliberately excluded. Their zero IS explained — the sheet retired
-    // them as spent — and admitting them here treats every one of ~2,300 spent lots as an
-    // available sibling again: measured at +3,190 findings (1,695 -> 4,885) and 25 flags on
-    // a day that has 2. Restricted to live-listed zeros it is +21 across all history, +3
-    // today, and the Lots at risk review list does not move at all.
-    var rec = idx[lotNo];
-    var liveZero = !!(rec && !rec.archived && now === 0 && !touched);
-    return { qty: now, exact: !touched && !liveZero, present: now > 0 || touched || liveZero,
-             liveZero: liveZero };
+    return { qty: now, exact: !touched, present: now > 0 || touched };
   }
 
   // Could this lot have contributed anything worth having to a run needing `needed`?
@@ -14402,7 +14368,7 @@ function exportMaterials() {
       [],
       s5Headers
     ];
-    var _opsOutcomeWord = { expired:'EXPIRED', sitting:'ON SHELF', consumed:'USED UP', unaccounted:'UNACCOUNTED — zeroed with no pick' };
+    var _opsOutcomeWord = { expired:'EXPIRED', sitting:'ON SHELF', consumed:'USED UP' };
     _opsOrder.forEach(function(p){
       var g = _ops.groups[p];
       // Order already settled in _fefoOpsGroups (still-open first, then newest) so the sheet
@@ -14424,7 +14390,7 @@ function exportMaterials() {
             : '',
           d.fixedAt ? _matExpDateStr(d.fixedAt) : 'OPEN',
           _opsOutcomeWord[d.outcome] || d.outcome,
-          (d.outcome === 'consumed' || d.outcome === 'unaccounted') ? 0 : Math.round(d.leftKg * 100) / 100
+          d.outcome === 'consumed' ? 0 : Math.round(d.leftKg * 100) / 100
         ]);
       });
     });
