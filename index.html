@@ -130,7 +130,7 @@
        min-width must be cleared too — it is the inline 100% that was widening
        it; width:0 alone is the mechanism keeping the panel out of the table's
        column sizing, which table-layout:fixed makes moot anyway. */
-    .mat-panel {
+    .mat-panel, .pnl-colspan {
       position: sticky; left: 0;
       width: calc(100vw - 2 * var(--shell-pad, 24px) - 2px) !important;   /* gutter + card border */
       min-width: 0 !important;
@@ -396,8 +396,13 @@
 
     /* Open Orders → Labels: the blocker grid keeps its columns and scrolls
        horizontally instead of crushing the Product column to ~1 char wide. */
+    /* .lbl-row above restacks each blocker to fit any width, which makes the
+       760px floor this rule used to set actively harmful: the rows reflow AND the
+       container stays 760px, so the product name — the longest field and the one
+       being restacked for — runs off the right edge. The two rules were written
+       for different layouts and only the restack survives. */
     .labels-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .labels-scroll > div { min-width: 760px; }
+    .labels-scroll > div { min-width: 0; }
 
     /* Procurement (Jars/Bottles/Lids/…) rows reflow: name + badge inline on top
        (+ chevron), the 2025/2026 bars full-width below, then Lots / % as two
@@ -472,6 +477,83 @@
     .proc-toolbar > div:last-child > div:first-child { flex: 1 1 auto; }
     .proc-toolbar #procSearchInput { width: 100% !important; box-sizing: border-box; }
 
+    /* ── Open Orders → Planning: the status breakdown ─────────────────────
+       180px + 1fr + 70 + 110 + 110 + 75 with 14px gaps is 615px of demand in a
+       374px card, and with no scroll wrapper Sample Packs and % of Total simply
+       rendered outside it — visible only by dragging the whole page sideways,
+       which slides the sticky bars with it. The wrapper is the correctness half.
+       The rest is fit: the bar column is decoration that was already squeezed to
+       nothing, the numeric tracks are wider than any value they hold, and the
+       -6px bleed margin (there so a row's hover tint runs past the card padding)
+       would force a 12px scroll on its own. */
+    .oo-st-grid {
+      grid-template-columns: 140px 42px 58px 58px 44px !important;
+      gap: 6px !important; margin: 0 !important;
+      padding-left: 2px !important; padding-right: 2px !important;
+    }
+    .oo-st-grid > :nth-child(2) { display: none; }
+
+    /* ── Open Orders: the drilldown rows under a customer / a status ──────
+       These grids are `72px <product> 90px 70px 220px` — 452px of fixed track
+       plus 40px of gaps before the product column gets anything. On a 374px
+       phone the product track is squeezed to nothing, and because the cell
+       carries word-break:break-word its min-content is one CHARACTER, so the
+       name renders as a vertical column of single letters. Nothing was wrong
+       with the data; the row simply had 130px less than its fixed columns.
+
+       Restacked the way .lbl-row already handles the Labels blockers: type (and
+       brand, where present) and the product on their own full-width lines, units
+       and weeks facing each other, notes full width beneath. Addressed by
+       nth-last-child rather than nth-child so the same four rules fit both the
+       5-column (Summary) and 6-column (Planning) variants — the last three are
+       always units / weeks / notes. */
+    .oo-drill-hdr { display: none !important; }
+    .oo-drill-row {
+      grid-template-columns: 1fr auto !important;
+      gap: 3px 10px !important; padding: 10px 2px !important; align-items: start !important;
+    }
+    .oo-drill-row > * { grid-column: 1 / -1; min-width: 0; }
+    .oo-drill-row > :nth-last-child(3) { grid-column: 1; text-align: left !important; font-weight: 500; }
+    .oo-drill-row > :nth-last-child(2) { grid-column: 2; text-align: right !important; }
+    /* The hidden header took the word "units" with it; the bare number needs it. */
+    .oo-drill-row > :nth-last-child(3)::after { content: " units"; font-size: 10px; font-weight: 400; color: #5f5e5a; }
+
+    /* ── Quality → Recall: rebalance the columns ──────────────────────────
+       At 46/16/18/20 on a 390px screen the Lot # column gets about 60px and
+       renders "2605…". A truncated lot number is worse than a missing one on a
+       recall screen — it is the identifier you act on, and half of it cannot be
+       matched against anything. Product yields the width instead: it truncates
+       either way at this size, and it is the field you can recognise from a
+       fragment. Percentages, so the four still sum to the frame. */
+    .rc-prod  { width: 36% !important; }
+    .rc-lot   { width: 22% !important; }
+    .rc-date  { width: 26% !important; }
+    .rc-units { width: 16% !important; }
+
+    /* ── Quality → Blend: let the ingredient wrap ─────────────────────────
+       The stylesheet sets `tbody td { white-space: nowrap }` globally, so a long
+       ingredient cannot wrap inside its 44% column and, with table-layout:fixed
+       leaving overflow visible, it renders straight over the Material lots column
+       — two unrelated strings drawn on top of each other. Wrapping is the right
+       answer rather than an ellipsis: this is the screen where QA reads what went
+       into a blend, so the full name has to be legible. */
+    .bl-ingredient { white-space: normal !important; overflow-wrap: anywhere; }
+
+    /* ── Logistics: the shipment log ──────────────────────────────────────
+       Three numeric columns at 66-74px plus 16px gutters and 10px gaps left the
+       customer/vendor name about 86px on a 390px screen — ten characters before
+       the ellipsis, on the column that identifies the row. Boxes and pallets are
+       small integers and units rarely passes five digits, so tightening the
+       numeric tracks and the gutters roughly doubles the name's width without
+       dropping a single figure. The Units column is outbound-only, hence the
+       .logi-u variant rather than one template for both. */
+    .logi-row { gap: 6px !important; grid-template-columns: 14px 1fr 44px 44px !important; }
+    .logi-row.logi-u { grid-template-columns: 14px 1fr 44px 44px 44px !important; }
+    .logi-lotrow { gap: 6px !important; grid-template-columns: 22px 1fr 44px 44px !important; }
+    .logi-lotrow.logi-u { grid-template-columns: 22px 1fr 44px 44px 44px !important; }
+    .logi-ship, .logi-hdr, .logi-lotrow { padding-left: 10px !important; padding-right: 10px !important; }
+    .logi-meta { padding-left: 20px !important; }
+
     /* Customers — quarter drill-down KPI strip (5 chips) → 2-col grid;
        last chip ("Format mix") spans full width on its own row */
     .qtr-kpi-strip { display: grid !important; grid-template-columns: repeat(2, 1fr); gap: 10px; }
@@ -495,6 +577,14 @@
        header scroll normally avoids the guesswork. */
     .sub-bar-outer { top: 95px; }
     .cust-col-header-outer { position: static; top: auto; }
+    /* The overview renders its OWN column header inline (this view hides the one
+       above), and that one carries position:sticky;top:108px in a style attribute —
+       the desktop offset, immune to any media query without !important. On a phone
+       the chrome is not 108px tall in either orientation, so it parked 32px below
+       the sub-bar in landscape with page content scrolling through the gap, and hid
+       behind the sub-bar in portrait. Unstick it, for exactly the reason the rule
+       above gives: the chrome's height varies, so no fixed offset is right. */
+    .cust-col-inline-hdr { position: static !important; }
   }
 
   /* ── Phone landscape (short viewport) ──────────────────────────────────────
@@ -529,6 +619,14 @@
     .main-tab-name { font-size: 12px; }
     #sub-bar { padding: 5px 10px !important; }
     .cust-col-header-outer { position: static; top: auto; }
+    /* The overview renders its OWN column header inline (this view hides the one
+       above), and that one carries position:sticky;top:108px in a style attribute —
+       the desktop offset, immune to any media query without !important. On a phone
+       the chrome is not 108px tall in either orientation, so it parked 32px below
+       the sub-bar in landscape with page content scrolling through the gap, and hid
+       behind the sub-bar in portrait. Unstick it, for exactly the reason the rule
+       above gives: the chrome's height varies, so no fixed offset is right. */
+    .cust-col-inline-hdr { position: static !important; }
     /* A small phone (≤768px wide) held sideways matches the portrait block too,
        which wraps the app bar to two rows — 95px of a 375px-tall screen. Put it
        back on one row; .main-tabs already scrolls horizontally at that width, so
@@ -546,6 +644,15 @@
     .mat-kpi-strip { gap: 12px !important; margin-bottom: 8px !important; }
     .mat-kpi-strip > div > div:last-child { font-size: 13px !important; }
     .mat-usage-chart { height: 120px !important; }
+
+    /* Customers → quarter breakdown, "Products run this quarter". Landscape splits
+       the panel into two columns, so this list gets ~357px however wide the phone
+       is — and the 110px ranking bar plus the units and lots tracks leave the name
+       about 59px, which renders five consecutive rows as "Superhu…". Drop the bar
+       here only (not every .pnl-bar: the share bars elsewhere have room in
+       landscape and read well). The list is already sorted by units descending, so
+       the ranking the bar drew is still legible without it. */
+    .qtr-prod-row .pnl-bar { display: none; }
   }
 
   /* Customer drill-down — "2026 pace vs 2025 full year" benchmark bar.
@@ -6119,8 +6226,12 @@ function _logiLogHTML(shipments, bounds) {
   var showU = L.showUnits;
   var GC = showU ? 'grid-template-columns:18px 1fr 66px 66px 66px;' : 'grid-template-columns:18px 1fr 74px 74px;';
   var GCL = showU ? 'grid-template-columns:28px 1fr 66px 66px 66px;' : 'grid-template-columns:28px 1fr 74px 74px;';
+  // Class hooks for the phone layout. The Units column is outbound-only, so the
+  // rules need to know which of the two column counts they are retargeting.
+  var RC = 'logi-row' + (showU ? ' logi-u' : '');
+  var RCL = 'logi-lotrow' + (showU ? ' logi-u' : '');
   var thN = 'font-size:9px;color:#5f5e5a;text-align:right;text-transform:uppercase;letter-spacing:.04em;';
-  var colHeader = '<div style="display:grid;' + GC + 'gap:10px;padding:6px 16px 4px;">'
+  var colHeader = '<div class="' + RC + ' logi-hdr" style="display:grid;' + GC + 'gap:10px;padding:6px 16px 4px;">'
     + '<span></span><span style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;">' + esc(L.entity) + '</span>'
     + (showU ? '<span style="' + thN + '">Units</span>' : '')
     + '<span style="' + thN + '">Boxes</span><span style="' + thN + '">Pallets</span></div>';
@@ -6180,15 +6291,15 @@ function _logiLogHTML(shipments, bounds) {
       if (s2.eta) parts.push('ETA ' + esc(s2.eta));
       if (L.showBoxesNote && !bx.recorded) parts.push('<span style="color:#C9A227;">boxes not recorded</span>');
       var meta = parts.join(sep);
-      html += '<div onclick="toggleLogiShipment(' + jsStr(s2.key) + ')" style="padding:8px 16px;border-bottom:0.5px solid #1a1d20;cursor:pointer;" onmouseover="this.style.background=\'#191c1f\'" onmouseout="this.style.background=\'transparent\'">'
-        + '<div style="display:grid;' + GC + 'gap:10px;align-items:center;">'
+      html += '<div class="logi-ship" onclick="toggleLogiShipment(' + jsStr(s2.key) + ')" style="padding:8px 16px;border-bottom:0.5px solid #1a1d20;cursor:pointer;" onmouseover="this.style.background=\'#191c1f\'" onmouseout="this.style.background=\'transparent\'">'
+        + '<div class="' + RC + '" style="display:grid;' + GC + 'gap:10px;align-items:center;">'
         +   '<span style="color:#888780;display:inline-block;' + (open ? 'transform:rotate(90deg);' : '') + '">▸</span>'
         +   '<span style="font-size:13.5px;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s2.customer || '—') + '</span>'
         +   (showU ? '<span style="font-size:12px;color:#e8e6e0;font-weight:500;text-align:right;font-variant-numeric:tabular-nums;">' + (s2.units ? _logiInt(s2.units) : '<span style="color:#5f5e5a;font-weight:400;">—</span>') + '</span>' : '')
         +   '<span style="font-size:12px;color:#cfcdc7;text-align:right;font-variant-numeric:tabular-nums;">' + boxCell + '</span>'
         +   '<span style="font-size:12px;color:#cfcdc7;text-align:right;font-variant-numeric:tabular-nums;">' + (s2.pallets ? _logiInt(s2.pallets) : '<span style="color:#5f5e5a;">—</span>') + '</span>'
         + '</div>'
-        + '<div style="padding-left:28px;margin-top:3px;font-size:11.5px;color:#888780;">' + meta + '</div>'
+        + '<div class="logi-meta" style="padding-left:28px;margin-top:3px;font-size:11.5px;color:#888780;">' + meta + '</div>'
         + '</div>';
       if (open) {
         var lk;
@@ -6199,7 +6310,7 @@ function _logiLogHTML(shipments, bounds) {
           var lotTag = lt.stick ? ' <span style="font-size:9px;color:#C9A227;border:0.5px solid #6b5514;border-radius:4px;padding:0 4px;">STICK</span>'
             : (lt.serving ? ' <span style="font-size:9px;color:#C9A227;border:0.5px solid #6b5514;border-radius:4px;padding:0 4px;">' + (lt.units < BULK_RUN_THRESHOLD ? 'RUNS' : 'SERVINGS') + '</span>' : '');
           var lineLabel = (prodName ? '<span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + esc(lt.lotNo) + '</span> · ' + esc(prodName) : '<span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + esc(lt.lotNo) + '</span>') + lotTag;
-          html += '<div style="display:grid;' + GCL + 'gap:10px;align-items:center;padding:5px 16px;border-bottom:0.5px solid #141618;background:#191c1f;">'
+          html += '<div class="' + RCL + '" style="display:grid;' + GCL + 'gap:10px;align-items:center;padding:5px 16px;border-bottom:0.5px solid #141618;background:#191c1f;">'
             + '<span></span>'
             + '<span style="font-size:12px;color:#888780;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + lineLabel + '</span>'
             + (showU ? '<span style="font-size:12px;color:' + ((lt.stick || lt.serving) ? '#C9A227' : '#cfcdc7') + ';text-align:right;font-variant-numeric:tabular-nums;">' + (lt.units ? _logiInt(lt.units) : '<span style="color:#5f5e5a;">—</span>') + '</span>' : '')
@@ -9515,10 +9626,10 @@ function _custQuarterPanelHTML(qkey, q) {
     : visibleProds.map(function(p){
         var w = Math.max(2, Math.round((p.units/maxProdUnits)*100));
         var dot = _lineDot(p.line);
-        return '<div style="display:flex;align-items:center;gap:10px;padding:5px 0;font-size:11px;font-family:system-ui;">'
+        return '<div class="qtr-prod-row" style="display:flex;align-items:center;gap:10px;padding:5px 0;font-size:11px;font-family:system-ui;">'
           + '<span style="width:8px;height:8px;border-radius:50%;background:'+dot+';flex-shrink:0;" title="'+_esc(p.line||'')+'"></span>'
           + '<div style="flex:1;min-width:0;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+_esc(p.name)+'">'+_esc(p.name)+'</div>'
-          + '<div style="width:110px;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;flex-shrink:0;"><div style="height:100%;width:'+w+'%;background:'+dot+';border-radius:2px;opacity:.85;"></div></div>'
+          + '<div class="pnl-bar" style="width:110px;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;flex-shrink:0;"><div style="height:100%;width:'+w+'%;background:'+dot+';border-radius:2px;opacity:.85;"></div></div>'
           + '<div style="width:80px;text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;flex-shrink:0;font-weight:500;">'+p.units.toLocaleString()+'</div>'
           + '<div style="width:60px;text-align:right;color:#888780;font-variant-numeric:tabular-nums;flex-shrink:0;">'+p.lots+' lot'+(p.lots===1?'':'s')+'</div>'
         + '</div>';
@@ -10028,7 +10139,7 @@ function renderCustomerOverview(healthData) {
   // Shared 8-column grid template: rank | customer | bars | units | lots | avg | %prod | sparkline.
   var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px';
   var _thStyle  = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;';
-  var columnHeaderHTML = '<div class="customer-row" style="position:sticky;top:108px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;">'
+  var columnHeaderHTML = '<div class="customer-row cust-col-inline-hdr" style="position:sticky;top:108px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;">'
     +'<div></div>'
     +'<div style="'+_thStyle+'">Customer</div>'
     +'<div style="'+_thStyle+'">'+prevYr+' &middot; '+nowYr+'</div>'
@@ -10134,7 +10245,17 @@ function renderCustomerOverview(healthData) {
     if (n >= 1000000) { return '≈ ' + (Math.round(n / 10000) / 100) + 'M'; }
     return '≈ ' + Math.round(n).toLocaleString();
   }
-  function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
+  // A label centred on its anchor overflows the track whenever the anchor is near
+// either end — "2025 total · 120,079" at 3.7% renders half off the left edge for any
+// customer whose projection dwarfs last year (Ancestral: +2627%). Switch the anchoring
+// rather than the position, so the label still points at the right spot. Not phone-only:
+// a wide screen clips these too, it just takes a more extreme ratio to do it.
+function _benchAnchor(pct) {
+  if (pct < 12) return 'translateX(0)';
+  if (pct > 88) return 'translateX(-100%)';
+  return 'translateX(-50%)';
+}
+function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
     var d = buildBenchmarkData(fyUnits, ytdUnits, priorPeriodUnits);
     if (!d) { return ''; }
     var matchText = d.exceeded
@@ -10146,14 +10267,14 @@ function renderCustomerOverview(healthData) {
     '<div class="bench-bar">' +
       '<div class="bench-label">2026 pace vs 2025 full year</div>' +
       '<div class="bench-track-wrap">' +
-        '<div class="bench-bm-text" style="left:' + d.benchLeft.toFixed(1) + '%">2025 total &middot; ' + fyUnits.toLocaleString() + '</div>' +
+        '<div class="bench-bm-text" style="left:' + d.benchLeft.toFixed(1) + '%;transform:' + _benchAnchor(d.benchLeft) + '">2025 total &middot; ' + fyUnits.toLocaleString() + '</div>' +
         '<div class="bench-bm-line" style="left:' + d.benchLeft.toFixed(1) + '%"></div>' +
         '<div class="bench-track">' +
           '<div class="bench-solid" style="width:' + d.solidW.toFixed(1) + '%"></div>' +
           '<div class="bench-dashed" style="left:' + d.dashedLeft.toFixed(1) + '%;width:' + d.dashedW.toFixed(1) + '%"></div>' +
         '</div>' +
-        '<div class="bench-done" style="left:' + d.solidW.toFixed(1) + '%">' + ytdUnits.toLocaleString() + ' done</div>' +
-        '<div class="bench-proj" style="left:' + (d.dashedLeft + d.dashedW).toFixed(1) + '%" title="' + tip + '">proj. ' + fmtCompactEst(d.projUnits) + '</div>' +
+        '<div class="bench-done" style="left:' + d.solidW.toFixed(1) + '%;transform:' + _benchAnchor(d.solidW) + '">' + ytdUnits.toLocaleString() + ' done</div>' +
+        '<div class="bench-proj" style="left:' + (d.dashedLeft + d.dashedW).toFixed(1) + '%;transform:' + _benchAnchor(d.dashedLeft + d.dashedW) + '" title="' + tip + '">proj. ' + fmtCompactEst(d.projUnits) + '</div>' +
       '</div>' +
       '<div class="bench-readouts">' +
         '<div><b>' + d.pctYTDLabel + '%</b> of 2025 produced</div>' +
@@ -10309,7 +10430,7 @@ function renderCustomerOverview(healthData) {
       if (qOpen) {
         var qFull = _custQuarterFull(cd.cust, q.key);
         drillTr = '<tr><td colspan="9" style="padding:0;background:#0a0e15;">'
-          + _custQuarterPanelHTML(q.key, qFull)
+          + '<div class="pnl-colspan">' + _custQuarterPanelHTML(q.key, qFull) + '</div>'
         + '</td></tr>';
       }
 
@@ -10341,7 +10462,8 @@ function renderCustomerOverview(healthData) {
     var detailTable = '<div id="ch-body-'+sid+'" style="display:'+(expanded?'block':'none')+';background:#141618;border-bottom:0.5px solid #1e2124;">'
       +'<script type="application/json" id="ch-data-'+sid+'">'+JSON.stringify(custDataObj)+'<\/script>'
       +'<div id="ch-synopsis-'+sid+'" style="padding:12px 16px;border-bottom:0.5px solid #2c2c2a;background:#141618;min-height:44px;"></div>'
-      +'<table style="width:100%;border-collapse:collapse;">'
+      +'<div class="pnl-sub-scroll" style="overflow-x:auto;">'
+      +'<table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
       +'<thead><tr>'
         +'<th style="'+thSL+'padding-left:16px;width:90px;">Quarter</th>'
         +'<th style="'+thS+'">Units</th>'
@@ -10354,7 +10476,7 @@ function renderCustomerOverview(healthData) {
         +'<th style="'+thS+'padding-right:16px;width:110px;">Volume</th>'
       +'</tr></thead>'
       +'<tbody>'+tableRows+'</tbody>'
-      +'</table>'
+      +'</table></div>'
       +buildBenchmarkBar(_fy2025.units, cd.ytd, cd.ytd25)
     +'</div>';
 
@@ -13382,7 +13504,7 @@ function renderOrdersSummary() {
       +   'Export open orders'
       + '</button>'
       + '</div>';
-    var drillHeaders = '<div style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
+    var drillHeaders = '<div class=\"oo-drill-hdr\" style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
       + '<div>Type</div><div>Product</div>'
       + '<div style="text-align:right;">Units</div>'
       + '<div style="text-align:right;">Weeks</div>'
@@ -13399,7 +13521,7 @@ function renderOrdersSummary() {
       var statusRaw = (rr['Planning Status']||'').toString().trim();
       var notesRaw  = (rr['Promise Date / Notes']||'').toString().trim();
       var statusNote = statusRaw && notesRaw ? statusRaw + ' · ' + notesRaw : (statusRaw || notesRaw || '');
-      return '<div style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;padding:7px 2px;border-bottom:0.5px dashed #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
+      return '<div class=\"oo-drill-row\" style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;padding:7px 2px;border-bottom:0.5px dashed #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
         + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+x.type+'</span></div>'
         + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(rr['Product Name']||'')+'</div>'
         + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+num(rr['Order Amount']).toLocaleString()+'</div>'
@@ -13668,7 +13790,7 @@ function renderOrdersSummary() {
 
   // Column grid: status pill | horizontal bar | orders | production units | sample packs | % of total
   var stColTpl = '180px 1fr 70px 110px 110px 75px';
-  var stHeadersHTML = '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:6px 2px 8px;border-bottom:0.5px solid #2c2c2a;">'
+  var stHeadersHTML = '<div class="oo-st-grid" style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;padding:6px 2px 8px;border-bottom:0.5px solid #2c2c2a;">'
     + '<div>Status</div><div></div>'
     + '<div style="text-align:right;">Orders</div>'
     + '<div style="text-align:right;">Production Units</div>'
@@ -13692,7 +13814,7 @@ function renderOrdersSummary() {
     var barColor  = ORDERS_STATUS_COLOR[st] || '#888780';
     var rowBg = isOpen ? '#1a1d20' : 'transparent';
 
-    var summaryRow = '<div onclick="toggleOrdersDrilldown('+jsStr(st)+')" '
+    var summaryRow = '<div class="oo-st-grid" onclick="toggleOrdersDrilldown('+jsStr(st)+')" '
       + 'style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;padding:10px 6px;border-bottom:0.5px solid #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;cursor:pointer;background:'+rowBg+';transition:background .12s;margin:0 -6px;border-radius:6px;" '
       + (isOpen ? 'data-open="1" ' : '')
       + 'onmouseover="if(!this.dataset.open)this.style.background=\'#161a1c\'" '
@@ -13725,7 +13847,7 @@ function renderOrdersSummary() {
     });
 
     var drillColTpl = '72px 1.3fr 2.2fr 90px 70px 220px';
-    var drillHeaders = '<div style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
+    var drillHeaders = '<div class=\"oo-drill-hdr\" style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
       + '<div>Type</div><div>Brand</div><div>Product</div>'
       + '<div style="text-align:right;">Units</div>'
       + '<div style="text-align:right;">Weeks</div>'
@@ -13740,7 +13862,7 @@ function renderOrdersSummary() {
       var weeksLabel = weeksRaw ? weeksRaw + ' wk' : '\u2014';
       // Match the Labels Blocker thresholds: amber >=6, red >=12.
       var weeksColor = weeksNum >= 12 ? '#F09595' : weeksNum >= 6 ? '#FAC775' : '#888780';
-      return '<div style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;padding:7px 2px;border-bottom:0.5px dashed #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
+      return '<div class=\"oo-drill-row\" style="display:grid;grid-template-columns:'+drillColTpl+';gap:10px;padding:7px 2px;border-bottom:0.5px dashed #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
         + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+lb.type+'</span></div>'
         + '<div style="color:#e8e6e0;font-weight:500;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(rr['Brand Name']||'')+'</div>'
         + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(rr['Product Name']||'')+'</div>'
@@ -13768,7 +13890,7 @@ function renderOrdersSummary() {
     var totalOrders  = statusList.reduce(function(a,it){ return a + rowOrders(it.data);      }, 0);
     var totalProd    = grandProd;
     var totalSamples = statusList.reduce(function(a,it){ return a + rowSampleUnits(it.data); }, 0);
-    totalRowHTML = '<div style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;padding:12px 6px;margin:0 -6px;border-top:1px solid #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;background:#16181a;border-radius:0 0 6px 6px;">'
+    totalRowHTML = '<div class="oo-st-grid" style="display:grid;grid-template-columns:'+stColTpl+';gap:14px;padding:12px 6px;margin:0 -6px;border-top:1px solid #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;background:#16181a;border-radius:0 0 6px 6px;">'
       + '<div style="font-size:11px;font-weight:600;color:#e8e6e0;text-transform:uppercase;letter-spacing:.06em;">Total</div>'
       + '<div></div>'
       + '<div style="text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;font-weight:600;">'+totalOrders.toLocaleString()+'</div>'
@@ -13782,10 +13904,12 @@ function renderOrdersSummary() {
     +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Planning Status Breakdown</div>'
     +   toggleHTML
     + '</div>'
+    + '<div class="oo-st-scroll" style="overflow-x:auto;">'
     + stHeadersHTML
     + stRowsHTML
     + totalRowHTML
     + emptyStatus
+    + '</div>'
     + '</div>';
 
   // ── Order aging (all on-the-books orders) ───────────────────────────
@@ -13866,7 +13990,7 @@ function renderOrdersSummary() {
       return num(c.row['Order Amount']) - num(a.row['Order Amount']);
     });
     var _drillColTpl = '72px 1.1fr 1.8fr 90px 70px 160px';
-    var _drillHeaders = '<div style="display:grid;grid-template-columns:'+_drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
+    var _drillHeaders = '<div class=\"oo-drill-hdr\" style="display:grid;grid-template-columns:'+_drillColTpl+';gap:10px;font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.06em;padding:4px 2px 6px;border-bottom:0.5px solid #2c2c2a;">'
       + '<div>Type</div><div>Brand</div><div>Product</div>'
       + '<div style="text-align:right;">Units</div>'
       + '<div style="text-align:right;">Weeks</div>'
@@ -13881,7 +14005,7 @@ function renderOrdersSummary() {
       var weeksLabel = weeksRaw ? weeksRaw + ' wk' : '—';
       var weeksColor = weeksNum >= 12 ? '#F09595' : weeksNum >= 8 ? '#EF9F27' : '#FAC775';
       var pill = ORDERS_STATUS_PILL[x.status] || { bg:'#1a1d20', color:'#5f5e5a' };
-      return '<div style="display:grid;grid-template-columns:'+_drillColTpl+';gap:10px;padding:7px 2px;border-bottom:0.5px dashed #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
+      return '<div class=\"oo-drill-row\" style="display:grid;grid-template-columns:'+_drillColTpl+';gap:10px;padding:7px 2px;border-bottom:0.5px dashed #2c2c2a;font-size:12px;font-family:system-ui;align-items:center;">'
         + '<div><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:'+typeBg+';color:'+typeColor+';">'+x.type+'</span></div>'
         + '<div style="color:#e8e6e0;font-weight:500;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(rr['Brand Name']||'')+'</div>'
         + '<div style="color:#e8e6e0;white-space:normal;word-break:break-word;line-height:1.35;">'+esc(rr['Product Name']||'')+'</div>'
@@ -14951,7 +15075,7 @@ function renderRecallTableHTML(res) {
   out += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     + '<div style="overflow-x:auto;">'
     + '<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;">'
-    + '<colgroup><col style="width:46%;"/><col style="width:16%;"/><col style="width:18%;"/><col style="width:20%;"/></colgroup>'
+    + '<colgroup><col class="rc-prod" style="width:46%;"/><col class="rc-lot" style="width:16%;"/><col class="rc-date" style="width:18%;"/><col class="rc-units" style="width:20%;"/></colgroup>'
     + '<thead><tr style="background:#141618;">'
     +   recallTh('PRODUCT', 'left')
     +   recallTh('LOT #', 'left')
@@ -15445,7 +15569,7 @@ function renderBlendTableHTML(res) {
     }
     out += '<tr style="border-top:0.5px solid #232629;">'
       + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;vertical-align:top;">'+_blendCopyCell(g.part)+'</td>'
-      + '<td title="'+esc(g.material || '')+'" style="padding:8px 14px;color:#e8e6e0;vertical-align:top;">'+esc(g.material || '—')+'</td>'
+      + '<td class="bl-ingredient" title="'+esc(g.material || '')+'" style="padding:8px 14px;color:#e8e6e0;vertical-align:top;">'+esc(g.material || '—')+'</td>'
       + '<td style="padding:8px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.9;vertical-align:top;">'+tCell+'</td>'
       + '</tr>';
   }
