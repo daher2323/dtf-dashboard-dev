@@ -10,7 +10,10 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #141618; color: #e8e6e0; font-size: 14px; min-height: 100vh; }
-  .shell { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+  /* --shell-pad is the single source for the page gutter: .mat-panel sizes itself
+     to the viewport minus this, and the gutter differs per breakpoint. Override the
+     variable, not the padding, or the panel silently goes over- or under-wide. */
+  .shell { --shell-pad: 1.5rem; max-width: 1400px; margin: 0 auto; padding: var(--shell-pad); }
 
   .app-bar { display: flex; align-items: stretch; background: #141618; border-bottom: 0.5px solid #2c2c2a; padding: 0; min-height: 68px; position: sticky; top: 0; z-index: 100; }
   .brand-wrap { display: flex; align-items: center; gap: 12px; padding: 10px 20px 10px 4px; margin-right: 16px; border-right: 0.5px solid #2c2c2a; flex-shrink: 0; cursor: pointer; }
@@ -100,8 +103,14 @@
      Safari/WebKit (under collapse, scrolling cells paint over the pinned ones). We
      restore the per-row divider via a cell border since row borders don't paint in
      separate mode. */
-  @media (max-width: 900px) {
+  /* The landscape arm matters as much as the width arm: a Pro Max in landscape
+     reports a 932px viewport, so without it the phone people carry onto the floor
+     loses the pinned Material column exactly when the table is at its widest. */
+  @media (max-width: 900px), (max-height: 500px) and (orientation: landscape) {
     .mat-table { border-collapse: separate; border-spacing: 0; }
+    /* Deliberately a descendant: it also reaches the panel's sub-tables, where it
+       draws the same 0.5px #2c2c2a rule they set on themselves. The only one in
+       this file that may stay loose — see the portrait card block. */
     .mat-table tbody td { border-bottom: 0.5px solid #2c2c2a; }
     /* table-layout:fixed ignores min-width on <col>, so when the table overflows on
        mobile the flex Material column collapses to ~0 (WebKit). Pin it to a real
@@ -109,8 +118,132 @@
     col.matcol-name { width: 220px; }
     th.mat-pin-rank, td.mat-pin-rank { position: sticky; left: 0; z-index: 3; background: #1e2124; }
     th.mat-pin-name, td.mat-pin-name { position: sticky; left: 28px; z-index: 3; background: #1e2124; box-shadow: 6px 0 6px -4px rgba(0,0,0,.45); }
+
+    /* ── Procurement → Materials: the expanded panel ────────────────────────
+       The panel is a colspan cell of a 1264px table, so at desktop widths it is
+       1264px wide too. On a 932px screen that is what put the quarterly and
+       per-customer figures a screen-width to the right of the labels they belong
+       to: you read "Q3 2026", scrolled right, and had to remember which row you
+       were on. Sizing it to the viewport lets those 4- and 5-column tables fit
+       outright, and sticking it to the left of the table's scrollport keeps it
+       still while the metric columns behind it scroll.
+       min-width must be cleared too — it is the inline 100% that was widening
+       it; width:0 alone is the mechanism keeping the panel out of the table's
+       column sizing, which table-layout:fixed makes moot anyway. */
+    .mat-panel {
+      position: sticky; left: 0;
+      width: calc(100vw - 2 * var(--shell-pad, 24px) - 2px) !important;   /* gutter + card border */
+      min-width: 0 !important;
+    }
+    /* The 56px left inset aligns the panel under the Material column on desktop;
+       at this width it is 6% of the screen spent on alignment. */
+    .mat-panel-inner { padding: 8px 10px 12px 12px !important; }
+
+    /* Parts (9 columns) and Lots (8) still exceed the panel, so they scroll
+       inside it — and now that the scrolling happens at the sub-table's own
+       wrapper, its first column can pin the way Material does above. Sticky
+       cells need border-collapse:separate to paint in WebKit; the row dividers
+       that mode drops are restored per cell. A row-level highlight (current
+       quarter, expired lot) is set inline, so it still wins on the pinned cell.
+       The separator is a plain 0.5px rule rather than the drop shadow the
+       Material column uses: several of these tables fit without scrolling at
+       all, and a shadow with nothing sliding under it reads as a rendering
+       artifact — a column rule reads as a column rule either way. */
+    .mat-sub-table { border-collapse: separate !important; border-spacing: 0 !important; }
+    .mat-sub-table thead th, .mat-sub-table tbody td { border-bottom: 0.5px solid #2c2c2a; }
+    .mat-sub-table thead th:first-child,
+    .mat-sub-table tbody td:first-child {
+      position: sticky; left: 0; z-index: 2; background: #141618;
+      border-right: 0.5px solid #2c2c2a;
+    }
   }
   @media (max-width: 700px) { .charts-row { grid-template-columns: 1fr; } }
+
+  /* ── Phone portrait: the Materials list as stacked cards ────────────────────
+     The table is 1264px of fixed columns. On a 390px screen that is three and a
+     half screens wide, and with the rank + Material columns pinned it showed On
+     hand and half of Committed — one metric at a time, for the tab people use
+     most away from a desk. Portrait drops the table layout and lays each row out
+     as a card: rank, name and the Available pill on the first line, then the four
+     figures checked on the floor — On hand, Committed, Cover, Expiry — labelled
+     beneath. The six Consumption-history columns are one tap away in the expanded
+     panel, which is where the monthly chart and quarterly table already live.
+
+     Done in CSS over the existing markup, so selectMaterial(), filterMaterials()
+     and the expanded-panel row keep working untouched. That compatibility is
+     load-bearing and constrains the rules below: filterMaterials shows a row with
+     style.display = '' (which resolves to whatever CSS says) and hides it with
+     'none' (an inline value). So no display rule here may be !important, or
+     hiding a filtered-out row would silently stop working.
+
+     Flex-wrap rather than a fixed grid, because these are inventory quantities:
+     a track too narrow for "4,439.79 kg" would clip or ellipsize a number someone
+     is about to act on. Content-sized items wrap to another line instead. */
+  @media (max-width: 768px) and (orientation: portrait) {
+    /* Every selector below uses child combinators, NOT descendants. The expanded
+       panel sits in a <td> of this same table, so `.mat-table thead` or
+       `.mat-table tbody` also matches the quarter / customer / product / lot
+       tables nested inside it — which hid their headers and forced their tbody to
+       display:block, breaking CSS table fixup so each row sized its own columns
+       independently. Keep the `>` chain when editing these. */
+    .mat-table, .mat-table > tbody { display: block; }
+    .mat-table > thead, .mat-table > colgroup { display: none; }
+    .mat-table > tbody > tr > td { border-bottom: 0 !important; }
+    .mat-table > tbody > tr > td.mat-seam { border-right: 0 !important; }
+    .mat-table > tbody > tr > td.mat-c-hist { display: none !important; }
+
+    /* The card. Its border-bottom and selected-row background are inline on the
+       tr already, so they carry over. */
+    .mat-table > tbody > tr[id^="mat-row-"] {
+      display: flex; flex-wrap: wrap; align-items: flex-start;
+      gap: 2px 12px; padding: 9px 10px 10px;
+    }
+    /* Forced line break between the two halves: a ::after on a flex container is
+       itself a flex item, and `order` places it between the header cells (1-3)
+       and the figure cells (5). */
+    .mat-table > tbody > tr[id^="mat-row-"]::after { content: ""; flex: 0 0 100%; order: 4; height: 0; }
+    .mat-table > tbody > tr[id^="mat-row-"] > td { display: block; padding: 0 !important; }
+
+    /* Everything that is not a material card — the expanded panel row, the empty
+       state — stays a plain block. Keyed on mat-row-, never on a mat-inline-
+       prefix, since "mat-inline-row-3" starts with both. */
+    .mat-table > tbody > tr:not([id^="mat-row-"]) { display: block; }
+
+    /* Pinning is a horizontal-scroll device and there is no horizontal scroll now. */
+    .mat-table > tbody > tr > .mat-pin-rank,
+    .mat-table > tbody > tr > .mat-pin-name { position: static; box-shadow: none; }
+
+    .mat-table > tbody > tr > .mat-pin-rank { order: 1; flex: 0 0 22px; width: auto !important; font-size: 10px !important; }
+    .mat-table > tbody > tr > .mat-pin-name { order: 2; flex: 1 1 0; min-width: 0; overflow: visible !important; }
+    .mat-table > tbody > tr > .mat-c-avail  { order: 3; flex: 0 0 auto; }
+    /* The pill is min-width:86px so it lines up as a column on desktop; here it
+       just needs to fit its own words. */
+    .mat-table > tbody > tr > .mat-c-avail > span { min-width: 0 !important; }
+
+    .mat-table > tbody > tr > .mat-c-onhand,
+    .mat-table > tbody > tr > .mat-c-committed,
+    .mat-table > tbody > tr > .mat-col-cover,
+    .mat-table > tbody > tr > .mat-c-expiry {
+      order: 5; flex: 1 1 auto; text-align: left !important;
+      white-space: normal !important; font-size: 11px !important; padding-top: 3px !important;
+    }
+    /* The column headings the thead no longer supplies. Without them the second
+       line is four bare numbers. */
+    .mat-table > tbody > tr > .mat-c-onhand::before,
+    .mat-table > tbody > tr > .mat-c-committed::before,
+    .mat-table > tbody > tr > .mat-col-cover::before,
+    .mat-table > tbody > tr > .mat-c-expiry::before {
+      display: block; font-size: 9px; font-weight: 500; letter-spacing: .04em;
+      text-transform: uppercase; color: #5f5e5a; font-family: system-ui; margin-bottom: 2px;
+    }
+    .mat-table > tbody > tr > .mat-c-onhand::before { content: "On hand"; }
+    .mat-table > tbody > tr > .mat-c-committed::before { content: "Committed"; }
+    .mat-table > tbody > tr > .mat-col-cover::before { content: "Cover"; }
+    .mat-table > tbody > tr > .mat-c-expiry::before { content: "Expiry"; }
+    /* Cover's stacked figure + runway bar centres itself for its desktop column;
+       left is where it starts now. */
+    .mat-table > tbody > tr > .mat-col-cover > span { align-items: flex-start !important; padding: 0 !important; }
+  }
 
   /* ── Mobile (≤768px) ───────────────────────────────────────────────
      Hide columns that compress badly (sparklines, bar columns, secondary
@@ -141,7 +274,7 @@
     .lbl-row > div:nth-child(3) { grid-column: 1; text-align: left !important; font-weight: 500; }  /* units */
     .lbl-row > div:nth-child(4) { grid-column: 2; text-align: right !important; }                    /* weeks */
     .lbl-row > div:nth-child(5), .lbl-row > div:nth-child(6) { grid-column: 1 / -1; font-size: 11px; }
-    .shell { padding: 8px; }
+    .shell { --shell-pad: 8px; }
     .app-bar { padding: 0 8px; min-height: 56px; }
     /* App bar → two rows on phones: [logo · Refresh/Admin] on top, the full-width
        scrollable tab bar below. Single-row, the tabs get squeezed to ~0 width
@@ -280,6 +413,42 @@
        and the "Show …s with zero usage" checkbox each span the full width (no
        more 3-4 line wraps), and the search + Export drop to their own row with
        the search growing to fill it. */
+    /* Materials → expanded panel: the 9-stat strip wrapped to five ragged rows on
+       a 390px screen, because the thin divider rules wrap as items too. Three even
+       columns with the dividers dropped puts it in three tidy rows — the same
+       treatment .weekly-kpi-strip and .today-kpi-strip already get. Odd children
+       are the stats, even ones the dividers. */
+    .mat-kpi-strip { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 10px !important; }
+    .mat-kpi-strip > div:nth-child(even) { display: none; }
+
+    /* Materials → panel sub-tables: the share/volume bars are a ranking aid, and at
+       ~350px they were pushing real figures off the right edge — Share clipped to
+       "SH" in Customers, Last run to "A"/"M" in Products. The bar goes and the %
+       it annotates stays, which is the same trade .customer-row already makes on a
+       phone. The quarterly Volume column is a bar and nothing else, so that one
+       goes entirely: the kg in the column beside it already says the same thing. */
+    .mat-bar { display: none !important; }
+    .mat-bar-cell { width: 46px !important; padding-left: 6px !important; padding-right: 10px !important; }
+    .mat-bar-only { display: none !important; }
+
+    /* Six sub-tabs in one segmented pill overflow a phone: Neckbands sat past the
+       right edge, and reaching it meant scrolling the whole page sideways — which
+       drags the sticky bars along with it. Scroll the pill itself instead, the way
+       .main-tabs already does. min-width:0 is required for a flex item to be
+       allowed to overflow-scroll rather than stretch its parent. */
+    .proc-subtabs { min-width: 0; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .proc-subtabs::-webkit-scrollbar { display: none; }
+    .proc-subtabs > button { flex: 0 0 auto; }
+
+    /* The panel's sub-tables at ~350px: trim the cell gutters and cap the first
+       column so the trailing % lands inside the frame. Products are the long ones
+       ("Super BioFreak WTF Strawberry Lemonade") and were pushing Share off the
+       edge; capped, the name ellipsizes and the figure survives, which is the
+       right way round. */
+    .mat-sub-table td, .mat-sub-table th { padding-left: 6px !important; padding-right: 6px !important; }
+    .mat-sub-table td { font-size: 11px !important; }
+    .mat-sub-table td:first-child, .mat-sub-table th:first-child { padding-left: 10px !important; max-width: 46vw !important; }
+
     .proc-toolbar { flex-direction: column; align-items: stretch !important; gap: 10px; }
     .proc-toolbar > div:last-child { justify-content: flex-start; }
     .proc-toolbar > div:last-child > div:first-child { flex: 1 1 auto; }
@@ -308,6 +477,57 @@
        header scroll normally avoids the guesswork. */
     .sub-bar-outer { top: 95px; }
     .cust-col-header-outer { position: static; top: auto; }
+  }
+
+  /* ── Phone landscape (short viewport) ──────────────────────────────────────
+     A Pro Max held sideways reports a 932px-wide, ~430px-tall viewport: every
+     phone rule above (≤768px) switches off, so it gets the full desktop layout
+     with a quarter of the height. Procurement is the tab people actually use
+     away from a desk, so these rules buy vertical space back out of the chrome
+     and stop the expanded material panel from inheriting the 1264px width of
+     the table it lives in.
+
+     Keyed on HEIGHT, not width, so a desktop browser window is never affected —
+     932px wide is an ordinary desktop width and must keep the desktop layout. */
+  @media (max-height: 500px) and (orientation: landscape) {
+    .shell { --shell-pad: 10px; padding-bottom: 16px; }
+
+    /* Chrome: 68px of app-bar + 44px of sub-bar was a quarter of the screen,
+       permanently pinned. Compacted to ~42px + ~34px. The sub-bar's sticky
+       offset is measured by syncSubBarTop() rather than declared here — the same
+       treatment portrait gets — so nothing has to be recomputed if these
+       paddings change. */
+    .app-bar { min-height: 0; }
+    .app-bar > div { padding: 0 10px !important; }
+    .brand-wrap { padding: 4px 10px 4px 2px; margin-right: 10px; gap: 8px; }
+    .brand-wrap svg { width: 26px; height: 26px; }
+    /* Brand text goes, logo stays (still tappable for home). It is ~215px of a
+       932px bar, and without it back the five tabs plus Live/Admin don't fit —
+       Logistics truncated to "Lo" and Quality fell off the right edge. */
+    .brand-wrap > div { display: none; }
+    .main-tabs { padding: 4px 0; gap: 4px; }
+    .main-tab { padding: 4px 9px; gap: 7px; }
+    .main-tab-icon { width: 22px; height: 22px; }
+    .main-tab-name { font-size: 12px; }
+    #sub-bar { padding: 5px 10px !important; }
+    .cust-col-header-outer { position: static; top: auto; }
+    /* A small phone (≤768px wide) held sideways matches the portrait block too,
+       which wraps the app bar to two rows — 95px of a 375px-tall screen. Put it
+       back on one row; .main-tabs already scrolls horizontally at that width, so
+       the tabs that don't fit are a swipe away rather than a second row. */
+    .app-bar > div { flex-wrap: nowrap; }
+    .brand-wrap { order: 0; flex: 0 0 auto; min-width: 0; }
+    .main-tabs { order: 0; flex: 1 1 0; width: auto; min-width: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .main-tabs::-webkit-scrollbar { display: none; }
+    .app-bar > div > div:last-child { order: 0; }
+    .full-card { padding: 0.75rem; overflow-x: auto; }
+
+    /* Panel width/pin + sub-table pins are shared with portrait — see the
+       materials block near the top of the sheet. Landscape only needs the
+       vertical trims on top of them. */
+    .mat-kpi-strip { gap: 12px !important; margin-bottom: 8px !important; }
+    .mat-kpi-strip > div > div:last-child { font-size: 13px !important; }
+    .mat-usage-chart { height: 120px !important; }
   }
 
   /* Customer drill-down — "2026 pace vs 2025 full year" benchmark bar.
@@ -4638,7 +4858,7 @@ function renderSubBar() {
   } else if (mainSection === 'procurement') {
     var pm = procView==='materials', pj = procView==='jars', pb = procView==='bottles', pl = procView==='lids', pd = procView==='desiccants', pn = procView==='neckbands';
     sb.innerHTML =
-      '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      '<div class="proc-subtabs" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
       + '<button onclick="setProcView(\'materials\')" style="'+navBtnStyle(pm)+'">Materials</button>'
       + '<button onclick="setProcView(\'jars\')" style="'+navBtnStyle(pj)+'">Jars</button>'
       + '<button onclick="setProcView(\'bottles\')" style="'+navBtnStyle(pb)+'">Bottles</button>'
@@ -6392,11 +6612,17 @@ function render() {
 // sticky `top` can't be a fixed px value or it slides under the app-bar. Pin it
 // to the app-bar's measured height on mobile; clear it on desktop so the CSS
 // value (68px) takes over.
+// Phone landscape is measured for the opposite reason: the bar is a single row
+// there, but a compacted one, and measuring means the CSS paddings can be tuned
+// without a matching px offset having to be recomputed here.
+function _isPhoneLandscape() {
+  return window.innerHeight <= 500 && window.innerWidth > window.innerHeight;
+}
 function syncSubBarTop() {
   var sb = document.getElementById('sub-bar-outer');
   var ab = document.querySelector('.app-bar');
   if (!sb || !ab) return;
-  if (window.innerWidth <= 768) sb.style.top = Math.round(ab.getBoundingClientRect().height) + 'px';
+  if (window.innerWidth <= 768 || _isPhoneLandscape()) sb.style.top = Math.round(ab.getBoundingClientRect().height) + 'px';
   else sb.style.top = '';
 }
 window.addEventListener('resize', syncSubBarTop);
@@ -10538,7 +10764,7 @@ function renderExpiryCell(m, unit) {
   var unitS = matUnitShort(m && m.name);
   var pad = 'text-align:center;padding:8px 10px;white-space:nowrap;';
   // No lots at all: the material is tracked for usage but holds no stock.
-  if (!e || !e.lots.length) return '<td style="' + pad + 'color:#5f5e5a;font-size:12px;">—</td>';
+  if (!e || !e.lots.length) return '<td class="mat-c-expiry" style="' + pad + 'color:#5f5e5a;font-size:12px;">—</td>';
   // Stock on hand but not one lot carries a date: say so plainly. This is 40% of
   // lot rows, so it gets its own state instead of masquerading as "fine".
   if (!e.dated) {
@@ -10547,7 +10773,7 @@ function renderExpiryCell(m, unit) {
       + (allBad
           ? ' — the expiry value on the inventory sheet cannot be read (\u201c' + esc(e.badDateSample) + '\u201d). A typo, not a missing date.'
           : ' — no expiry date recorded on the inventory sheet, so nothing can be projected.');
-    return '<td style="' + pad + '"><span title="' + tip + '"'
+    return '<td class="mat-c-expiry" style="' + pad + '"><span title="' + tip + '"'
       + ' style="font-size:11px;color:' + (allBad ? '#F09595' : '#888780') + ';border-bottom:1px dotted #5f5e5a;cursor:help;">'
       + (allBad ? 'bad date' : 'no date') + '</span></td>';
   }
@@ -10585,7 +10811,7 @@ function renderExpiryCell(m, unit) {
   }
   parts.push(line1);
   if (sub) parts.push('<div style="margin-top:2px;">' + sub + '</div>');
-  return '<td style="' + pad + '">' + parts.join('') + '</td>';
+  return '<td class="mat-c-expiry" style="' + pad + '">' + parts.join('') + '</td>';
 }
 
 // Short = Available (net = on-hand − committed) is negative. Same value the
@@ -10934,9 +11160,9 @@ function matSummaryInner(m, idx, monthKeys, unit) {
           + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.products.size+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.lots.size+'</td>'
-          + '<td style="'+tdB+'padding-right:14px;width:120px;">'
+          + '<td class="mat-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
             + '<div style="display:flex;align-items:center;gap:6px;">'
-              + '<div style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+              + '<div class="mat-bar" style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
                 + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
               + '</div>'
               + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -10944,13 +11170,13 @@ function matSummaryInner(m, idx, monthKeys, unit) {
           + '</td>'
           + '</tr>';
       }).join('');
-      tableHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+      tableHTML = '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
         + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
           + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Customer</th>'
           + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
           + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Products</th>'
           + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Lots</th>'
-          + '<th style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
+          + '<th class="mat-bar-cell" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
         + '</tr></thead>'
         + '<tbody>'+custRows+'</tbody>'
         + '</table></div>';
@@ -11005,7 +11231,7 @@ function matSummaryInner(m, idx, monthKeys, unit) {
         + '</td>'
         + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
         + '<td style="'+tdB+rBg+'text-align:right;">'+delta+'</td>'
-        + '<td style="'+tdB+rBg+'padding-right:14px;width:120px;">'
+        + '<td class="mat-bar-only" style="'+tdB+rBg+'padding-right:14px;width:120px;">'
           + '<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
             + '<div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:2px;"></div>'
           + '</div>'
@@ -11013,12 +11239,12 @@ function matSummaryInner(m, idx, monthKeys, unit) {
         + '</tr>';
     }).join('');
 
-    tableHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    tableHTML = '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
       + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
         + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Quarter</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">vs prev</th>'
-        + '<th style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Volume</th>'
+        + '<th class="mat-bar-only" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Volume</th>'
       + '</tr></thead>'
       + '<tbody>'+qtrRows+'</tbody>'
       + '</table></div>';
@@ -11078,9 +11304,9 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
         + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
         + '<td style="'+tdB+'text-align:right;color:#888780;">'+p.lots.size+'</td>'
         + lastCell
-        + '<td style="'+tdB+'padding-right:14px;width:120px;">'
+        + '<td class="mat-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
           + '<div style="display:flex;align-items:center;gap:6px;">'
-            + '<div style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+            + '<div class="mat-bar" style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
               + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
             + '</div>'
             + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -11095,13 +11321,13 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
     var lastHeader = hasDate
       ? '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Last run</th>'
       : '';
-    tableHTML = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    tableHTML = '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
       + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
         + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Product</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Lots</th>'
         + lastHeader
-        + '<th style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
+        + '<th class="mat-bar-cell" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
       + '</tr></thead>'
       + '<tbody>'+prodRows+'</tbody>'
       + '</table></div>';
@@ -11278,7 +11504,7 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
     // inline panel cell had no width constraint (see mat-inline above). Shrink-wrapping left
     // the table stranded in the left third of the card. With the cell fixed, 100% is the
     // frame width and the columns distribute across it.
-    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="' + th + '">Date</th><th style="' + th + '">Production lot</th><th style="' + th + '">Used instead</th>'
       + '<th style="' + thR + '">Its expiry</th><th style="' + thR + '">Kg pulled</th>'
@@ -11381,7 +11607,7 @@ function matLotTableHTML(m, unit) {
   notes.push('Ordered first-expiry-first-out. Picking order is an assumption, not a record of what was pulled.');
   return '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
     + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Inventory lots &middot; use-first order</div>'
-    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="' + th + '">Lot #</th>'
       + (multiPart ? '<th style="' + th + '">Part #</th>' : '')
@@ -11529,8 +11755,8 @@ function renderMatInline(m, idx) {
         + '</tr>';
     }).join('');
     panel.innerHTML =
-      '<div style="padding:12px 14px 14px 56px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
-        + '<div style="display:flex;align-items:center;gap:16px;margin-bottom:4px;flex-wrap:wrap;">'
+      '<div class="mat-panel-inner" style="padding:12px 14px 14px 56px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
+        + '<div class="mat-kpi-strip" style="display:flex;align-items:center;gap:16px;margin-bottom:4px;flex-wrap:wrap;">'
           + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">On hand</div>'
             + '<div style="font-size:15px;font-weight:500;color:#85B7EB;font-family:system-ui;">'+fmtStockI(m.stock)+'</div></div>'
           + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
@@ -11546,7 +11772,7 @@ function renderMatInline(m, idx) {
         + '<div style="font-size:11px;color:#5f5e5a;font-family:system-ui;margin-bottom:10px;">No production usage recorded for this ingredient since '+MATERIALS_TRACKING_START.toLocaleDateString('en-US',{month:'short',year:'numeric'})+'.</div>'
         + '<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;">'
           + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">On-hand by part #</div>'
-          + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+          + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
           + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
             + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Part #</th>'
             + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Material name</th>'
@@ -11609,11 +11835,11 @@ function renderMatInline(m, idx) {
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.avg3))+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.totalKg))+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;">'+(dim?'—':pb.lotCount)+'</td>'
-        + '<td style="padding:5px 14px;width:120px;">'
+        + '<td class="mat-bar-cell" style="padding:5px 14px;width:120px;">'
           + (dim
             ? '<span style="font-size:10px;color:#5f5e5a;">—</span>'
             : '<div style="display:flex;align-items:center;gap:6px;">'
-                + '<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
+                + '<div class="mat-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
                   + '<div style="height:100%;width:'+bw2+'%;background:#378ADD;border-radius:2px;"></div>'
                 + '</div>'
                 + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -11623,7 +11849,7 @@ function renderMatInline(m, idx) {
     }).join('');
     breakdownHTML = '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
       + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Breakdown by part #</div>'
-      + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+      + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
       + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
         + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Part #</th>'
         + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Material name</th>'
@@ -11633,7 +11859,7 @@ function renderMatInline(m, idx) {
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">3-mo avg</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Window total</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'
-        + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">% of group</th>'
+        + '<th class="mat-bar-cell" style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">% of group</th>'
       + '</tr></thead>'
       + '<tbody>'+breakdownRows+'</tbody>'
       + '</table></div>'
@@ -11651,8 +11877,8 @@ function renderMatInline(m, idx) {
   var aftTxt = aft == null ? '—' : ((aft > 0 ? '+' : '') + fmtStockQty(aft) + ' ' + unit);
   var aftCol = aft == null ? '#5f5e5a' : (aft < 0 ? '#F09595' : '#9FE1CB'); // binary green/red, matching the table's Available pill
   panel.innerHTML =
-    '<div style="padding:12px 14px 14px 56px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
-      + '<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap;">'
+    '<div class="mat-panel-inner" style="padding:12px 14px 14px 56px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
+      + '<div class="mat-kpi-strip" style="display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap;">'
         + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">On hand</div>'
           + '<div style="font-size:15px;font-weight:500;color:#85B7EB;font-family:system-ui;">'+fmtStockI(m.stock)+'</div></div>'
         + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
@@ -11680,7 +11906,7 @@ function renderMatInline(m, idx) {
       + _stockCompositionHTML(m, unit)
       + matInlineTabBar(m, idx)
       + (_matTab(m) === 'usage'
-          ? '<div style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+esc(unit)+' for '+esc(m.name)+'">Trend.</canvas></div>'
+          ? '<div class="mat-usage-chart" style="position:relative;height:160px;"><canvas id="mat-chart-'+idx+'" role="img" aria-label="Monthly '+esc(unit)+' for '+esc(m.name)+'">Trend.</canvas></div>'
             + '<div id="mat-month-drill-'+idx+'" style="margin-top:0;"></div>'
             + summaryHTML
           : '')
@@ -11851,9 +12077,9 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<td style="padding:5px 10px;font-size:11px;color:#888780;vertical-align:top;">'+lotList+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?(p.units.toLocaleString()+(p.unitLabel?' '+esc(p.unitLabel):'')):'—')+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
-      + '<td style="padding:5px 14px;width:120px;">'
+      + '<td class="mat-bar-cell" style="padding:5px 14px;width:120px;">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
-          + '<div style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
+          + '<div class="mat-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
             + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
           + '</div>'
           + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -11867,14 +12093,14 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">Products using this material \u2014 '+label+'</div>'
       + '<button onclick="document.getElementById(\'mat-month-drill-'+idx+'\').dataset.activeMonth=\'\';document.getElementById(\'mat-month-drill-'+idx+'\').innerHTML=\'\';if(window._matDrillState)delete window._matDrillState['+idx+'];" style="font-size:10px;color:#5f5e5a;background:none;border:none;cursor:pointer;font-family:system-ui;padding:0;">&#x2715; close</button>'
     + '</div>'
-    + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+    + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Customer</th>'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Product</th>'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lot #</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Units</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">kg used</th>'
-      + '<th style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
+      + '<th class="mat-bar-cell" style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
     + '</tr></thead>'
     + '<tbody>'+rows+'</tbody>'
     + '</table></div></div>';
@@ -12219,17 +12445,17 @@ function renderMaterials() {
           ?'<div style="font-size:10px;font-family:system-ui;margin-top:2px;max-width:250px;line-height:1.6;white-space:normal;">'+_partNumsHTML(rosterParts, dimSet)+'</div>'
           :(m.partNums.length?'<div style="font-size:10px;font-family:system-ui;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+_partNumsHTML(m.partNums)+'</div>':''))
       +'</td>'
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#85B7EB;white-space:nowrap;">'+(invLoading?'<span class="inv-skel" style="width:46px;"></span>':fmtStock(m.stock,unitS))+'</td>'
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+(demLoading?'<span class="inv-skel" style="width:42px;"></span>':fmtDemand(m.demand,unitS))+'</td>'
-      +'<td style="text-align:center;padding:8px 10px;white-space:nowrap;">'+((invLoading||demLoading)?'<span class="inv-skel" style="width:50px;"></span>':afterBadge(m.afterDemand,m.demand,unitS))+'</td>'
+      +'<td class="mat-c-onhand" style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#85B7EB;white-space:nowrap;">'+(invLoading?'<span class="inv-skel" style="width:46px;"></span>':fmtStock(m.stock,unitS))+'</td>'
+      +'<td class="mat-c-committed" style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+(demLoading?'<span class="inv-skel" style="width:42px;"></span>':fmtDemand(m.demand,unitS))+'</td>'
+      +'<td class="mat-c-avail" style="text-align:center;padding:8px 10px;white-space:nowrap;">'+((invLoading||demLoading)?'<span class="inv-skel" style="width:50px;"></span>':afterBadge(m.afterDemand,m.demand,unitS))+'</td>'
       +(invLoading?'<td class="mat-col-cover mat-seam" style="text-align:center;padding:8px 10px;"><span class="inv-skel" style="width:54px;"></span></td>':renderCoverCell(monthsCover))
-      +(invLoading?'<td class="mat-seam" style="text-align:center;padding:8px 10px;"><span class="inv-skel" style="width:56px;"></span></td>':renderExpiryCell(m,unit))
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+fmt(m.lastMonth)+'</td>'
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.avg3)+'</td>'
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.avg6)+'</td>'
-      +'<td style="padding:8px 10px;text-align:center;width:110px;">'+(m.spark&&m.spark.length?sparkSVG(m.spark,m.trend,m.sparkLabels,unit):'<span style="color:#5f5e5a;font-size:12px;">—</span>')+'</td>'
-      +'<td style="text-align:right;padding:8px 10px;">'+vsBadge(m.vsPct)+'</td>'
-      +'<td style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.totalKg)+'</td>'
+      +(invLoading?'<td class="mat-c-expiry mat-seam" style="text-align:center;padding:8px 10px;"><span class="inv-skel" style="width:56px;"></span></td>':renderExpiryCell(m,unit))
+      +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;font-size:12px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+fmt(m.lastMonth)+'</td>'
+      +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.avg3)+'</td>'
+      +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.avg6)+'</td>'
+      +'<td class="mat-c-hist" style="padding:8px 10px;text-align:center;width:110px;">'+(m.spark&&m.spark.length?sparkSVG(m.spark,m.trend,m.sparkLabels,unit):'<span style="color:#5f5e5a;font-size:12px;">—</span>')+'</td>'
+      +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;">'+vsBadge(m.vsPct)+'</td>'
+      +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.totalKg)+'</td>'
       +'</tr>'
       +'<tr id="mat-inline-row-'+i+'" style="display:'+(isSelected?'':'none')+';">'
         // width:0 + min-width:100% keeps the expanded panel OUT of the table's width
@@ -12241,7 +12467,7 @@ function renderMaterials() {
         // width:100% child rendered wider than the visible card and had to be scrolled.
         // width:0 makes the panel contribute nothing intrinsically; min-width:100% then fills
         // the cell once the table has sized itself from the collapsed rows alone.
-        +'<td colspan="'+colSpan+'" style="padding:0;"><div id="mat-inline-'+i+'" style="width:0;min-width:100%;"></div></td>'
+        +'<td colspan="'+colSpan+'" style="padding:0;"><div id="mat-inline-'+i+'" class="mat-panel" style="width:0;min-width:100%;"></div></td>'
       +'</tr>';
   }).join('');
   if (!tableRows) {
