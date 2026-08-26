@@ -1739,9 +1739,17 @@ function parseInventory(text) {
       // lot that was actually picked, and that one is usually spent by now.
       if (lotNo) {
         var xd = parseInvDate(r['EXP. Date']);
+        // What the sheet recorded this lot holding when the day began. This is the only
+        // datum that answers "was it on the shelf when the pick happened" without inference
+        // — see stockAt. Never num() on a blank or a sentinel: the feed serves #N/A and
+        // #VALUE! while the tab recalculates, and num() turns both into 0, which would read
+        // as "this lot was empty all morning" and silently suppress real findings. A cell
+        // with no digit in it stays null, and null means "fall back to current stock".
+        var sdRaw = (r['Start Day Stock'] == null ? '' : String(r['Start Day Stock'])).trim();
         inventoryLotIndex[lotNo.toUpperCase()] = {
           part: part, qty: qty, exp: xd ? xd.getTime() : null,
-          received: (r['Receiving Date'] || '').trim()
+          received: (r['Receiving Date'] || '').trim(),
+          startQty: /[0-9]/.test(sdRaw) ? num(sdRaw) : null
         };
       }
       if (!p.material && r['Material Name']) p.material = (r['Material Name'] || '').trim();
@@ -3053,10 +3061,32 @@ function _fefoIndex() {
   //
   // Same-day picks count as "drawn after", conservatively: a lot drawn down on the day of the
   // decision has an uncertain balance at the moment of it.
+  // Midnight today. Above it the inventory sheet's own Start Day Stock answers the question;
+  // below it there is nothing recorded and today's stock is all there is.
+  var startOfToday = _expiryToday();
   function stockAt(lotNo, t) {
     var arr = picksByLot[lotNo];
     var now = stockNow[lotNo] || 0;
     var touched = !!(arr && arr.length && arr[arr.length - 1].t >= t);
+    // A pick made TODAY is judged against what the sheet says the lot held when the day
+    // began — recorded, not inferred. Current stock cannot answer it: a lot drained at
+    // lunchtime reads 0 by the afternoon, and reading that as "never on the shelf" deleted
+    // the morning's finding retroactively (T34275 held 9.94 kg at an 8:15 pick and read 0
+    // by 14:00; T33399 the same). Inferring the other way — treating every unexplained 0 as
+    // "we cannot know" — was tried on 2026-08-25 and reverted within the day, because it
+    // flagged T34859 against a pick five days after that lot emptied. Neither guess was
+    // needed: the sheet had been recording the answer all along in a column the published
+    // feed did not carry.
+    //
+    // Stock only falls, so the start-of-day figure is an upper bound at the pick moment. It
+    // therefore decides AVAILABILITY outright, but it is only called exact when nothing moved
+    // all day (sq === now, untouched) — otherwise couldCover declines to claim a verdict
+    // rather than reading a morning figure as the quantity standing at the pick.
+    var rec = idx[lotNo];
+    var sq = rec ? rec.startQty : null;
+    if (t >= startOfToday && sq != null) {
+      return { qty: sq, exact: !touched && sq === now, present: sq > 0 || touched };
+    }
     return { qty: now, exact: !touched, present: now > 0 || touched };
   }
 
