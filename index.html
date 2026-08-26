@@ -1832,8 +1832,51 @@ function bustUrl(url, fresh) {
 }
 var NO_CACHE = { cache: 'no-store' };
 
+// Every network read gets a deadline, because fetch() has none of its own. A request
+// that stalls — no response and no error, which is what a phone waking with its radio
+// still coming up produces — leaves its promise pending forever. Nothing downstream
+// can recover from that: fetchWithRetry's ladder only fires on a rejection, and
+// loadDashboard's catch only runs on a rejection, so the page sits on "Loading
+// production data..." until someone reloads it by hand. A desktop on a stable link
+// either completes or errors quickly enough never to expose this, which is why it
+// only ever showed up on the phone. It also un-wedges the *IfNeeded latches
+// (_matFetching and friends), which a hung request leaves set for the whole session.
+//
+// 20s is picked against these sheets rather than against networks in general:
+// Google's /pub?output=csv runs 1-20s for the slower tabs (see fetchOpenOrders), so a
+// tighter deadline would abort reads that were going to succeed.
+var FETCH_TIMEOUT_MS = 20000;
+
+function fetchWithTimeout(url, opts) {
+  var o = {};
+  for (var k in opts) { if (opts.hasOwnProperty(k)) o[k] = opts[k]; }
+  var ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  if (ac) o.signal = ac.signal;
+  var timer = null;
+  // The timer rejects on its own rather than waiting for the abort to surface as a
+  // rejection. Aborting is specified to reject the fetch, but this whole function
+  // exists because a request stopped behaving, and a deadline that only works when
+  // the network layer cooperates is the same trap one level down. abort() here is
+  // an optimisation — it frees the socket — not the mechanism.
+  var deadline = new Promise(function(_, rej) {
+    timer = setTimeout(function() {
+      if (ac) { try { ac.abort(); } catch (_e) {} }
+      rej(new Error('Timed out after ' + FETCH_TIMEOUT_MS + 'ms'));
+    }, FETCH_TIMEOUT_MS);
+  });
+  return Promise.race([fetch(url, o), deadline]).then(function(r) {
+    clearTimeout(timer);
+    return r;
+  }, function(e) {
+    clearTimeout(timer);
+    // Our own abort surfaces as AbortError; say what actually happened. A real
+    // network error keeps its message.
+    throw (e && e.name === 'AbortError') ? new Error('Timed out after ' + FETCH_TIMEOUT_MS + 'ms') : e;
+  });
+}
+
 function fetchCSVSimple(url, fresh) {
-  return fetch(bustUrl(url, fresh), NO_CACHE).then(function(r){
+  return fetchWithTimeout(bustUrl(url, fresh), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -1843,7 +1886,7 @@ function fetchCSVSimple(url, fresh) {
 }
 
 function fetchMaterialsCSV(fresh) {
-  return fetch(bustUrl(CSV_MATERIALS, fresh), NO_CACHE).then(function(r){
+  return fetchWithTimeout(bustUrl(CSV_MATERIALS, fresh), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -1852,9 +1895,13 @@ function fetchMaterialsCSV(fresh) {
   }).catch(function(){ return ''; });
 }
 
-function fetchWithRetry(url, retries, delay, fresh) {
+// onRetry (optional) fires before each re-attempt. The blocking load passes one so a
+// slow start is distinguishable from a dead one — with a 20s deadline and five
+// attempts the worst case is ~2 minutes, and two minutes of an unchanging "Loading
+// production data..." is exactly the hang this was meant to fix.
+function fetchWithRetry(url, retries, delay, fresh, onRetry) {
   retries = retries || 5; delay = delay || 2000;
-  return fetch(bustUrl(url, fresh), NO_CACHE).then(function(r){
+  return fetchWithTimeout(bustUrl(url, fresh), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text) {
@@ -1866,15 +1913,16 @@ function fetchWithRetry(url, retries, delay, fresh) {
     return text;
   }).catch(function(e){
     if (retries <= 1) throw e;
+    if (onRetry) { try { onRetry(e); } catch(_e) {} }
     return new Promise(function(res){ setTimeout(res, delay); })
-      .then(function(){ return fetchWithRetry(url, retries-1, Math.round(delay*1.5), fresh); });
+      .then(function(){ return fetchWithRetry(url, retries-1, Math.round(delay*1.5), fresh, onRetry); });
   });
 }
 
-function fetchData(fresh) {
+function fetchData(fresh, onRetry) {
   return Promise.all([
-    fetchWithRetry(CSV_CURRENT, null, null, fresh),
-    fetchWithRetry(CSV_PRIOR, null, null, fresh),
+    fetchWithRetry(CSV_CURRENT, null, null, fresh, onRetry),
+    fetchWithRetry(CSV_PRIOR, null, null, fresh, onRetry),
     fetchWithRetry(CSV_TARGETS, null, null, fresh).catch(function(){ return ''; }),
     fetchCSVSimple(CSV_WEEKLY_TARGETS, fresh)
   ]);
@@ -1915,7 +1963,7 @@ function fetchInventoryCSV(fresh) {
   // true origin read — used by every *refresh* path, where the whole point is to
   // see an edit the user just made. Without it a refresh can be answered from the
   // same 5-minute CDN bucket it was trying to escape.
-  return fetch(fresh ? bustUrl(CSV_INVENTORY, true) : CSV_INVENTORY, NO_CACHE).then(function(r){
+  return fetchWithTimeout(fresh ? bustUrl(CSV_INVENTORY, true) : CSV_INVENTORY, NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -3606,7 +3654,7 @@ function parseDemand(text) {
 function fetchDemandCSV(fresh) {
   // No cachebust on first load, forced origin read on refresh — same rationale
   // as fetchInventoryCSV.
-  return fetch(fresh ? bustUrl(CSV_DEMAND, true) : CSV_DEMAND, NO_CACHE).then(function(r){
+  return fetchWithTimeout(fresh ? bustUrl(CSV_DEMAND, true) : CSV_DEMAND, NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(text){
@@ -4447,7 +4495,12 @@ function loadDashboard() {
   // bucketed snapshot on first paint would leave today's rows invisible
   // until the next bucket rollover (the bug behind "dashboard shows 0
   // for everything right after load").
-  fetchData(true).then(function(results) {
+  fetchData(true, function(){
+    // Deliberately not an attempt count: two CSVs retry independently, so a counter
+    // here would double and mean nothing. It only has to say "still working".
+    var el = document.getElementById('loading');
+    if (el) el.textContent = 'Slow connection \u2014 still loading production data\u2026';
+  }).then(function(results) {
     _resetSkipStats();
     var rows = parseCSV(results[0]).filter(isValid);
     var rows25 = parseCSV(results[1]).filter(isValid);
