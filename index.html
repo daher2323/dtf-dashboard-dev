@@ -149,13 +149,19 @@
        Material column uses: several of these tables fit without scrolling at
        all, and a shadow with nothing sliding under it reads as a rendering
        artifact — a column rule reads as a column rule either way. */
-    .mat-sub-table { border-collapse: separate !important; border-spacing: 0 !important; }
-    .mat-sub-table thead th, .mat-sub-table tbody td { border-bottom: 0.5px solid #2c2c2a; }
-    .mat-sub-table thead th:first-child,
-    .mat-sub-table tbody td:first-child {
+    .pnl-sub-table { border-collapse: separate !important; border-spacing: 0 !important; }
+    .pnl-sub-table thead th, .pnl-sub-table tbody td { border-bottom: 0.5px solid #2c2c2a; }
+    .pnl-sub-table thead th:first-child,
+    .pnl-sub-table tbody td:first-child {
       position: sticky; left: 0; z-index: 2; background: #141618;
       border-right: 0.5px solid #2c2c2a;
     }
+    /* Materials renders its panel on #141618; the Jars/Bottles/... panel sits on the
+       SKU card's #1e2124. A pinned cell must match what it is painted over or it
+       reads as a darker stripe sliding under the row. Rows that set their own
+       background (current quarter, the Total rollup) do it inline and still win. */
+    .pnl-on-card .pnl-sub-table thead th:first-child,
+    .pnl-on-card .pnl-sub-table tbody td:first-child { background: #1e2124; }
   }
   @media (max-width: 700px) { .charts-row { grid-template-columns: 1fr; } }
 
@@ -427,9 +433,9 @@
        it annotates stays, which is the same trade .customer-row already makes on a
        phone. The quarterly Volume column is a bar and nothing else, so that one
        goes entirely: the kg in the column beside it already says the same thing. */
-    .mat-bar { display: none !important; }
-    .mat-bar-cell { width: 46px !important; padding-left: 6px !important; padding-right: 10px !important; }
-    .mat-bar-only { display: none !important; }
+    .pnl-bar { display: none !important; }
+    .pnl-bar-cell { width: 46px !important; padding-left: 6px !important; padding-right: 10px !important; }
+    .pnl-bar-only { display: none !important; }
 
     /* Six sub-tabs in one segmented pill overflow a phone: Neckbands sat past the
        right edge, and reaching it meant scrolling the whole page sideways — which
@@ -445,9 +451,21 @@
        ("Super BioFreak WTF Strawberry Lemonade") and were pushing Share off the
        edge; capped, the name ellipsizes and the figure survives, which is the
        right way round. */
-    .mat-sub-table td, .mat-sub-table th { padding-left: 6px !important; padding-right: 6px !important; }
-    .mat-sub-table td { font-size: 11px !important; }
-    .mat-sub-table td:first-child, .mat-sub-table th:first-child { padding-left: 10px !important; max-width: 46vw !important; }
+    .pnl-sub-table td, .pnl-sub-table th { padding-left: 6px !important; padding-right: 6px !important; }
+    .pnl-sub-table td { font-size: 11px !important; }
+    .pnl-sub-table td:first-child, .pnl-sub-table th:first-child { padding-left: 10px !important; max-width: 46vw !important; }
+
+    /* Jars/Bottles/… → expanded panel, By customer. The row is name(140) + bar +
+       units(80) + lots(36) + %(36) with 10px gaps — about 340px of fixed width
+       before the bar gets any, so on a phone the figures were crushed against each
+       other. Name takes its own line, the bar goes the way every other share bar
+       does here (the % it annotates stays), and units/lots/% share the line below.
+       The product chips lose their 150px indent, which was aligning them under a
+       name column that no longer exists. */
+    .proc-cust-row { flex-wrap: wrap; gap: 3px 10px !important; }
+    .proc-cust-row > :nth-child(1) { width: 100% !important; }
+    .proc-cust-row > :nth-child(3) { flex: 1 1 auto; text-align: left !important; width: auto !important; }
+    .proc-cust-prods { padding-left: 0 !important; }
 
     .proc-toolbar { flex-direction: column; align-items: stretch !important; gap: 10px; }
     .proc-toolbar > div:last-child { justify-content: flex-start; }
@@ -11160,9 +11178,9 @@ function matSummaryInner(m, idx, monthKeys, unit) {
           + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.products.size+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.lots.size+'</td>'
-          + '<td class="mat-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
+          + '<td class="pnl-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
             + '<div style="display:flex;align-items:center;gap:6px;">'
-              + '<div class="mat-bar" style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+              + '<div class="pnl-bar" style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
                 + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
               + '</div>'
               + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -11170,13 +11188,13 @@ function matSummaryInner(m, idx, monthKeys, unit) {
           + '</td>'
           + '</tr>';
       }).join('');
-      tableHTML = '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+      tableHTML = '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
         + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
           + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Customer</th>'
           + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
           + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Products</th>'
           + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Lots</th>'
-          + '<th class="mat-bar-cell" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
+          + '<th class="pnl-bar-cell" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
         + '</tr></thead>'
         + '<tbody>'+custRows+'</tbody>'
         + '</table></div>';
@@ -11231,7 +11249,7 @@ function matSummaryInner(m, idx, monthKeys, unit) {
         + '</td>'
         + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
         + '<td style="'+tdB+rBg+'text-align:right;">'+delta+'</td>'
-        + '<td class="mat-bar-only" style="'+tdB+rBg+'padding-right:14px;width:120px;">'
+        + '<td class="pnl-bar-only" style="'+tdB+rBg+'padding-right:14px;width:120px;">'
           + '<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
             + '<div style="height:100%;width:'+bw+'%;background:'+bCol+';border-radius:2px;"></div>'
           + '</div>'
@@ -11239,12 +11257,12 @@ function matSummaryInner(m, idx, monthKeys, unit) {
         + '</tr>';
     }).join('');
 
-    tableHTML = '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+    tableHTML = '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
       + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
         + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Quarter</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">vs prev</th>'
-        + '<th class="mat-bar-only" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Volume</th>'
+        + '<th class="pnl-bar-only" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Volume</th>'
       + '</tr></thead>'
       + '<tbody>'+qtrRows+'</tbody>'
       + '</table></div>';
@@ -11304,9 +11322,9 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
         + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
         + '<td style="'+tdB+'text-align:right;color:#888780;">'+p.lots.size+'</td>'
         + lastCell
-        + '<td class="mat-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
+        + '<td class="pnl-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
           + '<div style="display:flex;align-items:center;gap:6px;">'
-            + '<div class="mat-bar" style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+            + '<div class="pnl-bar" style="flex:1;height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
               + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
             + '</div>'
             + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -11321,13 +11339,13 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
     var lastHeader = hasDate
       ? '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Last run</th>'
       : '';
-    tableHTML = '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+    tableHTML = '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
       + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
         + '<th style="text-align:left;padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Product</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Total '+unit+'</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Lots</th>'
         + lastHeader
-        + '<th class="mat-bar-cell" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
+        + '<th class="pnl-bar-cell" style="padding:4px 10px 4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Share</th>'
       + '</tr></thead>'
       + '<tbody>'+prodRows+'</tbody>'
       + '</table></div>';
@@ -11504,7 +11522,7 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
     // inline panel cell had no width constraint (see mat-inline above). Shrink-wrapping left
     // the table stranded in the left third of the card. With the cell fixed, 100% is the
     // frame width and the columns distribute across it.
-    + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+    + '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="' + th + '">Date</th><th style="' + th + '">Production lot</th><th style="' + th + '">Used instead</th>'
       + '<th style="' + thR + '">Its expiry</th><th style="' + thR + '">Kg pulled</th>'
@@ -11607,7 +11625,7 @@ function matLotTableHTML(m, unit) {
   notes.push('Ordered first-expiry-first-out. Picking order is an assumption, not a record of what was pulled.');
   return '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
     + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Inventory lots &middot; use-first order</div>'
-    + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+    + '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="' + th + '">Lot #</th>'
       + (multiPart ? '<th style="' + th + '">Part #</th>' : '')
@@ -11772,7 +11790,7 @@ function renderMatInline(m, idx) {
         + '<div style="font-size:11px;color:#5f5e5a;font-family:system-ui;margin-bottom:10px;">No production usage recorded for this ingredient since '+MATERIALS_TRACKING_START.toLocaleDateString('en-US',{month:'short',year:'numeric'})+'.</div>'
         + '<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;">'
           + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">On-hand by part #</div>'
-          + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+          + '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
           + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
             + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Part #</th>'
             + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Material name</th>'
@@ -11835,11 +11853,11 @@ function renderMatInline(m, idx) {
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.avg3))+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.totalKg))+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;">'+(dim?'—':pb.lotCount)+'</td>'
-        + '<td class="mat-bar-cell" style="padding:5px 14px;width:120px;">'
+        + '<td class="pnl-bar-cell" style="padding:5px 14px;width:120px;">'
           + (dim
             ? '<span style="font-size:10px;color:#5f5e5a;">—</span>'
             : '<div style="display:flex;align-items:center;gap:6px;">'
-                + '<div class="mat-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
+                + '<div class="pnl-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
                   + '<div style="height:100%;width:'+bw2+'%;background:#378ADD;border-radius:2px;"></div>'
                 + '</div>'
                 + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -11849,7 +11867,7 @@ function renderMatInline(m, idx) {
     }).join('');
     breakdownHTML = '<div style="margin-top:14px;border-top:0.5px solid #2c2c2a;padding-top:10px;">'
       + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Breakdown by part #</div>'
-      + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+      + '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
       + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
         + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Part #</th>'
         + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Material name</th>'
@@ -11859,7 +11877,7 @@ function renderMatInline(m, idx) {
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">3-mo avg</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Window total</th>'
         + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'
-        + '<th class="mat-bar-cell" style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">% of group</th>'
+        + '<th class="pnl-bar-cell" style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">% of group</th>'
       + '</tr></thead>'
       + '<tbody>'+breakdownRows+'</tbody>'
       + '</table></div>'
@@ -12077,9 +12095,9 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<td style="padding:5px 10px;font-size:11px;color:#888780;vertical-align:top;">'+lotList+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?(p.units.toLocaleString()+(p.unitLabel?' '+esc(p.unitLabel):'')):'—')+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
-      + '<td class="mat-bar-cell" style="padding:5px 14px;width:120px;">'
+      + '<td class="pnl-bar-cell" style="padding:5px 14px;width:120px;">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
-          + '<div class="mat-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
+          + '<div class="pnl-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
             + '<div style="height:100%;width:'+bw+'%;background:#378ADD;border-radius:2px;"></div>'
           + '</div>'
           + '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;width:32px;text-align:right;">'+pct+'%</span>'
@@ -12093,14 +12111,14 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;">Products using this material \u2014 '+label+'</div>'
       + '<button onclick="document.getElementById(\'mat-month-drill-'+idx+'\').dataset.activeMonth=\'\';document.getElementById(\'mat-month-drill-'+idx+'\').innerHTML=\'\';if(window._matDrillState)delete window._matDrillState['+idx+'];" style="font-size:10px;color:#5f5e5a;background:none;border:none;cursor:pointer;font-family:system-ui;padding:0;">&#x2715; close</button>'
     + '</div>'
-    + '<div class="mat-sub-scroll" style="overflow-x:auto;"><table class="mat-sub-table" style="width:100%;border-collapse:collapse;">'
+    + '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
     + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Customer</th>'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Product</th>'
       + '<th style="text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lot #</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">Units</th>'
       + '<th style="text-align:right;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;">kg used</th>'
-      + '<th class="mat-bar-cell" style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
+      + '<th class="pnl-bar-cell" style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
     + '</tr></thead>'
     + '<tbody>'+rows+'</tbody>'
     + '</table></div></div>';
@@ -14141,7 +14159,7 @@ function renderProcurement() {
         +'<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(q.lots||'&#x2014;')+'</td>'
         +'<td style="'+tdB+rBg+'text-align:right;color:#888780;">'+(q.pctOfTotal!==null?q.pctOfTotal+'%':'&#x2014;')+'</td>'
         +'<td style="'+tdB+rBg+'text-align:right;">'+pctDelta+'</td>'
-        +'<td style="'+tdB+rBg+'padding-right:14px;width:110px;">'
+        +'<td class="pnl-bar-only" style="'+tdB+rBg+'padding-right:14px;width:110px;">'
           +'<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+bW+'%;background:'+bCol+';border-radius:2px;"></div></div>'
         +'</td>'
       +'</tr>';
@@ -14169,16 +14187,16 @@ function renderProcurement() {
           +' <span style="color:#444441;">'+p[1].toLocaleString()+'</span></span>';
       }).join('<span style="color:#2c2c2a;margin:0 4px;">·</span>');
       return '<div style="padding:8px 14px;border-bottom:0.5px solid #2c2c2a;">'
-        +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:5px;">'
+        +'<div class="proc-cust-row" style="display:flex;align-items:center;gap:10px;margin-bottom:5px;">'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;width:140px;flex-shrink:0;">'+esc(c.cust)+'</div>'
-          +'<div style="flex:1;height:5px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+          +'<div class="pnl-bar" style="flex:1;height:5px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
             +'<div style="height:100%;width:'+barW+'%;background:#378ADD;border-radius:2px;opacity:.7;"></div>'
           +'</div>'
           +'<div style="font-size:11px;color:#e8e6e0;font-weight:500;width:80px;text-align:right;flex-shrink:0;">'+c.units.toLocaleString()+'</div>'
           +'<div style="font-size:10px;color:#888780;width:36px;text-align:right;flex-shrink:0;">'+c.lots+' lot'+(c.lots!==1?'s':'')+'</div>'
           +'<div style="font-size:10px;font-weight:500;color:#888780;width:36px;text-align:right;flex-shrink:0;">'+pct+'%</div>'
         +'</div>'
-        +(prodList ? '<div style="padding-left:150px;display:flex;flex-wrap:wrap;gap:4px;">'+prodList+'</div>' : '')
+        +(prodList ? '<div class="proc-cust-prods" style="padding-left:150px;display:flex;flex-wrap:wrap;gap:4px;">'+prodList+'</div>' : '')
       +'</div>';
     }).join('');
 
@@ -14201,11 +14219,12 @@ function renderProcurement() {
         +'<td style="'+tdT+'text-align:right;color:#888780;">'+(cd.allLots||'&#x2014;')+'</td>'
         +'<td style="'+tdT+'text-align:right;color:#888780;">'+(cd.allPct!==null?cd.allPct+'%':'&#x2014;')+'</td>'
         +'<td style="'+tdT+'text-align:right;color:#5f5e5a;">&#x2014;</td>'
-        +'<td style="'+tdT+'padding-right:14px;"></td>'
+        +'<td class="pnl-bar-only" style="'+tdT+'padding-right:14px;"></td>'
       +'</tr>';
     }
 
-    var qtrSection = '<table style="width:100%;border-collapse:collapse;">'
+    var qtrSection = '<div class="pnl-sub-scroll pnl-on-card" style="overflow-x:auto;">'
+      +'<table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
       +'<thead><tr>'
         +'<th style="'+thSL+'">Quarter</th>'
         +'<th style="'+thS+'">'+(isDes?'Desiccants':isNeck?'Neckbands':'Units')+'</th>'
@@ -14213,10 +14232,10 @@ function renderProcurement() {
         +'<th style="'+thS+'">Lots</th>'
         +'<th style="'+thS+'">% of total</th>'
         +'<th style="'+thS+'width:70px;">vs prev</th>'
-        +'<th style="'+thS+'padding-right:14px;width:110px;">Volume</th>'
+        +'<th class="pnl-bar-only" style="'+thS+'padding-right:14px;width:110px;">Volume</th>'
       +'</tr></thead>'
       +'<tbody>'+tableRows+totalRow+'</tbody>'
-    +'</table>';
+    +'</table></div>';
 
     var activeTab = _procTab[sid] || 'qtr';
     var navS = function(active) { return 'padding:4px 12px;border-radius:6px;border:'+(active?'1.5px solid #378ADD':'1.5px solid transparent')+';background:'+(active?'#0C447C':'transparent')+';color:'+(active?'#85B7EB':'#888780')+';font-weight:'+(active?'500':'400')+';font-size:12px;cursor:pointer;font-family:system-ui;'; };
