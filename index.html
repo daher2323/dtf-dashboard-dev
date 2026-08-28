@@ -901,8 +901,9 @@ var CSV_LOT_INDEX_BY_YEAR = {
   2025: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=902688868&single=true&output=csv',
   2026: [
     'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=1261158834&single=true&output=csv',
-    // 2026 Sample Pack Lots — sample/stick packs never run down a line, so they have
-    // no production row at all and resolve through this index alone.
+    // 2026 Sample Pack Lots. Most of these lots DO have runs, on the stick/sample
+    // line (CSV_STICK_PRODUCTION); the rest are bulk/gusset-bag work that never goes
+    // down a line at all and has only this sheet's Amt. See lotUnitsInfo.
     'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=1885229131&single=true&output=csv'
   ]
 };
@@ -918,6 +919,10 @@ var CSV_LOT_INDEX_BY_YEAR = {
 // Lane" are not Line #1/#2/#4, so the line-keyed Production views (per-line tracks,
 // LINE_COLOR, the line filter) have nowhere to put them. This feed resolves lot
 // IDENTITY only — product name, units and run date on Materials, Recall and Blend.
+//
+// One URL, not a per-year map like CSV_BY_YEAR / CSV_LOT_INDEX_BY_YEAR: sample packs
+// weren't tracked on their own tab until 2026, so no 2025 counterpart exists. The
+// stray 2025 lots that appear here (e.g. 251215) resolve off the 2025 Lots tab.
 var CSV_STICK_PRODUCTION = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=952528272&single=true&output=csv';
 var stickProdByLot = {};      // lot # -> { product, units, date } from the stick/sample line
 var stickProdLoaded = false;
@@ -4334,9 +4339,22 @@ function fetchStickProductionIfNeeded(force) {
 //                  rather than passing it off as a finished run.
 //   null         - nothing to show. Render "-", never 0.
 function lotUnitsInfo(lot, unitsByLot) {
-  if (unitsByLot && unitsByLot.hasOwnProperty(lot)) return { units: unitsByLot[lot], src: 'production', label: '' };
   var s = stickProdByLot[lot];
-  if (s && s.units) return { units: s.units, src: 'production', label: '' };
+  var hasMain = !!(unitsByLot && unitsByLot.hasOwnProperty(lot));
+  if (hasMain || (s && s.units)) {
+    var mainUnits = hasMain ? unitsByLot[lot] : 0;
+    var stickUnits = (s && s.units) || 0;
+    // A handful of kitted variety packs are logged on BOTH feeds — the stick machine
+    // makes the sticks, Line #2 kits them — and the two records overlap partially: one
+    // feed's run days are a subset of the other's, with the shared day carrying an
+    // identical Final Units figure on each. So neither "main wins" nor "sum both" is
+    // right. Main-wins under-reported lot 260305 by 85% (1,664 of 11,577); summing would
+    // double-count every shared day. Taking the larger total picks the complete record
+    // and can never double-count — its only failure mode is two feeds holding genuinely
+    // complementary days, which does not occur in the data (checked across all 3,402
+    // known lots: 2 overlap, both strict subsets).
+    return { units: Math.max(mainUnits, stickUnits), src: 'production', label: '' };
+  }
   var e = lotIndex[lot];
   if (e && e.amt) {
     var p = parseAmt(e.amt);
