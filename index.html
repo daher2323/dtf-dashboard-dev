@@ -1303,7 +1303,10 @@ var _refreshInFlight = false;
 // (operator reassigns a lot to a different line) overwrite naturally on
 // the next render where r['Line'] resolves.
 var _knownLineByLot = {};
-var filterState = { customer:[], product:[], status:[], bottle:[], jar:[], line:[] };
+// search lives here with the other filters, not in the #fSearch DOM node. renderDetail
+// rebuilds #content.innerHTML, so a term held only on the input is wiped by the first
+// background refresh that lands after you type it.
+var filterState = { customer:[], product:[], status:[], bottle:[], jar:[], line:[], search:'' };
 
 var _openMsId = null;
 
@@ -1575,7 +1578,7 @@ function applyFilters() {
 }
 
 function getFilteredLots() {
-  var search = document.getElementById('fSearch') ? document.getElementById('fSearch').value.toLowerCase() : '';
+  var search = (filterState.search || '').toLowerCase();
   var srcMap = window._detailLotMap || lotMap;
   return Object.values(srcMap).filter(Boolean).filter(function(l) {
     if (search && !(l.lot.toLowerCase().includes(search) || l.product.toLowerCase().includes(search))) return false;
@@ -1591,7 +1594,8 @@ function getFilteredLots() {
 
 function clearFilters() {
   _recallJumpHighlight = null;
-  var fs = document.getElementById('fSearch'); if (fs) fs.value = '';
+  filterState.search = '';
+  var fs = document.getElementById('fSearch'); if (fs) fs.value = ''; // toolbar isn't rebuilt by applyFilters
   ['customer','product','status','bottle','jar','line'].forEach(function(id){ filterState[id] = []; rebuildMsTrigger(id); });
   rebuildProductOptions();
   applyFilters();
@@ -1639,7 +1643,8 @@ function resetDashboard() {
   selectedCustomer = null;
   sortCol = 'date'; sortDir = -1; page = 1;
   custLimit = 10;
-  ['customer','product','status','bottle','jar'].forEach(function(id){ filterState[id] = []; });
+  ['customer','product','status','bottle','jar','line'].forEach(function(id){ filterState[id] = []; });
+  filterState.search = '';
   _nextRenderScrollY = 0;
   setMainSection('production');
 }
@@ -8181,7 +8186,7 @@ function renderDetail() {
     '<div class="detail-toolbar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:12px;">'
     +  '<div style="flex-shrink:0;">'+navHTML+'</div>'
     +  '<div class="filters" style="flex:1;margin-bottom:0;">'
-    +    '<input type="text" id="fSearch" placeholder="Search lot # or product\u2026" oninput="applyFilters()">'
+    +    '<input type="text" id="fSearch" placeholder="Search lot # or product\u2026" autocomplete="off" value="'+esc(filterState.search||'')+'" oninput="filterState.search=this.value;applyFilters()">'
     +    buildMultiSelect('customer','Customer',customers,filterState.customer)
     +    buildMultiSelect('product','Product',products,filterState.product)
     +    buildMultiSelect('line','Line',lineOpts,filterState.line)
