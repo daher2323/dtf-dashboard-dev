@@ -2080,10 +2080,14 @@ function fetchWithRetry(url, retries, delay, fresh, onRetry) {
   });
 }
 
-function fetchData(fresh, onRetry) {
+// deferPrior drops the prior-year CSV from the blocking set and resolves its slot to
+// null; the caller is then responsible for fetchPriorYearIfNeeded(). Only the initial
+// load uses it — the refresh paths are already off the critical path and want both
+// years in one consistent snapshot for applyFreshData's guards.
+function fetchData(fresh, onRetry, deferPrior) {
   return Promise.all([
     fetchWithRetry(CSV_CURRENT, null, null, fresh, onRetry),
-    fetchWithRetry(CSV_PRIOR, null, null, fresh, onRetry),
+    deferPrior ? Promise.resolve(null) : fetchWithRetry(CSV_PRIOR, null, null, fresh, onRetry),
     fetchWithRetry(CSV_TARGETS, null, null, fresh).catch(function(){ return ''; }),
     fetchCSVSimple(CSV_WEEKLY_TARGETS, fresh)
   ]);
@@ -4328,6 +4332,43 @@ function parseStickProduction(text) {
   } catch(e) { return {}; }
 }
 
+// The prior year, off the critical path. Every blocking CSV carries an independent
+// ~17% chance of a publish-pipeline stall (see ATTEMPT_TIMEOUTS), so blocking first
+// paint on two of them stalled 1 - 0.83^2 = 31% of loads; on one, 17%.
+//
+// Safe to defer because nothing on the landing view reads it: renderToday and
+// renderWeekly call prepData() but use none of its prior-year fields — the YoY tags
+// live in renderPerformance (Trend) and the both-year joins in renderDetail. And
+// allRows25 starts as [], which every `allRows.concat(allRows25)` site already handles.
+//
+// Not cache-busted: last year's rows are immutable, so the stable URL is correct and
+// can be served straight from Google's bucket.
+var _priorFetching = false;
+function fetchPriorYearIfNeeded(force) {
+  if (allRows25.length > 0 && !force) return;
+  if (_priorFetching || !CSV_PRIOR) return;
+  _priorFetching = true;
+  fetchWithRetry(CSV_PRIOR, null, null, false).then(function(text){
+    _priorFetching = false;
+    var rows = parseCSV(text).filter(isValid);
+    // Same discipline as every other feed here: an empty parse is a bad snapshot, not
+    // an empty year, and must never replace what is already held.
+    if (!rows.length) { console.warn('Prior-year fetch returned no valid rows; the next refresh will retry.'); return; }
+    allRows25 = rows;
+    // Repaint only if the view on screen actually reads prior-year rows. A stalled
+    // fetch can land a minute after first paint, long enough that the user is mid-
+    // interaction, and an unasked-for repaint is a bug rather than a refresh — the
+    // Detail search box was exactly that failure. Daily and Weekly show none of it.
+    var shows = (mainSection !== 'production')
+             || topView === 'detail'
+             || (subView !== 'today' && subView !== 'weekly');
+    if (shows) render();
+  }).catch(function(e){
+    _priorFetching = false;
+    console.warn('Prior-year fetch failed: ' + (e && e.message ? e.message : e));
+  });
+}
+
 function fetchStickProductionIfNeeded(force) {
   if (stickProdLoaded && !force) return;
   if (_stickFetching) return;
@@ -4765,14 +4806,16 @@ function loadDashboard() {
   // until the next bucket rollover (the bug behind "dashboard shows 0
   // for everything right after load").
   fetchData(true, function(){
-    // Deliberately not an attempt count: two CSVs retry independently, so a counter
-    // here would double and mean nothing. It only has to say "still working".
+    // Deliberately not an attempt count. It fires per retry and only has to say
+    // "still working" — with the prior year deferred, the current-year CSV is the
+    // one blocking read this can speak for.
     var el = document.getElementById('loading');
     if (el) el.textContent = 'Slow connection \u2014 still loading production data\u2026';
-  }).then(function(results) {
+  }, true).then(function(results) {
     _resetSkipStats();
     var rows = parseCSV(results[0]).filter(isValid);
-    var rows25 = parseCSV(results[1]).filter(isValid);
+    // null when deferred — see fetchPriorYearIfNeeded, kicked off after first paint.
+    var rows25 = (results[1] == null) ? [] : parseCSV(results[1]).filter(isValid);
     // Reject suspiciously small datasets — Google Sheets CDN occasionally serves stale/empty CSVs
     var minRows = allRows.length > 0 ? Math.floor(allRows.length * 0.8) : 50;
     if (rows.length < minRows) {
@@ -4797,6 +4840,7 @@ function loadDashboard() {
     // main load. Warming Open Orders now means the tab is usually ready by
     // the time the user navigates there (Google Sheets' /pub?output=csv has
     // highly variable latency — 1-20s for these sheets).
+    fetchPriorYearIfNeeded();
     fetchMaterialsIfNeeded();
     fetchLotIndexIfNeeded();
     fetchStickProductionIfNeeded();
