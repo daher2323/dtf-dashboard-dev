@@ -891,10 +891,37 @@ var YEAR_TARGETS = {
 // drawn in the materials sheet doesn't appear in the production log
 // (e.g. bulk powder shipments). Same year-rollover pattern as CSV_BY_YEAR —
 // add a new entry when a new-year tab is published.
+//
+// A year may carry SEVERAL tabs, so a value is a URL or an array of URLs; they are
+// fetched in parallel and merged into one lotIndex by fetchLotIndexIfNeeded. The
+// standard lot tabs hold 7-digit lots (2607029); sample/stick packs are numbered
+// 6-digit (260702) and live on their own tab, which is why they resolved as
+// "Unknown (lot N)" until that tab was published and listed here.
 var CSV_LOT_INDEX_BY_YEAR = {
   2025: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=902688868&single=true&output=csv',
-  2026: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=1261158834&single=true&output=csv'
+  2026: [
+    'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=1261158834&single=true&output=csv',
+    // 2026 Sample Pack Lots — sample/stick packs never run down a line, so they have
+    // no production row at all and resolve through this index alone.
+    'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgNR9iCy2D2z4OFKG97LIU0M9fCh0jaBzIXVQduVhazkoAWYPjBU_qE6XKOtn7kMS1H-qy9WwbqxL4/pub?gid=1885229131&single=true&output=csv'
+  ]
 };
+
+// Stick / sample-pack production log. Lives in the SAME spreadsheet as the main
+// production feed but on its own tab, with its own shape: "Machine Type" (4-Lane /
+// Single Lane) where the main sheet has "Line", and a Sample/Stick Pack Size column.
+// Most sample packs run here and never appear on the main production sheet at all,
+// which is why their lots rendered as "Unknown (lot N)".
+//
+// Deliberately NOT merged into allRows. It carries ~1.16M units in 2026, roughly 29%
+// of YEAR_TARGET, which would land straight on the YTD gauge; and "4-Lane"/"Single
+// Lane" are not Line #1/#2/#4, so the line-keyed Production views (per-line tracks,
+// LINE_COLOR, the line filter) have nowhere to put them. This feed resolves lot
+// IDENTITY only — product name, units and run date on Materials, Recall and Blend.
+var CSV_STICK_PRODUCTION = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0Vqunj5euX6ZRNwnYeF22UChTxiCd6gP_GVEiuFBeUo6o9c2Mc6Idt1pQkckhuyukmNJesy8_nZqX/pub?gid=952528272&single=true&output=csv';
+var stickProdByLot = {};      // lot # -> { product, units, date } from the stick/sample line
+var stickProdLoaded = false;
+var _stickFetching = false;
 
 function resolveConfiguredYear(y) {
   if (CSV_BY_YEAR[y] && YEAR_TARGETS[y]) return y;
@@ -4208,7 +4235,11 @@ function parseAmt(s) {
 function fetchLotIndexIfNeeded(force) {
   if (lotIndexLoaded && !force) return;
   if (_lotIdxFetching) return;
-  var urls = Object.keys(CSV_LOT_INDEX_BY_YEAR).map(function(y){ return CSV_LOT_INDEX_BY_YEAR[y]; });
+  // A year's value is a single URL or an array of them (standard lots + sample packs).
+  var urls = Object.keys(CSV_LOT_INDEX_BY_YEAR).reduce(function(acc, y) {
+    var v = CSV_LOT_INDEX_BY_YEAR[y];
+    return acc.concat(v);
+  }, []).filter(function(u){ return !!u; });
   if (!urls.length) { lotIndexLoaded = true; return; }
   _lotIdxFetching = true;
   Promise.all(urls.map(function(u){ return fetchCSVSimple(u, !!force); })).then(function(texts){
@@ -4241,6 +4272,96 @@ function fetchLotIndexIfNeeded(force) {
   });
 }
 
+// Stick / sample-pack production rows -> { lot: { product, units, date } }.
+// Final Units is a per-day increment on this sheet (same as the main feed), so units
+// are SUMMED per lot; date is the latest run day.
+function parseStickProduction(text) {
+  if (!text) return {};
+  try {
+    var rows = parseCSV(text);
+    var out = {};
+    rows.forEach(function(r){
+      var lot = (r['Lot Number'] || '').trim(); if (!lot) return;
+      var rec = out[lot] || (out[lot] = { product: '', units: 0, date: null });
+      // The tab serves live #REF!/#N/A cells while its formulas resolve. A sentinel is
+      // not a product name, and num() would quietly turn one into 0 units.
+      var prod = (r['Product'] || '').trim();
+      if (prod && prod.charAt(0) !== '#' && !rec.product) rec.product = prod;
+      var fu = (r['Final Units'] || '').trim();
+      if (fu && fu.charAt(0) !== '#') rec.units += num(fu);
+      var d = parseLocalDate(r['Date']);
+      // Same 2020-2035 window isValid() applies to the main feed: this tab holds typo'd
+      // years ("202026", "22\\2026") that must not become run dates.
+      if (d && d.getFullYear() >= 2020 && d.getFullYear() <= 2035 && (!rec.date || d > rec.date)) rec.date = d;
+    });
+    // A lot that resolved neither a name nor a unit count is not an answer — drop it so
+    // the chain falls through to the Lot # sheet instead of stopping on an empty record.
+    Object.keys(out).forEach(function(k){ if (!out[k].product && !out[k].units) delete out[k]; });
+    return out;
+  } catch(e) { return {}; }
+}
+
+function fetchStickProductionIfNeeded(force) {
+  if (stickProdLoaded && !force) return;
+  if (_stickFetching) return;
+  if (!CSV_STICK_PRODUCTION) { stickProdLoaded = true; return; }
+  _stickFetching = true;
+  fetchCSVSimple(CSV_STICK_PRODUCTION, !!force).then(function(text){
+    _stickFetching = false;
+    var parsed = parseStickProduction(text);
+    // Same guard as the lot index: fetchCSVSimple swallows a failure into '', which
+    // parses to {}, and this runs on a timer — an empty result must never blank the
+    // names already on screen.
+    if (Object.keys(parsed).length > 0) {
+      stickProdByLot = parsed;
+      stickProdLoaded = true;
+      if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+      else if (mainSection === 'quality') render();
+    } else if (!stickProdLoaded) {
+      console.warn('Stick/sample production fetch returned no lots; keeping it unloaded so the next refresh retries.');
+    }
+  }).catch(function(e){
+    _stickFetching = false;
+    console.warn('Stick/sample production refresh failed: ' + (e && e.message ? e.message : e));
+  });
+}
+
+// Units produced for a lot, and where the number came from. Three tiers:
+//   'production' - Final Units off a production feed (main line or stick/sample line)
+//   'planned'    - no production row anywhere, so the Lot # sheet's Amt: what the lot was
+//                  written up for. Bulk and gusset-bag runs never go down a line, so this
+//                  is the only figure that exists for them and every surface must say so
+//                  rather than passing it off as a finished run.
+//   null         - nothing to show. Render "-", never 0.
+function lotUnitsInfo(lot, unitsByLot) {
+  if (unitsByLot && unitsByLot.hasOwnProperty(lot)) return { units: unitsByLot[lot], src: 'production', label: '' };
+  var s = stickProdByLot[lot];
+  if (s && s.units) return { units: s.units, src: 'production', label: '' };
+  var e = lotIndex[lot];
+  if (e && e.amt) {
+    var p = parseAmt(e.amt);
+    if (p) return { units: p.value, src: 'planned', label: p.unit || '' };
+  }
+  return { units: null, src: null, label: '' };
+}
+
+// The marker on a units figure that came from the Lot # sheet's Amt rather than a
+// production run. An asterisk, not a word: a figure sourced from production carries no
+// annotation at all, so the mark is what draws the eye to the exception. Amber, matching
+// the treatment stick/sample packs already get in Logistics. The footnote carries the
+// explanation — see plannedNote, which every table showing one of these must render.
+function plannedTag() {
+  return '<span style="color:#EF9F27;font-weight:600;padding-left:3px;" title="No production data available for this Lot # \u2014 most likely a bulk or sample-pack run. Quantity is the Amt from the Lot # sheet.">*</span>';
+}
+// Footnote for any table that ended up showing at least one asterisked figure.
+function plannedNote() {
+  return '<div style="padding:6px 10px 2px;font-size:10px;color:#5f5e5a;font-family:system-ui;line-height:1.5;">'
+    + '<span style="color:#EF9F27;font-weight:600;">*</span> No production data available for this Lot # \u2014 '
+    + 'most likely a bulk or sample-pack run that never went down a line. '
+    + 'Quantity shown is the Amt from the Lot # sheet.'
+    + '</div>';
+}
+
 // Re-read the four slow-moving feeds behind Procurement and Quality: materials /
 // pick sheet, raw-material inventory, forthcoming demand, and the lot index.
 //
@@ -4262,6 +4383,7 @@ function refreshStockFeeds() {
   _stockRefreshAt = Date.now();
   fetchMaterialsIfNeeded(true);
   fetchLotIndexIfNeeded(true);
+  fetchStickProductionIfNeeded(true);
   // Inventory and demand are the admin-only Procurement feeds; viewers never see
   // the columns they populate, matching the role gate on the initial load.
   if (userRole === 'admin') {
@@ -4637,6 +4759,7 @@ function loadDashboard() {
     // highly variable latency — 1-20s for these sheets).
     fetchMaterialsIfNeeded();
     fetchLotIndexIfNeeded();
+    fetchStickProductionIfNeeded();
     // These count as a re-read for staleness purposes, so the first visit to
     // Materials doesn't immediately fire a second, forced round of the same fetches.
     _stockRefreshAt = Date.now();
@@ -11219,7 +11342,10 @@ function buildMatCustomerData(m, monthKeys) {
   var byCust = {};
   Object.keys(matchingLots).forEach(function(lot) {
     var kg = matchingLots[lot];
-    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
+    // Name chain: main production feed, then the stick/sample line (where most sample
+    // packs run and never touch the main sheet), then the Lot # reference sheet.
+    var stickRec = stickProdByLot[lot];
+    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product) || (stickRec && stickRec.product);
     var lotIdxEntry = lotIndex[lot];
     var product = productionProd
                || (lotIdxEntry && lotIdxEntry.combined)
@@ -11278,13 +11404,17 @@ function buildMatProductData(m, monthKeys, customerName) {
   var byProd = {};
   Object.keys(matchingLots).forEach(function(lot) {
     var kg = matchingLots[lot];
-    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
+    // Name chain: main production feed, then the stick/sample line (where most sample
+    // packs run and never touch the main sheet), then the Lot # reference sheet.
+    var stickRec = stickProdByLot[lot];
+    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product) || (stickRec && stickRec.product);
     var lotIdxEntry = lotIndex[lot];
     var product = productionProd
                || (lotIdxEntry && lotIdxEntry.combined)
                || ('Unknown (lot '+lot+')');
     var customer = product.split('-')[0].trim() || 'Unknown';
     if (customer !== customerName) return; // only this customer's lots
+    var ui = lotUnitsInfo(lot, unitsByLot);
     if (!byProd[product]) byProd[product] = { product: product, kg: 0, lots: new Set(), last: null, lotRows: [] };
     byProd[product].kg += kg;
     byProd[product].lots.add(lot);
@@ -11296,8 +11426,12 @@ function buildMatProductData(m, monthKeys, customerName) {
     byProd[product].lotRows.push({
       lot: lot,
       kg: kg,
-      date: prodDateByLot[lot] || ld || null, // production run date; fall back to pull date only if the lot has none
-      units: unitsByLot.hasOwnProperty(lot) ? unitsByLot[lot] : null
+      // Production run date. The stick/sample line is a production feed too, so its run
+      // date outranks the material-pull date; that fallback is the last resort.
+      date: prodDateByLot[lot] || (stickRec && stickRec.date) || ld || null,
+      units: ui.units,
+      unitsSrc: ui.src,       // 'production' | 'planned' | null — drives the "planned" tag
+      unitsLabel: ui.label
     });
   });
 
@@ -11541,7 +11675,7 @@ function matLotSubTable(p, unit) {
     return '<tr>'
       + '<td style="'+tdB+'font-family:'+mono+';color:#c9c7c1;">'+esc(l.lot)+'</td>'
       + '<td style="'+tdB+'text-align:right;color:#888780;">'+(l.date?esc(l.date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})):'—')+'</td>'
-      + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(l.units==null?'—':Math.round(l.units).toLocaleString())+'</td>'
+      + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(l.units==null?'—':Math.round(l.units).toLocaleString()+(l.unitsLabel?' '+esc(l.unitsLabel):'')+(l.unitsSrc==='planned'?plannedTag():''))+'</td>'
       + '<td style="'+tdB+'text-align:right;color:#888780;">'+(l.kg?Math.round(l.kg).toLocaleString()+' '+unit:'—')+'</td>'
       + '</tr>';
   }).join('');
@@ -11555,7 +11689,9 @@ function matLotSubTable(p, unit) {
       + '<th style="'+th+'text-align:right;">'+esc(unit)+'</th>'
     + '</tr></thead>'
     + '<tbody>'+rows+'</tbody>'
-    + '</table></div>';
+    + '</table>'
+    + (p.lotRows.some(function(l){ return l.unitsSrc === 'planned'; }) ? plannedNote() : '')
+    + '</div>';
 }
 
 // Toggle a product's lot accordion. Flips the detail row + rotates the chevron, and
@@ -12224,7 +12360,10 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
   var byProduct = {};
   Object.keys(matchingLots).forEach(function(lot) {
     var kg = matchingLots[lot];
-    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product);
+    // Name chain: main production feed, then the stick/sample line (where most sample
+    // packs run and never touch the main sheet), then the Lot # reference sheet.
+    var stickRec = stickProdByLot[lot];
+    var productionProd = productByLot[lot] || (lotMap[lot] && lotMap[lot].product) || (stickRec && stickRec.product);
     var lotIdxEntry = lotIndex[lot];
     var product = productionProd
                || (lotIdxEntry && lotIdxEntry.combined)
@@ -12233,21 +12372,20 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
     var customer = parts[0].trim();
     var prodName = parts.slice(1).join('-').trim() || product;
     var key = product;
-    // Units source depends on where the lot resolved:
-    //   - Production: use summed Final Units from the production CSV
-    //   - Lot # sheet only (bulk): use the Amt field ("185,125 servings", "25.2k servings", etc.)
-    var lotUnits = 0;
-    var lotUnitLabel = '';
-    if (productionProd) {
-      lotUnits = unitsByLot[lot] || 0;
-    } else if (lotIdxEntry && lotIdxEntry.amt) {
-      var parsed = parseAmt(lotIdxEntry.amt);
-      if (parsed) { lotUnits = parsed.value; lotUnitLabel = parsed.unit; }
-    }
-    if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0, units:0, unitLabel:''};
+    // Units: main production, then the stick/sample line, then the Lot # sheet's Amt
+    // ("185,125 servings", "25.2k servings"). See lotUnitsInfo — the third tier is a
+    // planned figure, not a finished run, and is tagged as such below.
+    var ui = lotUnitsInfo(lot, unitsByLot);
+    var lotUnits = ui.units || 0;
+    var lotUnitLabel = ui.label;
+    var lotPlanned = ui.src === 'planned';
+    if (!byProduct[key]) byProduct[key] = {product:prodName, customer:customer, lots:new Set(), kg:0, units:0, unitLabel:'', planned:false};
     byProduct[key].lots.add(lot);
     byProduct[key].kg += kg;
     byProduct[key].units += lotUnits;
+    // A product row aggregates lots; if ANY of them is a planned figure the row's total
+    // is no longer a pure production number, so the tag stays on.
+    if (lotPlanned) byProduct[key].planned = true;
     if (lotUnitLabel && !byProduct[key].unitLabel) byProduct[key].unitLabel = lotUnitLabel;
   });
 
@@ -12268,7 +12406,7 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<td style="padding:5px 10px;font-size:11px;color:#5f5e5a;white-space:nowrap;vertical-align:top;">'+esc(p.customer)+'</td>'
       + '<td style="padding:5px 10px;font-size:12px;font-weight:500;color:#e8e6e0;vertical-align:top;">'+esc(p.product)+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;color:#888780;vertical-align:top;">'+lotList+'</td>'
-      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?(p.units.toLocaleString()+(p.unitLabel?' '+esc(p.unitLabel):'')):'—')+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?(p.units.toLocaleString()+(p.unitLabel?' '+esc(p.unitLabel):'')+(p.planned?plannedTag():'')):'—')+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
       + '<td class="pnl-bar-cell" style="padding:5px 14px;width:120px;">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
@@ -12296,7 +12434,9 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<th class="pnl-bar-cell" style="padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;padding-right:14px;">Share</th>'
     + '</tr></thead>'
     + '<tbody>'+rows+'</tbody>'
-    + '</table></div></div>';
+    + '</table></div>'
+    + (sorted.some(function(x){ return x.planned; }) ? plannedNote() : '')
+    + '</div>';
 }
 
 function renderMaterials() {
@@ -14050,7 +14190,7 @@ function renderProcurement() {
   // The unforced calls cover a first visit (nothing loaded yet); refreshStockFeedsIfStale
   // covers arriving with data that loaded a long time ago, which the loaded flags alone
   // would happily keep showing forever.
-  if (procView === 'materials') { fetchMaterialsIfNeeded(); fetchInventoryIfNeeded(); fetchDemandIfNeeded(); fetchLotIndexIfNeeded(); refreshStockFeedsIfStale(); renderMaterials(); return; }
+  if (procView === 'materials') { fetchMaterialsIfNeeded(); fetchInventoryIfNeeded(); fetchDemandIfNeeded(); fetchLotIndexIfNeeded(); fetchStickProductionIfNeeded(); refreshStockFeedsIfStale(); renderMaterials(); return; }
   var now = new Date();
   var curQk = getQuarterKey(now);
   var cutoff = new Date(TRACKING_START);
@@ -14904,7 +15044,8 @@ function recallJumpToRun(lot, runTs) {
 function renderRecall() {
   closeMsPanel();
   fetchMaterialsIfNeeded();   // idempotent; builds pickRows from the same fetch
-  fetchLotIndexIfNeeded();    // so unresolved lots can still resolve via the Lot # index
+  fetchLotIndexIfNeeded();
+  fetchStickProductionIfNeeded(); // ...and via the stick/sample line, where most sample packs run
 
   // A trace fired before the pick sheet loaded runs now that data is present.
   if (recallPending && pickRows.length > 0) {
@@ -15413,7 +15554,8 @@ function clearBlendTrace() {
 function renderBlend() {
   closeMsPanel();
   fetchMaterialsIfNeeded();   // idempotent; builds pickRows from the same fetch
-  fetchLotIndexIfNeeded();    // so the product name can resolve via the Lot # index
+  fetchLotIndexIfNeeded();
+  fetchStickProductionIfNeeded(); // ...and via the stick/sample line, where most sample packs run
 
   if (blendPending && pickRows.length > 0) {
     var pq = blendPending; blendPending = '';
