@@ -10,7 +10,7 @@ To run locally, open `index.html` in a browser or serve the directory with any s
 
 ## Data flow
 
-All data is fetched at runtime from **published Google Sheets CSVs** — URLs live in two maps at the top of the `<script>` block (`CSV_BY_YEAR`, plus `CSV_TARGETS` / `CSV_WEEKLY_TARGETS` / `CSV_MATERIALS` / `CSV_OPEN_ORDERS_*` / `CSV_LOGISTICS`). There is no backend.
+All data is fetched at runtime from **published Google Sheets CSVs** — URLs live in two maps at the top of the `<script>` block (`CSV_BY_YEAR`, `CSV_LOT_INDEX_BY_YEAR`, plus `CSV_TARGETS` / `CSV_WEEKLY_TARGETS` / `CSV_MATERIALS` / `CSV_OPEN_ORDERS_*` / `CSV_LOGISTICS` / `CSV_STICK_PRODUCTION`). There is no backend.
 
 ### Adding a new year (annual rollover)
 
@@ -36,6 +36,8 @@ Until a real target is filled in, leave the entry at `0` (or omit it entirely to
 On Jan 1 of the new year, `CURRENT_YEAR` flips automatically. No other code changes are needed — per-year target pickers read from `YEAR_TARGETS[year]`, and comparison labels are derived from the map.
 
 **Graceful fallback:** if `CSV_BY_YEAR[CURRENT_YEAR]` is missing (new year started and nobody updated the code yet), `resolveConfiguredYear` falls back to the most recent configured year and logs a loud `console.warn`. The dashboard keeps working against last year's data rather than breaking — update the maps whenever you can.
+
+**The Lot # reference sheets roll over too** (`CSV_LOT_INDEX_BY_YEAR` → `lotIndex`, the fallback that names a lot with no production row). A year's value is a URL **or an array of URLs**, merged in parallel by `fetchLotIndexIfNeeded` — 2026 carries two tabs, standard lots plus sample packs. Lot numbers do not collide across tabs (checked: 0 of 3,395), and the merge is last-write-wins, so order matters if that ever changes.
 
 **Historical anchors** (not year-dynamic): `TRACKING_START` (Jan 1, 2025, start of customer/SKU history) and `MATERIALS_TRACKING_START` (Oct 1, 2025, first reliable materials data). These are fixed by when tracking began and should not move. When cloning for iteration (`setMonth` loops), always `new Date(TRACKING_START)` to avoid mutating the global.
 
@@ -102,6 +104,8 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
 ## Domain concepts
 
 - **Three production lines**: `Line #1` (Powder), `Line #2` (Capsules), `Line #4` (Powder). Colors/backgrounds/text colors per line are in `LINE_COLOR`, `LINE_TRACK`, `LINE_BG`, `LINE_TXT`, `LINE_TYPE`. `ALL_LINES` is the canonical list — no Line #3.
+- **There is a fourth production feed, and it is deliberately not in the totals** (`CSV_STICK_PRODUCTION`, `parseStickProduction`, `stickProdByLot`). Sample and stick packs run on their own machines — `Machine Type` is `4-Lane` / `Single Lane`, never `Line #1/#2/#4` — and are logged on a separate tab of the main production spreadsheet. It is **not** merged into `allRows`: it carries ~1.16M units in 2026, about 29% of `YEAR_TARGET`, which would land straight on the YTD gauge, and its machine names have no home in the line-keyed Production views (`LINE_COLOR`, per-line tracks, the line filter). It resolves lot **identity** only — product name, units and run date for Materials, Recall, Blend and `_fefoOpsLotName`. One URL, not a per-year map: sample packs weren't tracked on their own tab before 2026, and the stray 2025 lots that appear on it resolve off the 2025 Lots tab. If you ever do want stick packs in Production totals, that is a product decision about the annual target, not a wiring omission to tidy up.
+- **Lot identity resolves in three tiers** (`lotUnitsInfo`), and the third tier is not a production number. Main production feed → stick/sample feed → the Lot # reference sheet's `Amt`. Tier three means the lot never went down a line at all (bulk blends, gusset-bag runs), so `Amt` is what the lot was *written up for*, not what it produced: every surface showing one marks it with an amber asterisk (`plannedTag`) and the table carries `plannedNote()`. Don't drop the marker — the month drilldown silently passed `Amt` off as finished units for a long time. A production figure carries no annotation at all, so the mark is what draws the eye to the exception. Coverage today: 3,225 lots on production feeds, 177 on `Amt`, 0 unresolved. **A lot present on both production feeds takes the larger total, never the sum** — kitted variety packs get logged on both (the stick machine makes the sticks, Line #2 kits them) with partially overlapping days, so summing double-counts the shared day and main-wins under-reported lot `260305` by 85%.
 - **Annual/weekly targets**: `YEAR_TARGET` (2026) and `YEAR_TARGET_2025` drive gauges; `WEEKLY_TARGET` is derived. `TARGET_HIT_THRESHOLD = 0.99` is the "hit" tolerance.
 - **Lot deviation** (`lotDev`): `(finalUnits − projected) / projected × 100`. Returns `null` for any lot not marked Complete (in-progress, partial, or blank status) or with no projection — deviation is only meaningful once a lot has produced its full run, so callers must null-check.
 - **SKU grouping** (`SKU_GROUPS`): several part numbers roll up under one display name (e.g. multiple `20-xxxx` SKUs all map to "Whey Protein Concentrate (WPC)"). Used by the Procurement/Materials views. `GROUP_PARTS` is the inverse map.
