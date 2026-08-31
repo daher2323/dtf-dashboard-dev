@@ -1387,6 +1387,13 @@ function canonicalLine(raw) {
 // Developers can inspect the most recent skip breakdown from the browser console:
 //   __dtfSkipped()        → summary counts + last refresh timestamp
 //   __dtfSkipped(true)    → also returns a capped list of example rows per reason
+// Consecutive refreshes held back by the mid-recalc guard in applyFreshData. Bounded
+// so a permanently broken cell can't wedge the view: after this many holds the snapshot
+// lands with a loud warning.
+var _refreshHolds = 0;
+var REFRESH_MAX_HOLDS = 5;   // ~5 min on the Daily view's 60s cadence
+var _initRecalcRetries = 0;  // same guard on the initial load, capped at 2 re-fetches
+
 var _skipStats = null;
 function _resetSkipStats() {
   _skipStats = {
@@ -1811,6 +1818,30 @@ function parseCSVMultiline(text) {
     headers.forEach(function(h, i){ o[h] = (r[i] == null ? '' : String(r[i])).trim(); });
     return o;
   });
+}
+
+// How many rows dated today does this raw (unfiltered) parse hold, and how many
+// survived isValid? Google's publish pipeline serves the sheet mid-recalculation:
+// a formula cell comes through as the literal string "Loading...", so a completed run
+// arrives with its Lot Number and Final Units intact but its Product reading
+// "Loading...". isValid rightly refuses to name a lot that, but the row is REAL —
+// dropping it silently is how an 8,457-unit run vanished from the Daily view for
+// minutes at a time. Measured 2026-08-31: 10 of 40 consecutive fetches (25%) served
+// the truncated variant, alternating with the good one.
+//
+// So a snapshot that is still computing today's rows is INCOMPLETE, not authoritative.
+// Callers use this to hold it and take the next one.
+function todayRowCounts(rawRows, validRows) {
+  var today = getTodayStr();
+  function isToday(r) {
+    var dt = parseLocalDate(r && r['Date']);
+    return !!dt && (dt.getMonth()+1)+'/'+dt.getDate()+'/'+dt.getFullYear() === today;
+  }
+  var raw = 0, i;
+  for (i = 0; i < rawRows.length; i++) if (isToday(rawRows[i])) raw++;
+  var kept = 0;
+  for (i = 0; i < validRows.length; i++) if (isToday(validRows[i])) kept++;
+  return { raw: raw, kept: kept, dropped: raw - kept };
 }
 
 function isValid(r) {
@@ -4729,7 +4760,8 @@ function buildRecallResult(hits) {
 
 function applyFreshData(res) {
   _resetSkipStats();
-  var newRows = parseCSV(res[0]).filter(isValid);
+  var rawNew = parseCSV(res[0]);
+  var newRows = rawNew.filter(isValid);
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
   var newWeeklyTargets = parseWeeklyTargets(res[3]||'');
@@ -4751,6 +4783,37 @@ function applyFreshData(res) {
   //     much lower than the cost of running lots vanishing from the UI.
   //   curToday ≥ 5: 2-row tolerance for typical typo-fix edits (delete +
   //     re-enter pattern can briefly net -2 mid-edit).
+  // Mid-recalc truncation. Checked BEFORE the row-count tolerance below, because the
+  // loss it causes is exactly the size that tolerance forgives: with 7 rows today the
+  // tolerance is 2, and 5 < 7 - 2 is false, so the truncated snapshot was accepted and
+  // took 10,719 of the day's 22,615 units with it.
+  //
+  // The condition requires newToday < curToday, so it can only fire when accepting
+  // would lose rows we already hold — which means those rows parsed cleanly once and
+  // will again. That makes it self-healing in one poll rather than a freeze. The cap is
+  // belt-and-braces: if somehow held REFRESH_MAX_HOLDS times running, land it anyway
+  // and say so, so no data-quality accident can wedge the view indefinitely.
+  if (allRows.length > 0) {
+    var _tc = todayRowCounts(rawNew, newRows);
+    var _curTodayN = 0;
+    for (var _i = 0; _i < allRows.length; _i++) {
+      var _dt = parseLocalDate(allRows[_i]['Date']);
+      if (_dt && (_dt.getMonth()+1)+'/'+_dt.getDate()+'/'+_dt.getFullYear() === getTodayStr()) _curTodayN++;
+    }
+    if (_tc.dropped > 0 && _tc.kept < _curTodayN) {
+      _refreshHolds++;
+      if (_refreshHolds <= REFRESH_MAX_HOLDS) {
+        console.warn('[DTF] Refresh held: ' + _tc.dropped + ' of today\'s ' + _tc.raw
+          + ' row(s) are mid-recalculation ("Loading..."), which would drop today from '
+          + _curTodayN + ' to ' + _tc.kept + '. Keeping existing data; retrying next cycle ('
+          + _refreshHolds + '/' + REFRESH_MAX_HOLDS + ').');
+        return false;
+      }
+      console.warn('[DTF] Refresh accepted after ' + REFRESH_MAX_HOLDS + ' consecutive holds — '
+        + 'today\'s rows have been mid-recalculation the whole time. Check the sheet for a stuck formula.');
+    }
+    _refreshHolds = 0;
+  }
   if (allRows.length > 0) {
     var _today = getTodayStr();
     function _countToday(rows) {
@@ -4813,7 +4876,8 @@ function loadDashboard() {
     if (el) el.textContent = 'Slow connection \u2014 still loading production data\u2026';
   }, true).then(function(results) {
     _resetSkipStats();
-    var rows = parseCSV(results[0]).filter(isValid);
+    var rawRows = parseCSV(results[0]);
+    var rows = rawRows.filter(isValid);
     // null when deferred — see fetchPriorYearIfNeeded, kicked off after first paint.
     var rows25 = (results[1] == null) ? [] : parseCSV(results[1]).filter(isValid);
     // Reject suspiciously small datasets — Google Sheets CDN occasionally serves stale/empty CSVs
@@ -4823,6 +4887,20 @@ function loadDashboard() {
       setTimeout(loadDashboard, 4000);
       return;
     }
+    // The same "Loading..." truncation applyFreshData holds back (see todayRowCounts),
+    // caught on first paint. There is no previous data to compare against here, so the
+    // test is simply "did any of today's rows fail to resolve" — painting a day that is
+    // missing its most recent runs is the worse outcome, and a re-fetch costs ~2.5s
+    // against a 25% chance of hitting the truncated variant. Bounded so a genuinely
+    // stuck formula can't hold the dashboard on the splash screen forever.
+    var _tc0 = todayRowCounts(rawRows, rows);
+    if (_tc0.dropped > 0 && _initRecalcRetries < 2) {
+      _initRecalcRetries++;
+      document.getElementById('loading').textContent = 'Sheet is still calculating today\u2019s rows \u2014 retrying\u2026';
+      setTimeout(loadDashboard, 2500);
+      return;
+    }
+    _initRecalcRetries = 0;
     allRows = rows; allRows25 = rows25;
     dailyTargets = parseTargets(results[2]);
     weeklyTargets = parseWeeklyTargets(results[3]||'');
