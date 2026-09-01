@@ -1187,6 +1187,10 @@ function renderAgingStatusBar(agingOrders) {
 }
 
 var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets = {};
+// The unfiltered current-year parse behind allRows. Retained so repairSentinelProducts
+// can run a second time when lotIndex arrives after the production rows did, instead of
+// waiting for the next refresh cycle to name a lot we already have the answer for.
+var allRowsRaw = [];
 var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders' | 'quality'
                                 // ('customers' and 'orders' are the two halves of the "Sales" top tab)
 var qualitySubTab = 'recall';   // Quality sub-tab; 'recall' is the only option today
@@ -1392,7 +1396,6 @@ function canonicalLine(raw) {
 // lands with a loud warning.
 var _refreshHolds = 0;
 var REFRESH_MAX_HOLDS = 5;   // ~5 min on the Daily view's 60s cadence
-var _initRecalcRetries = 0;  // same guard on the initial load, capped at 2 re-fetches
 
 var _skipStats = null;
 function _resetSkipStats() {
@@ -1844,31 +1847,74 @@ function todayRowCounts(rawRows, validRows) {
   return { raw: raw, kept: kept, dropped: raw - kept };
 }
 
+// Cells whose entire trimmed value is a Google Sheets error sentinel. (A substring
+// match here once rejected any product name containing 'loading'.) The trailing class
+// must include "." and "\u2026" — Sheets renders "Loading..." while async formulas
+// (IMPORTRANGE, QUERY, array) are still computing.
+var _sentinelRe = /^(loading|#error|#ref|#n\/?a|#value|#name|#div|#num|#null)[!?.\s\u2026]*$/i;
+// Product is "Brand - Product", so when either source cell is mid-recalc the
+// concatenated value becomes "Loading... - Loading...", which is not a full-string
+// sentinel match. Split on the separator and flag if ANY segment is a sentinel; the
+// row is mid-computation regardless.
+function anyPartSentinel(s) {
+  if (!s) return false;
+  if (_sentinelRe.test(s)) return true;
+  var parts = String(s).split(' - ');
+  for (var i = 0; i < parts.length; i++) {
+    if (_sentinelRe.test(parts[i].trim())) return true;
+  }
+  return false;
+}
+
+// Fill in a Product cell that arrived mid-recalculation, from the Lot # reference
+// sheets we already hold.
+//
+// The sheet resolves Product with a per-row
+//   VLOOKUP(lot, IMPORTRANGE(key, "'20" & LEFT(lot,2) & " lots'!A:F"), 6, 0)
+// and there are 1,600+ of those. Google throttles that many external nodes, so the
+// newest rows can sit at the literal string "Loading..." for minutes — measured
+// 2026-09-01: three of today's six rows stuck across 8 consecutive identical fetches,
+// which is why re-fetching cannot help. The row is real: Lot Number and Final Units
+// are intact, only the looked-up cell is not, and dropping it cost 607 completed units
+// and two running lots off the Daily view.
+//
+// lotIndex is that same lookup table, read straight from the source sheet, so the
+// answer is already in hand — repair beats both dropping and waiting. Rows whose lot
+// the index doesn't know are left alone for isValid to reject as before; inventing a
+// name would be worse than omitting the row.
+//
+// Returns the number of rows repaired. Callers keep the raw parse so this can run
+// again if lotIndex lands after the rows did.
+function repairSentinelProducts(rawRows) {
+  if (!rawRows || !rawRows.length || !lotIndexLoaded) return 0;
+  var fixed = 0;
+  for (var i = 0; i < rawRows.length; i++) {
+    var r = rawRows[i];
+    if (!r) continue;
+    // Lot first: the sheet trails ~1,340 blank rows whose Product formula evaluates to
+    // #REF! (LEFT("",2) builds a tab name that doesn't exist). They are not real rows,
+    // isValid drops them on the missing-lot check, and testing the lot first lets them
+    // skip the Product regex altogether.
+    var lot = (r['Lot Number'] || '').trim();
+    if (!lot || _sentinelRe.test(lot)) continue;
+    if (!anyPartSentinel(r['Product'])) continue;
+    var e = lotIndex[lot];
+    var name = e && (e.combined || '');
+    if (!name || anyPartSentinel(name)) continue;
+    r['Product'] = name;
+    r['_productRepaired'] = '1';
+    fixed++;
+  }
+  return fixed;
+}
+
 function isValid(r) {
   if (!r || typeof r !== 'object') return false;
   var d=(r['Date']||'').trim(), l=(r['Lot Number']||'').trim(), p=(r['Product']||'').trim();
   if (!d) { _recordSkip('invalid_date', {date:d, lot:l, product:p}); return false; }
   if (!l) { _recordSkip('missing_lot',  {date:d, lot:l, product:p}); return false; }
   if (!p) { _recordSkip('missing_product', {date:d, lot:l, product:p}); return false; }
-  // Reject cells whose entire trimmed value is a Google Sheets error sentinel.
-  // (Previous substring match rejected any product name containing 'loading'.)
-  // Trailing class must include "." and "…" — Sheets renders "Loading..." while
-  // async formulas (IMPORTRANGE, QUERY, array) are still computing.
-  var suspect = /^(loading|#error|#ref|#n\/?a|#value|#name|#div|#num|#null)[!?.\s\u2026]*$/i;
-  // Product is "Brand - Product" — when either source cell is mid-recalc the
-  // concatenated value becomes something like "Loading... - Loading..." which
-  // is not a full-string sentinel match. Split on the " - " separator and
-  // reject if ANY segment is a sentinel; the row is mid-computation regardless.
-  function anyPartSentinel(s) {
-    if (!s) return false;
-    if (suspect.test(s)) return true;
-    var parts = s.split(' - ');
-    for (var i = 0; i < parts.length; i++) {
-      if (suspect.test(parts[i].trim())) return true;
-    }
-    return false;
-  }
-  if (anyPartSentinel(p) || suspect.test(l) || suspect.test(d)) {
+  if (anyPartSentinel(p) || _sentinelRe.test(l) || _sentinelRe.test(d)) {
     _recordSkip('sentinel', {date:d, lot:l, product:p});
     return false;
   }
@@ -4318,6 +4364,15 @@ function fetchLotIndexIfNeeded(force) {
     if (Object.keys(merged).length > 0) {
       lotIndex = merged;
       lotIndexLoaded = true;
+      // Production rows that arrived before this table did may be carrying a
+      // "Loading..." Product, or may have been dropped for it. Now that the names are
+      // in hand, repair and rebuild rather than waiting out a refresh cycle.
+      if (allRowsRaw.length && repairSentinelProducts(allRowsRaw) > 0) {
+        allRows = allRowsRaw.filter(isValid);
+        lotMap = buildLotMap(allRows);
+        buildProductionDays(true);
+        render();
+      }
       // If the user is already sitting on the materials view, re-render so any
       // previously-"Unknown" lots pick up their brand/product from the index.
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
@@ -4761,6 +4816,7 @@ function buildRecallResult(hits) {
 function applyFreshData(res) {
   _resetSkipStats();
   var rawNew = parseCSV(res[0]);
+  repairSentinelProducts(rawNew);
   var newRows = rawNew.filter(isValid);
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
@@ -4835,6 +4891,7 @@ function applyFreshData(res) {
     }
   }
   allRows = newRows; allRows25 = newRows25; dailyTargets = newTargets; weeklyTargets = newWeeklyTargets;
+  allRowsRaw = rawNew;
   lotMap = buildLotMap(allRows);
   buildProductionDays(true);
   _logSkipSummary();
@@ -4864,6 +4921,11 @@ function buildProductionDays(preserveSelection) {
 function loadDashboard() {
   document.getElementById('loading').textContent = 'Loading production data...';
   document.getElementById('loading').style.display = 'block';
+  // Kicked off BEFORE the blocking read, not after, so it usually lands first and the
+  // repair can name today's mid-recalc rows on the very first paint. It stays
+  // non-blocking: if it loses the race, the rows are repaired and re-rendered the
+  // moment it arrives (see fetchLotIndexIfNeeded).
+  fetchLotIndexIfNeeded();
   // Initial load MUST be a fresh origin read — being stuck with a stale
   // bucketed snapshot on first paint would leave today's rows invisible
   // until the next bucket rollover (the bug behind "dashboard shows 0
@@ -4876,7 +4938,12 @@ function loadDashboard() {
     if (el) el.textContent = 'Slow connection \u2014 still loading production data\u2026';
   }, true).then(function(results) {
     _resetSkipStats();
+    // Repair before filtering: a mid-recalc Product is nameable from lotIndex, and
+    // re-fetching cannot help because every snapshot carries the same stuck cell.
+    // The raw parse is kept so the repair can run again if lotIndex lands later.
     var rawRows = parseCSV(results[0]);
+    repairSentinelProducts(rawRows);
+    allRowsRaw = rawRows;
     var rows = rawRows.filter(isValid);
     // null when deferred — see fetchPriorYearIfNeeded, kicked off after first paint.
     var rows25 = (results[1] == null) ? [] : parseCSV(results[1]).filter(isValid);
@@ -4887,20 +4954,7 @@ function loadDashboard() {
       setTimeout(loadDashboard, 4000);
       return;
     }
-    // The same "Loading..." truncation applyFreshData holds back (see todayRowCounts),
-    // caught on first paint. There is no previous data to compare against here, so the
-    // test is simply "did any of today's rows fail to resolve" — painting a day that is
-    // missing its most recent runs is the worse outcome, and a re-fetch costs ~2.5s
-    // against a 25% chance of hitting the truncated variant. Bounded so a genuinely
-    // stuck formula can't hold the dashboard on the splash screen forever.
-    var _tc0 = todayRowCounts(rawRows, rows);
-    if (_tc0.dropped > 0 && _initRecalcRetries < 2) {
-      _initRecalcRetries++;
-      document.getElementById('loading').textContent = 'Sheet is still calculating today\u2019s rows \u2014 retrying\u2026';
-      setTimeout(loadDashboard, 2500);
-      return;
-    }
-    _initRecalcRetries = 0;
+
     allRows = rows; allRows25 = rows25;
     dailyTargets = parseTargets(results[2]);
     weeklyTargets = parseWeeklyTargets(results[3]||'');
