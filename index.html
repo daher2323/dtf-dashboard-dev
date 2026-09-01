@@ -2659,24 +2659,22 @@ function computeFefoOps() {
     var sibs = byPart[used.part] || [];
     var mine = picksByLot[k];
     for (i = 0; i < mine.length; i++) {
-      var when = mine[i].t, best = null, bestExp = null;
+      // Two candidates, tracked separately: the earliest-expiring sibling that was still
+      // IN DATE at pick time, and the earliest-expiring one already past date but inside
+      // the grace window. In-date always wins (see the resolution below the loop).
+      var when = mine[i].t, best = null, bestExp = null, bestPast = null, bestPastExp = null;
       for (j = 0; j < sibs.length; j++) {
         var sn = sibs[j];
         if (sn === k) continue;
         var sib = idx[sn];
         if (!sib || sib.exp == null) continue;
         if (sib.exp >= used.exp) continue;             // not earlier-expiring
-        // Already expired at pick time. Normally skipping it was right — you cannot use
-        // expired material — so this is the single most load-bearing exclusion here.
-        // fefoOpsAllowExpired lifts it within fefoOpsExpiredGrace days for the flavour
-        // case (see the declarations); lifeLeft then goes negative and the renderer says
-        // "expired Nd earlier" rather than printing "-45d left".
-        //
-        // This test belongs INSIDE the sibling loop and cannot be moved to a filter on
-        // the finished rows: admitting expired siblings changes which lot wins the
-        // earliest-expiring comparison below, so a post-hoc filter silently reports a
-        // different set (1,487 vs 1,714 at the same thresholds when tried that way).
-        if (sib.exp < when) {
+        var expiredAtPick = sib.exp < when;
+        if (expiredAtPick) {
+          // Normally skipping an expired lot was right — you cannot use expired material
+          // — so this is the most load-bearing exclusion here. fefoOpsAllowExpired lifts
+          // it within fefoOpsExpiredGrace days for the flavour case (see the
+          // declarations), where the printed date is a conservative quality marker.
           if (!fefoOpsAllowExpired) continue;
           if ((when - sib.exp) / _EXPIRY_MS_PER_DAY > fefoOpsExpiredGrace) continue;
         }
@@ -2684,8 +2682,26 @@ function computeFefoOps() {
         if (rd && rd.getTime() > when) continue;       // not received yet
         // On the floor, and holding enough to have been worth taking for THIS run.
         if (!couldContribute(sn, when, mine[i].needed || 0)) continue;
-        if (best === null || sib.exp < bestExp) { best = sn; bestExp = sib.exp; }
+        if (expiredAtPick) {
+          if (bestPast === null || sib.exp < bestPastExp) { bestPast = sn; bestPastExp = sib.exp; }
+        } else {
+          if (best === null || sib.exp < bestExp) { best = sn; bestExp = sib.exp; }
+        }
       }
+      // An in-date sibling ALWAYS outranks an expired one, and the expired candidate is
+      // only ever a fallback for picks that had no in-date alternative at all. That makes
+      // the toggle strictly additive: every finding that stands with the box unticked
+      // keeps the same shouldLot when it is ticked, and only genuinely new rows appear.
+      //
+      // Letting an expired lot win instead broke two things at once, both silently.
+      // Retargeting a finding at an older expired lot (a) loses the correction, because a
+      // correction is detected by a later submission naming shouldLot — re-log T33655 and
+      // the board is now asking about T31186 — and (b) can flip bothPulled to true if that
+      // older lot happened to be on the same slip, writing the finding off as a split
+      // pull. Run 2609003 / part 20-546 lost a corrected, green-ticked row exactly that
+      // way. It is also the more useful answer: if an in-date earlier lot was on the
+      // floor, that is the one that should have been drawn.
+      if (best === null && bestPast !== null) { best = bestPast; bestExp = bestPastExp; }
       if (best === null) continue;
       var lq = liveQty[best], lx = liveExp[best];
       // Presence in lotRows is the fact; a quantity threshold is not. This used to read
