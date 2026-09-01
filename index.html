@@ -2717,6 +2717,35 @@ function computeFefoOps() {
       // it into "N split pulls excluded" instead of showing the green tick. The exclusion is
       // meant for FEFO followed at the time, not FEFO restored afterwards.
       var bothPulled = mine[i].firstSlip !== false && (mine[i].rowTs || []).indexOf(best) !== -1;
+      // ...and the same thing across slips. The test above only sees the T#s on THIS slip,
+      // so it misses a run whose older lot was drained on an earlier slip and topped up on
+      // a later one. Run 2609003 / part 20-546 is the case: 7:35 pulled T31186 (0.6 kg, all
+      // it had) alongside T35226, then 8:15 re-logged against T33655. Examining the T33655
+      // pick, T31186 is nowhere on the 8:15 slip, so it read as passed over — while the
+      // pick sheet plainly shows it was drawn an hour earlier. A lot already consumed for
+      // this very run+part cannot also have been skipped by it.
+      //
+      // STRICTLY earlier slips only. Two boundaries, both load-bearing:
+      //   - the same slip is left to the guarded test above. Written as <= instead, this
+      //     catches it and bypasses the firstSlip guard, which is there to stop a
+      //     correction being read as a split pull — it silently un-flagged run 2603192 /
+      //     part 20-029, a finding that had already been put right at 14:07:51.
+      //   - a LATER slip naming `best` is a correction, picked up as fixedAt below.
+      var drawnEarlier = false;
+      if (!bothPulled) {
+        var earlier = ix.byLotPart[mine[i].lpKey] || [];
+        var myTf = mine[i].tf;
+        for (var ei = 0; ei < earlier.length; ei++) {
+          var eTf = earlier[ei].tf;
+          // Fall back to the day stamp only when a slip has no time; same-day rows then
+          // compare equal and are correctly NOT treated as earlier.
+          var strictlyEarlier = (myTf != null && eTf != null) ? (eTf < myTf) : (earlier[ei].t < when);
+          if (!strictlyEarlier) continue;
+          if (earlier[ei].ts.indexOf(best) === -1) continue;
+          drawnEarlier = true;
+          break;
+        }
+      }
       // Was it put right afterwards? A correction is a LATER submission for the same
       // production lot and part that names the lot which should have been pulled.
       //
@@ -2775,6 +2804,11 @@ function computeFefoOps() {
         outcome: !onShelf ? 'consumed' : (lx != null && lx < today ? 'expired' : 'sitting'),
         leftKg: onShelf ? lq : 0,
         bothPulled: bothPulled,
+        // `best` was drawn on a STRICTLY EARLIER slip of this same run+part, so by the time
+        // this pick was made it had already been taken — it cannot also have been passed
+        // over. Kept apart from bothPulled because the two consolidate differently: see the
+        // AND in the merge below.
+        drawnEarlier: drawnEarlier,
         fixedAt: fixedAt,
         // Could the lot that should have been pulled actually have covered this pull? 47%
         // of flagged decisions it could not, and the FEFO-correct action there was a
@@ -2828,6 +2862,14 @@ function computeFefoOps() {
     if (d0.gapDays > prev.gapDays) prev.gapDays = d0.gapDays;
     if (d0.gapDays < prev.gapMin) prev.gapMin = d0.gapDays;
     if (d0.bothPulled) prev.bothPulled = true;
+    // ANDs, where bothPulled ORs — and the difference is load-bearing. A merged row covers
+    // several picks against one older lot on one day; "already taken before this pick" is
+    // only true of the row if it was true of EVERY pick in it. OR'ing it instead suppressed
+    // run 2603192 / part 20-029: the 14:08:40 pick saw T34206 drawn at 14:07:51 and so was
+    // a genuine split, but the 14:06:11 pick preceded that draw and was a real mispick,
+    // already put right — exactly the "FEFO restored afterwards" case the firstSlip guard
+    // exists to protect. OR deleted the green tick; AND keeps it.
+    if (!d0.drawnEarlier) prev.drawnEarlier = false;
     if (d0.fixedAt != null && (prev.fixedAt == null || d0.fixedAt < prev.fixedAt)) prev.fixedAt = d0.fixedAt;
   }
   // Earliest-expiring drum first, so the cell reads in the same order as the rest of the view.
@@ -3063,10 +3105,10 @@ function _fefoOpsGroups() {
   // rows the exclusion removed — not every split pull in the period, most of which the
   // thresholds would have dropped anyway.
   var splitPulls = inPeriod.filter(function(d){
-    return d.bothPulled && d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap;
+    return (d.bothPulled || d.drawnEarlier) && d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap;
   });
   var flagged = inPeriod.filter(function(d){
-    return !d.bothPulled && d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap;
+    return !d.bothPulled && !d.drawnEarlier && d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap;
   });
 
   // Denominator: picks in this period we could actually evaluate. Stated so the counts
