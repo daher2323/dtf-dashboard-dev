@@ -1866,8 +1866,8 @@ function anyPartSentinel(s) {
   return false;
 }
 
-// Fill in a Product cell that arrived mid-recalculation, from the Lot # reference
-// sheets we already hold.
+// Fill in the Product and Projected Units cells of a row that arrived mid-recalculation,
+// from the Lot # reference sheets we already hold.
 //
 // The sheet resolves Product with a per-row
 //   VLOOKUP(lot, IMPORTRANGE(key, "'20" & LEFT(lot,2) & " lots'!A:F"), 6, 0)
@@ -1885,25 +1885,44 @@ function anyPartSentinel(s) {
 //
 // Returns the number of rows repaired. Callers keep the raw parse so this can run
 // again if lotIndex lands after the rows did.
-function repairSentinelProducts(rawRows) {
+function repairSentinelRows(rawRows) {
   if (!rawRows || !rawRows.length || !lotIndexLoaded) return 0;
   var fixed = 0;
   for (var i = 0; i < rawRows.length; i++) {
     var r = rawRows[i];
     if (!r) continue;
-    // Lot first: the sheet trails ~1,340 blank rows whose Product formula evaluates to
-    // #REF! (LEFT("",2) builds a tab name that doesn't exist). They are not real rows,
-    // isValid drops them on the missing-lot check, and testing the lot first lets them
-    // skip the Product regex altogether.
+    // Lot first: the sheet trails ~1,340 blank rows whose formulas evaluate to #REF!
+    // (LEFT("",2) builds a tab name that doesn't exist). They are not real rows, isValid
+    // drops them on the missing-lot check, and testing the lot first lets them skip the
+    // sentinel regexes altogether.
     var lot = (r['Lot Number'] || '').trim();
     if (!lot || _sentinelRe.test(lot)) continue;
-    if (!anyPartSentinel(r['Product'])) continue;
+    var needName = anyPartSentinel(r['Product']);
+    var needProj = anyPartSentinel(r['Projected Units']);
+    if (!needName && !needProj) continue;
     var e = lotIndex[lot];
-    var name = e && (e.combined || '');
-    if (!name || anyPartSentinel(name)) continue;
-    r['Product'] = name;
-    r['_productRepaired'] = '1';
-    fixed++;
+    if (!e) continue;
+    var touched = false;
+
+    if (needName) {
+      var name = e.combined || '';
+      if (name && !anyPartSentinel(name)) { r['Product'] = name; touched = true; }
+    }
+
+    // Projected Units comes off the same stuck lookup, and the Lot # sheet's Amt is
+    // where the sheet gets it: checked across every lot carrying both a numeric
+    // Projected Units and an Amt (3,182 of them), 3,181 agree exactly. The one
+    // exception is a hand-edit on 2603009 (1,050 vs 1,010) — and since this only fires
+    // where the sheet's own value is unreadable, it can never override a real number.
+    //
+    // Guarded on a UNIT-LESS Amt: the column also carries figures like "25.2k servings"
+    // for bulk lots, and a serving count is not a unit projection.
+    if (needProj && e.amt) {
+      var a = parseAmt(e.amt);
+      if (a && !a.unit && a.value > 0) { r['Projected Units'] = String(a.value); touched = true; }
+    }
+
+    if (touched) { r['_repaired'] = '1'; fixed++; }
   }
   return fixed;
 }
@@ -4367,7 +4386,7 @@ function fetchLotIndexIfNeeded(force) {
       // Production rows that arrived before this table did may be carrying a
       // "Loading..." Product, or may have been dropped for it. Now that the names are
       // in hand, repair and rebuild rather than waiting out a refresh cycle.
-      if (allRowsRaw.length && repairSentinelProducts(allRowsRaw) > 0) {
+      if (allRowsRaw.length && repairSentinelRows(allRowsRaw) > 0) {
         allRows = allRowsRaw.filter(isValid);
         lotMap = buildLotMap(allRows);
         buildProductionDays(true);
@@ -4816,7 +4835,7 @@ function buildRecallResult(hits) {
 function applyFreshData(res) {
   _resetSkipStats();
   var rawNew = parseCSV(res[0]);
-  repairSentinelProducts(rawNew);
+  repairSentinelRows(rawNew);
   var newRows = rawNew.filter(isValid);
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
@@ -4942,7 +4961,7 @@ function loadDashboard() {
     // re-fetching cannot help because every snapshot carries the same stuck cell.
     // The raw parse is kept so the repair can run again if lotIndex lands later.
     var rawRows = parseCSV(results[0]);
-    repairSentinelProducts(rawRows);
+    repairSentinelRows(rawRows);
     allRowsRaw = rawRows;
     var rows = rawRows.filter(isValid);
     // null when deferred — see fetchPriorYearIfNeeded, kicked off after first paint.
