@@ -2635,7 +2635,7 @@ function computeFefoOps() {
   var ix = _fefoIndex();
   // The toggle changes which siblings qualify, so it belongs in the cache identity —
   // without it, ticking the box would return the previous result unchanged.
-  var opsKey = ix.key + '|ae:' + (fefoOpsAllowExpired ? 1 : 0) + ':' + fefoOpsExpiredGrace;
+  var opsKey = ix.key + '|ae:' + (fefoOpsAllowExpired ? 1 : 0);
   if (_fefoOpsCache && _fefoOpsKey === opsKey) return _fefoOpsCache;
   var idx = ix.idx, byPart = ix.byPart, picksByLot = ix.picksByLot;
   var couldContribute = ix.couldContribute, stockAt = ix.stockAt, stockNow = ix.stockNow;
@@ -2670,14 +2670,10 @@ function computeFefoOps() {
         if (!sib || sib.exp == null) continue;
         if (sib.exp >= used.exp) continue;             // not earlier-expiring
         var expiredAtPick = sib.exp < when;
-        if (expiredAtPick) {
-          // Normally skipping an expired lot was right — you cannot use expired material
-          // — so this is the most load-bearing exclusion here. fefoOpsAllowExpired lifts
-          // it within fefoOpsExpiredGrace days for the flavour case (see the
-          // declarations), where the printed date is a conservative quality marker.
-          if (!fefoOpsAllowExpired) continue;
-          if ((when - sib.exp) / _EXPIRY_MS_PER_DAY > fefoOpsExpiredGrace) continue;
-        }
+        // Normally skipping an expired lot was right — you cannot use expired material —
+        // so this is the most load-bearing exclusion here. fefoOpsAllowExpired lifts it
+        // (see the declaration).
+        if (expiredAtPick && !fefoOpsAllowExpired) continue;
         var rd = parseInvDate(sib.received);
         if (rd && rd.getTime() > when) continue;       // not received yet
         // On the floor, and holding enough to have been worth taking for THIS run.
@@ -2886,21 +2882,15 @@ var fefoOpsGap = FEFO_OPS_GAP_DAYS;
 // available. Off by default, because for most materials skipping expired stock is
 // correct and flagging it would be telling people off for doing the right thing.
 //
-// It exists because "expired" is not the same fact for every material. Flavours carry
-// roughly six months from arrival, and that date is a conservative quality marker
-// rather than the point the drum becomes unusable — so a flavour lot a few weeks past
-// date is often still the one that should have been drawn. Whether a given lot is
-// genuinely still good is a QA judgement this dashboard cannot make, which is why this
-// is an explicit opt-in the user ticks rather than a rule applied on their behalf.
+// It exists because an expiry date is not a hard limit on every material — for some, it
+// is a conservative marker and the lot is still the one that should have been drawn.
+// Which materials those are is a QA judgement the dashboard cannot make, so this is an
+// explicit opt-in rather than a rule applied on the user's behalf. No bound on how far
+// past date: the switch means what it says, and an invisible cutoff would be a rule
+// nobody could see. Measured 2026-09-01 over 21,911 pick rows, it takes the board from
+// 1,714 flagged to 2,496 at life<=180/gap>=90, all of it new rows (see below).
 var fefoOpsAllowExpired = false;
-// How far past its date a lot may be and still count as having been available. Bounded
-// on purpose: unbounded, this nearly doubles the board (1,487 -> 3,050 flagged at
-// life<=180/gap>=90, measured 2026-09-01 over 21,911 pick rows), and a third of what it
-// adds are lots more than six months past date — nobody should have drawn those, so
-// flagging them is noise, and a board that cries wolf stops being read. 90 days is a
-// usable default for the flavour case; widen it deliberately, not by default.
-var fefoOpsExpiredGrace = 90;
-var FEFO_OPS_GRACE_CHOICES = [30, 90, 180];
+
 var fefoOpsOpen = {};         // part # -> explicit override of the expand/collapse stance
 // Groups start OPEN. A day is two or three materials and a handful of picks, and what is being
 // read is the evidence under each one — which lot was pulled, which should have been, whether
@@ -2983,7 +2973,6 @@ function navFefoOps(delta) {
 function goFefoOpsLive() { fefoOpsAnchor = null; _fefoOpsRerender(); }
 function setFefoOpsThresh(life, gap) { fefoOpsLife = life; fefoOpsGap = gap; _fefoOpsRerender(); }
 function setFefoOpsAllowExpired(on) { fefoOpsAllowExpired = !!on; _fefoOpsRerender(); }
-function setFefoOpsExpiredGrace(d) { fefoOpsExpiredGrace = d; fefoOpsAllowExpired = true; _fefoOpsRerender(); }
 function toggleFefoOpsMat(part) {
   fefoOpsOpen[part] = !_fefoOpsIsOpen(part);
   _fefoOpsRerender();
@@ -3201,17 +3190,10 @@ function _fefoOpsPanelHTML() {
           + [90,180,365].map(function(v){ return '<button onclick="setFefoOpsThresh('+fefoOpsLife+','+v+')" style="'+_fefoOpsBtn(fefoOpsGap===v)+'">&ge;'+v+'d</button>'; }).join('')
         + '</div>'
         + '<span>later.</span>'
-        + '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-left:4px;padding:2px 8px;border:0.5px solid ' + (fefoOpsAllowExpired ? '#EF9F27' : '#2c2c2a') + ';border-radius:7px;background:#141618;color:' + (fefoOpsAllowExpired ? '#FAC775' : '#888780') + ';" title="Count a lot that was already past its expiry date at pick time as having been available. Off by default \u2014 for most materials skipping expired stock is correct, and flagging it would be telling people off for doing the right thing. Tick it where the date is a conservative quality marker rather than a hard limit: flavours carry roughly six months from arrival. Whether a lot is still good is a QA call this dashboard cannot make.">'
+        + '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-left:4px;padding:2px 8px;border:0.5px solid ' + (fefoOpsAllowExpired ? '#EF9F27' : '#2c2c2a') + ';border-radius:7px;background:#141618;color:' + (fefoOpsAllowExpired ? '#FAC775' : '#888780') + ';">'
           + '<input type="checkbox" ' + (fefoOpsAllowExpired ? 'checked ' : '') + 'onchange="setFefoOpsAllowExpired(this.checked)" style="margin:0;cursor:pointer;accent-color:#EF9F27;">'
           + '<span>Allow expired materials</span>'
         + '</label>'
-        + (fefoOpsAllowExpired
-            ? '<span style="color:#5f5e5a;">up to</span>'
-              + '<div style="display:flex;gap:2px;padding:2px;background:#141618;border:0.5px solid #2c2c2a;border-radius:7px;">'
-              + FEFO_OPS_GRACE_CHOICES.map(function(v){ return '<button onclick="setFefoOpsExpiredGrace('+v+')" style="'+_fefoOpsBtn(fefoOpsExpiredGrace===v)+'">'+v+'d</button>'; }).join('')
-              + '</div>'
-              + '<span style="color:#5f5e5a;">past date.</span>'
-            : '')
       + '</div>'
       // ── How to close one out ──
       // The Fixed column is the only thing here with no adoption: it reads em-dash on every
@@ -15242,7 +15224,7 @@ function exportMaterials() {
             ? ' · only '+Math.round(_ops.cov.pct*100)+'% of this period’s '+_ops.cov.entries+' logged picks are still checkable'
             : '')
         + ' · flagged when the lot passed over had '+fefoOpsLife+' days or less of life left AND what was picked instead expired at least '+fefoOpsGap+' days later'
-        + (fefoOpsAllowExpired ? ' · INCLUDING lots up to ' + fefoOpsExpiredGrace + ' days past their expiry date at pick time' : '')
+        + (fefoOpsAllowExpired ? ' · INCLUDING lots already past their expiry date at pick time' : '')
         + (_ops.splitPulls ? ' · '+_ops.splitPulls+' split pull'+(_ops.splitPulls===1?'':'s')+' excluded (earlier lot drawn on the same slip — FEFO, not a skip)' : '')
         + (_opsQ ? ' · Search "'+matSearch+'"' : '')],
       // "about half of picked T#s are" was true before the archived-lots feed was linked. It
