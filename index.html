@@ -262,10 +262,6 @@
      columns beneath it, so the whole control sits inline with the page. The inline
      grid-template-columns has to be overridden, hence !important. */
   @media (max-width: 768px) {
-    /* The "191 of 370" column is the first thing to overflow a 390px screen, so it
-       wraps to its own line under the bar rather than squeezing the track to nothing. */
-    .oo-ip-row { grid-template-columns: 42px 1fr 38px; row-gap: 2px; }
-    .oo-ip-of { grid-column: 2 / -1; white-space: normal; }
     .agf-grid { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
     .agf-glabel { grid-column: 1 / -1 !important; margin: 4px 0 -2px; }
     .agf-chip { padding: 6px 10px; gap: 7px; font-size: 12px; }
@@ -715,20 +711,6 @@
   }
 
   /* Order Aging status filter bar (Open Orders → Order Aging only) */
-  /* Open Orders -> in-process share of the book. Two bases, one row each, so the
-     percentage can't be read against the wrong denominator. Grid keeps the two bars
-     the same length regardless of label/number width. */
-  .oo-ip { margin-bottom:14px; padding:10px 12px; background:#1a1d20; border:0.5px solid #2c2c2a; border-radius:8px; }
-  .oo-ip-head { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
-  .oo-ip-title { font-size:10px; font-weight:500; color:#888780; text-transform:uppercase; letter-spacing:.06em; font-family:system-ui; }
-  .oo-ip-note { font-size:10px; color:#5f5e5a; font-family:system-ui; }
-  .oo-ip-row { display:grid; grid-template-columns:46px minmax(80px,1fr) 38px max-content; gap:10px;
-               align-items:center; padding:2px 0; font-family:system-ui; }
-  .oo-ip-k { font-size:11px; color:#888780; }
-  .oo-ip-track { height:6px; background:#2c2c2a; border-radius:3px; overflow:hidden; }
-  .oo-ip-fill { display:block; height:100%; background:#378ADD; border-radius:3px; }
-  .oo-ip-pct { font-size:12px; font-weight:500; color:#e8e6e0; text-align:right; font-variant-numeric:tabular-nums; }
-  .oo-ip-of { font-size:11px; color:#5f5e5a; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .agf-seg { display:inline-flex; border:1px solid #1f2937; border-radius:8px; overflow:hidden; margin-bottom:16px; }
   .agf-seg button { font-size:13px; font-weight:550; padding:8px 16px; border:none; background:transparent;
     color:#7c8698; cursor:pointer; border-right:1px solid #1f2937; }
@@ -1097,13 +1079,6 @@ var STATUS_GROUP = {
   'packaging pulled':    'motion',
   'hold':                'motion'
 };
-// Statuses that mean the order is actually MOVING. Deliberately NOT
-// `STATUS_GROUP[...] === 'motion'`: Hold is grouped into motion because it needs no
-// planning action, but a held order is stalled, not in process, and counting it would
-// flatter the figure. If a new status appears that represents real progress, add it
-// here as well as to STATUS_GROUP.
-var IN_PROCESS_STATUSES = { 'packaging pulled':1, 'process':1, 'scheduled':1 };
-
 // The property on each aging-row object that holds the planning status.
 var STATUS_FIELD = 'status';
 // Normalized status -> boolean. Empty on load, so every status starts active
@@ -1165,50 +1140,6 @@ function agingFilterState(agingOrders) {
 // In motion below — sharing chip columns so counts line up on a clean right edge.
 // Chip counts reflect the full aging population (independent of active toggles).
 // Purely presentational; filtering logic lives in the helpers above.
-// How much of the open book is actually in process, on both bases.
-//
-// Always computed over the FULL book (agingRowsAll), never the active status filter, so
-// it stays a stable fact about the order book rather than a number that moves when you
-// toggle a chip. The denominators are printed for that reason — the card header beside
-// it IS filter-scoped, and two different totals with no stated base would just look
-// like a bug.
-//
-// Both bases are shown because they diverge: orders count workload items, units count
-// production volume, and one 200k-unit order swings the second without touching the
-// first. Reporting only one would let the floor look busier or emptier than it is.
-function renderInProcessHTML(agingOrders) {
-  if (!agingOrders || !agingOrders.length) return '';
-  var totO = 0, totU = 0, inO = 0, inU = 0;
-  for (var i = 0; i < agingOrders.length; i++) {
-    var x = agingOrders[i];
-    var u = num(x.row['Order Amount']);
-    totO++; totU += u;
-    if (IN_PROCESS_STATUSES[normStatus(x[STATUS_FIELD])]) { inO++; inU += u; }
-  }
-  if (!totO) return '';
-  var pO = Math.round((inO / totO) * 100);
-  var pU = totU ? Math.round((inU / totU) * 100) : 0;
-
-  function row(label, pctVal, made, total, fmt) {
-    return '<div class="oo-ip-row">'
-      + '<span class="oo-ip-k">' + label + '</span>'
-      + '<span class="oo-ip-track"><span class="oo-ip-fill" style="width:' + pctVal + '%;"></span></span>'
-      + '<span class="oo-ip-pct">' + pctVal + '%</span>'
-      + '<span class="oo-ip-of">' + fmt(made) + ' of ' + fmt(total) + '</span>'
-      + '</div>';
-  }
-  var asNum = function(n){ return n.toLocaleString(); };
-
-  return '<div class="oo-ip">'
-    + '<div class="oo-ip-head">'
-    +   '<span class="oo-ip-title">In process</span>'
-    +   '<span class="oo-ip-note">Packaging Pulled \u00b7 Process \u00b7 Scheduled</span>'
-    + '</div>'
-    + row('Orders', pO, inO, totO, asNum)
-    + row('Units',  pU, inU, totU, asNum)
-    + '</div>';
-}
-
 function renderAgingStatusBar(agingOrders) {
   if (!agingOrders || agingOrders.length === 0) return '';
   var seen = {}, attention = [], motion = [], i, raw, key, meta;
@@ -14476,7 +14407,6 @@ function renderOrdersSummary() {
     +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Order Aging — '+esc(agingHeaderSuffix)+'</div>'
     +   '<div style="font-size:11px;color:#888780;font-family:system-ui;">'+agingSummary+'</div>'
     + '</div>'
-    + renderInProcessHTML(agingRowsAll)
     + agingStatusBar
     + agingCardsHTML
     + agingDrillHTML
