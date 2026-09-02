@@ -1245,6 +1245,11 @@ var materialsExpiringOnly = false; // Materials toolbar "Expiring" segment: only
 // are scoped to lothealth in filterMaterials, so nothing you do there can leave the stock
 // table filtered down. Clicking back always shows the full list, with no state to clear.
 var matView = 'stock';
+// Expiring view only: narrow to lots that are ALSO being repeatedly walked past on the
+// pick sheet. This is what used to be its own "Lots at risk" segment — measured
+// 2026-09-02, its 31 lots are a strict subset of the 597 expired-or-within-90-days lots,
+// so it was never a different set, only Expiring with a pick-discipline cause attached.
+var matSkippedOnly = false;
 // The stock view's own zero-usage preference. Lot Health force-ticks the checkbox (a
 // stranded lot usually belongs to a material nothing has drawn lately), which would
 // otherwise follow you back onto the buying screen.
@@ -2988,7 +2993,6 @@ function computeFefoOps() {
 // the day-to-day monitoring surface: it names decisions made in the last few hours, while
 // material is still on the floor and a swap is still possible. Lots at risk is a remediation
 // list — real work, but work that keeps. Landing on the queue rather than the backlog.
-var fefoOpsView = true;
 // 'day' | 'week' | 'month' | 'quarter'. Daily by default because this is a monitoring view
 // before it is a reporting one: a mispick caught the same day can still be put right — the
 // older lot is on the shelf and the run is in front of you — while by Thursday a Monday miss
@@ -3061,7 +3065,6 @@ function _fefoOpsRerender() {
   renderMaterials();
   requestAnimationFrame(function(){ window.scrollTo(0, y); });
 }
-function setFefoOpsView(v) { fefoOpsView = !!v; renderMaterials(); }
 function setFefoOpsGran(g) { fefoOpsGran = g; fefoOpsAnchor = null; renderMaterials(); }
 // Anchor one period away from the current one, in the current granularity.
 function _fefoOpsStep(delta) {
@@ -11573,7 +11576,8 @@ function expiringBtnStyle(active) {
 // painted by renderMaterials itself, since changing category re-renders anyway.
 function paintShortToggle() {
   var wraps = [document.getElementById('materialsShortToggle'),
-               document.getElementById('materialsSectionToggle')];
+               document.getElementById('materialsSectionToggle'),
+               document.getElementById('materialsSkippedToggle')];
   for (var w = 0; w < wraps.length; w++) {
     if (!wraps[w]) continue;
     var btns = wraps[w].getElementsByClassName('seg-btn');
@@ -11582,6 +11586,7 @@ function paintShortToggle() {
       if (b.getAttribute('data-fefo') === '1')          b.style.cssText = fefoBtnStyle(materialsFefoOnly);
       else if (b.getAttribute('data-expiring') === '1') b.style.cssText = expiringBtnStyle(materialsExpiringOnly);
       else if (b.getAttribute('data-short') === '1')    b.style.cssText = shortBtnStyle(materialsShortOnly, true);
+      else if (b.getAttribute('data-skipped') === '1')  b.style.cssText = shortBtnStyle(matSkippedOnly, true);
     }
   }
 }
@@ -11646,12 +11651,11 @@ function setMatView(v) {
   if (v === matView) return;
   if (v === 'lothealth') {
     _matZeroUsageStock = matShowZeroUsage;
-    // Land on the pick log with a section active. Without this, arriving with both
-    // section flags false would render the plain table — i.e. the stock view under a
-    // Lot Health heading.
+    // Land on Pick opportunities: it is the day-to-day screen, and it is listed first.
+    // Without this, arriving with both section flags false would render the plain table —
+    // i.e. the stock view under a Lot Health heading.
     if (!materialsFefoOnly && !materialsExpiringOnly) {
       materialsFefoOnly = true;
-      fefoOpsView = true;
       matInlineTab = 'lots';
     }
     matShowZeroUsage = true;
@@ -11674,10 +11678,6 @@ function setMatCategory(c) {
 function setMaterialsFefoOnly(v) {
   materialsFefoOnly = !!v;
   if (materialsFefoOnly) {
-    // Always arrive on the pick log. fefoOpsView is sticky within a session, so without this a
-    // trip to Lots at risk an hour ago decides what the next person sees when they open FEFO
-    // review — and the whole point of the segment is to land on today's queue.
-    fefoOpsView = true;
     matInlineTab = 'lots';        // ditto — the evidence lives on the Lots tab
     materialsExpiringOnly = false;   // the two Lot Health sections stay exclusive
     // materialsShortOnly is left alone: it belongs to the stock view, and silently
@@ -11688,6 +11688,14 @@ function setMaterialsFefoOnly(v) {
     matShowZeroUsage = true;
   }
   trackEvent('materials_filter_change', { filter: 'fefo_review', value: materialsFefoOnly ? 'fefo' : 'all' });
+  window._selectedMaterial = null;
+  renderMaterials();
+}
+
+function setMaterialsSkippedOnly(v) {
+  matSkippedOnly = !!v;
+  matInlineTab = 'lots';   // the evidence is the lot list, same as the segment it replaces
+  trackEvent('materials_filter_change', { filter: 'skipped_only', value: matSkippedOnly ? 'skipped' : 'all' });
   window._selectedMaterial = null;
   renderMaterials();
 }
@@ -11747,7 +11755,7 @@ function filterMaterials() {
   // Segment badges reflect every OTHER filter (time window + zero-usage already
   // baked into matList, plus search) but never the short toggle itself, so toggling
   // it changes what's shown, not the counts.
-  var countShort = 0, countExpiring = 0, countFefo = 0;
+  var countShort = 0, countExpiring = 0, countSkipped = 0;
   // Category counts are gated by search AND the active section, mirroring how the section
   // counts are gated by search AND the active category: each badge answers "how many would
   // I get if I clicked this", never "how many exist in total".
@@ -11776,9 +11784,17 @@ function filterMaterials() {
     // section filters apply, so a shortage filter left on elsewhere cannot narrow the
     // at-risk list either.
     var sectionOK = (matView === 'lothealth')
-      ? ((!materialsExpiringOnly || expiringRow) && (!materialsFefoOnly || fefoRow))
+      // Skipped only narrows Expiring; it is an AND, never a replacement, so the tab can
+      // never show a row that is not expiring. materialsFefoOnly needs no row test: Pick
+      // opportunities replaces the table with the pick log, so there are no rows to gate.
+      ? (!materialsExpiringOnly || (expiringRow && (!matSkippedOnly || fefoRow)))
       : (!materialsShortOnly || shortRow);
-    if (searchMatch && catOK) { if (shortRow) countShort++; if (expiringRow) countExpiring++; if (fefoRow) countFefo++; }
+    if (searchMatch && catOK) {
+      if (shortRow) countShort++;
+      if (expiringRow) countExpiring++;
+      // The Skipped only badge counts the intersection, matching what clicking it shows.
+      if (expiringRow && fefoRow) countSkipped++;
+    }
     if (searchMatch && sectionOK) {
       catAll++;
       if (matCategoryEffective(m) === '2') catFlavor++; else catRaw++;
@@ -11792,8 +11808,8 @@ function filterMaterials() {
   });
   var elShort = document.getElementById('shortCountShort');
   var elExp = document.getElementById('shortCountExpiring');
-  var elFefo = document.getElementById('shortCountFefo');
-  if (elFefo) elFefo.innerHTML = countFefo;
+  var elSkipped = document.getElementById('skippedCount');
+  if (elSkipped) elSkipped.innerHTML = countSkipped;
   if (elShort) elShort.innerHTML = countShort;
   if (elExp) elExp.innerHTML = countExpiring;
   var elCatAll = document.getElementById('matCatCountAll');
@@ -13348,20 +13364,22 @@ function renderMaterials() {
               +'<button type="button" class="seg-btn" data-short="1" onclick="setMaterialsShortOnly('+(materialsShortOnly?'false':'true')+')" style="'+shortBtnStyle(materialsShortOnly,true)+'">Short only <span class="seg-count" id="shortCountShort" style="font-size:10px;opacity:.75;">0</span></button>'
             +'</div>'
           : '')
-        // Lot Health only: which lot-level question, and for FEFO, which of its two reads.
-        // Exclusive rather than togglable — one has to be active or the view has nothing
-        // to show, and "off" would just be the stock table under the wrong heading.
+        // Lot Health only. Pick opportunities leads: it is the day-to-day screen. Expiring
+        // is the lot-level exposure list; its Skipped only toggle is what used to be a
+        // separate \u201cLots at risk\u201d segment \u2014 those 31 lots are a strict subset of the
+        // expiring ones, so it was never a different view, just this filter pre-applied.
+        // Exclusive rather than togglable: one has to be active or the view has nothing to
+        // show, and \u201coff\u201d would just be the stock table under a Lot Health heading.
         +(matView === 'lothealth'
           ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
             +'<div id="materialsSectionToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-              +'<button type="button" class="seg-btn" data-fefo="1" onclick="setMaterialsFefoOnly(true)" title="Materials holding a lot that was picked past while an earlier-expiring lot was still usable, and that lot is now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days with at least '+FEFO_REVIEW_MIN_KG+' kg left." style="'+fefoBtnStyle(materialsFefoOnly)+'">FEFO review <span class="seg-count" id="shortCountFefo" style="font-size:10px;opacity:.75;">0</span></button>'
+              +'<button type="button" class="seg-btn" data-fefo="1" onclick="setMaterialsFefoOnly(true)" title="The individual picks \u2014 by day, week, month or quarter \u2014 where an earlier-expiring lot was available and was passed over. Caught the same day, a pick can still be put right." style="'+fefoBtnStyle(materialsFefoOnly)+'">Pick opportunities</button>'
               +'<button type="button" class="seg-btn" data-expiring="1" onclick="setMaterialsExpiringOnly(true)" title="Materials holding stock that is already past date, expires within '+EXPIRY_SOON_DAYS+' days, or that first-expiry-first-out says will not be used in time." style="'+expiringBtnStyle(materialsExpiringOnly)+'">Expiring <span class="seg-count" id="shortCountExpiring" style="font-size:10px;opacity:.75;">0</span></button>'
             +'</div>'
-            +(materialsFefoOnly
+            +(materialsExpiringOnly
               ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
-                +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-                  +'<button type="button" onclick="setFefoOpsView(true)" title="The individual picks \u2014 by day, week, month or quarter \u2014 where an earlier-expiring lot was available and was passed over." style="'+_fefoOpsBtn(fefoOpsView)+'">Pick opportunities</button>'
-                  +'<button type="button" onclick="setFefoOpsView(false)" title="Lots sitting in stock that keep getting walked past and are now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days. What to go move today." style="'+_fefoOpsBtn(!fefoOpsView)+'">Lots at risk</button>'
+                +'<div id="materialsSkippedToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+                  +'<button type="button" class="seg-btn" data-skipped="1" onclick="setMaterialsSkippedOnly('+(matSkippedOnly?'false':'true')+')" title="Narrow to lots that are expiring AND keep getting walked past on the pick sheet \u2014 at least '+FEFO_REVIEW_MIN_KG+' kg, expired or within '+FEFO_REVIEW_HORIZON_DAYS+' days. What to go move today." style="'+shortBtnStyle(matSkippedOnly,true)+'">Skipped only <span class="seg-count" id="skippedCount" style="font-size:10px;opacity:.75;">0</span></button>'
                 +'</div>'
               : '')
           : '')
@@ -13449,7 +13467,7 @@ function renderMaterials() {
   // above it is unchanged, so the toggle back is always in reach. filterMaterials() at
   // the end is safe with no table in the DOM — it guards every row lookup — and still
   // fills the segment counts and paints the active segment.
-  if (matView === 'lothealth' && materialsFefoOnly && fefoOpsView) {
+  if (matView === 'lothealth' && materialsFefoOnly) {
     content.innerHTML = pickerHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
       + _fefoOpsPanelHTML();
     filterMaterials();
