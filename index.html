@@ -10,15 +10,21 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #141618; color: #e8e6e0; font-size: 14px; min-height: 100vh; }
-  /* --shell-pad is the single source for the page gutter: .mat-panel sizes itself
-     to the viewport minus this, and the gutter differs per breakpoint. Override the
-     variable, not the padding, or the panel silently goes over- or under-wide. */
-  /* --shell-pad-top is separate from --shell-pad on purpose. The gap under the sub-bar
-     was the full 1.5rem gutter plus the sub-bar's own 8px, which read as a gulf between
-     the tab row and the first control under it. Only the TOP wanted trimming: the
-     horizontal value is load-bearing (see .mat-panel's width calc above), so it must
-     stay 1.5rem. Each breakpoint that overrides --shell-pad sets this alongside it. */
-  .shell { --shell-pad: 1.5rem; --shell-pad-top: 14px; max-width: 1400px; margin: 0 auto;
+  /* --shell-pad is the single source for the page gutter. THREE consumers, and they must
+     agree or the page looks stepped: .shell (the content), #sub-bar (the tab row and the
+     Materials time window) and #cust-col-header — the latter two sit outside .shell.
+     .mat-panel also sizes itself to the viewport minus this. Override the VARIABLE, never
+     a padding, or the panel goes over- or under-wide and the bars stop lining up.
+     Declared on :root rather than .shell for exactly that reason: the sub-bar carried a
+     hardcoded 1.5rem, so on phones, where the gutter drops to 8px, the tab row and the
+     window buttons sat 16px further in than every control beneath them.
+
+     --shell-pad-top is separate on purpose. The gap under the sub-bar was the full gutter
+     plus the sub-bar's own 8px, which read as a gulf between the tab row and the first
+     control under it. Only the TOP wanted trimming; the horizontal value is load-bearing.
+     Each breakpoint that overrides one sets the other alongside it. */
+  :root { --shell-pad: 1.5rem; --shell-pad-top: 14px; }
+  .shell { max-width: 1400px; margin: 0 auto;
            padding: var(--shell-pad-top) var(--shell-pad) var(--shell-pad); }
 
   .app-bar { display: flex; align-items: stretch; background: #141618; border-bottom: 0.5px solid #2c2c2a; padding: 0; min-height: 68px; position: sticky; top: 0; z-index: 100; }
@@ -315,7 +321,7 @@
     .lbl-row > div:nth-child(3) { grid-column: 1; text-align: left !important; font-weight: 500; }  /* units */
     .lbl-row > div:nth-child(4) { grid-column: 2; text-align: right !important; }                    /* weeks */
     .lbl-row > div:nth-child(5), .lbl-row > div:nth-child(6) { grid-column: 1 / -1; font-size: 11px; }
-    .shell { --shell-pad: 8px; --shell-pad-top: 8px; }
+    :root { --shell-pad: 8px; --shell-pad-top: 8px; }
     .app-bar { padding: 0 8px; min-height: 56px; }
     /* App bar → two rows on phones: [logo · Refresh/Admin] on top, the full-width
        scrollable tab bar below. Single-row, the tabs get squeezed to ~0 width
@@ -633,7 +639,8 @@
      Keyed on HEIGHT, not width, so a desktop browser window is never affected —
      932px wide is an ordinary desktop width and must keep the desktop layout. */
   @media (max-height: 500px) and (orientation: landscape) {
-    .shell { --shell-pad: 10px; --shell-pad-top: 10px; padding-bottom: 16px; }
+    :root { --shell-pad: 10px; --shell-pad-top: 10px; }
+    .shell { padding-bottom: 16px; }
 
     /* Chrome: 68px of app-bar + 44px of sub-bar was a quarter of the screen,
        permanently pinned. Compacted to ~42px + ~34px. The sub-bar's sticky
@@ -878,11 +885,11 @@
 
 <!-- Sub-bar -->
 <div class="sub-bar-outer" id="sub-bar-outer">
-  <div id="sub-bar" style="max-width:1400px;margin:0 auto;width:100%;display:flex;align-items:center;gap:8px;padding:.5rem 1.5rem;"></div>
+  <div id="sub-bar" style="max-width:1400px;margin:0 auto;width:100%;display:flex;align-items:center;gap:8px;padding:.5rem var(--shell-pad);"></div>
 </div>
 <!-- Customer column header (sticky, shown only on customer overview) -->
 <div class="cust-col-header-outer" id="cust-col-header-outer">
-  <div id="cust-col-header" style="max-width:1400px;margin:0 auto;width:100%;padding:0 1.5rem;"></div>
+  <div id="cust-col-header" style="max-width:1400px;margin:0 auto;width:100%;padding:0 var(--shell-pad);"></div>
 </div>
 
 <div class="shell">
