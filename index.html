@@ -1229,6 +1229,13 @@ var matSearch = '';
 var matShowZeroUsage = false; // when true, also show on-hand ingredients with zero usage in the current window (mirrors showZeroDes on Jars/Bottles/etc.)
 var materialsFefoOnly = false;      // Materials toolbar "FEFO review" segment: only materials holding a lot that keeps getting picked past while at risk.
 var materialsExpiringOnly = false; // Materials toolbar "Expiring" segment: only rows with expired stock, stock dated within EXPIRY_SOON_DAYS, or FEFO risk.
+// Materials toolbar category axis: 'all' | 'raw' | 'flavor'. Orthogonal to the section
+// segments below — pick Flavors, then Short only, and you get short flavours.
+var matCategory = 'all';
+// DTF Part # -> '1' (raw material) | '2' (flavor), from the inventory feed's
+// "Category (1 Raw)(2 Flavor)" column. Empty until the inventory fetch lands, so the
+// category buttons are inert rather than wrong before then.
+var categoryByPart = {};
 var materialsShortOnly = false; // Materials toolbar "Short only" toggle: hide rows whose Available is not Short (afterDemand >= 0). Persists across re-renders and sub-tab switches.
 var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
 var drillCustomer = null; // Materials "By customer" → product drill: selected customer name, or null while showing the customer list. Reset when a different material is opened; cleared by the Back button.
@@ -2272,12 +2279,24 @@ function parseInventory(text) {
   try {
     var rows = parseCSVMultiline(text);
     var byPart = {};
+    var _catTally = {};
     inventoryLotIndex = {};
     rows.forEach(function(r){
       var part = (r['DTF Part #'] || '').trim();
       if (!part) return;
       if (!byPart[part]) byPart[part] = { partNum: part, stock: 0, material: (r['Material Name'] || '').trim(), lots: 0, lotRows: [] };
       var p = byPart[part];
+      // Category is per PART, but the feed carries it per LOT ROW, and 9 parts currently
+      // disagree with themselves (e.g. 20-742 Cherry Flavor: five rows say 2, one says 1).
+      // Tally and take the majority rather than first- or last-write-wins, so one stray
+      // cell cannot move a material between tabs. A tie resolves to flavour, which is the
+      // right call on the only tied part today (20-751 Green Apple Flavor) — but these are
+      // data-entry slips and belong fixed on the sheet, not arbitrated here.
+      var catRaw = (r['Category (1 Raw)(2 Flavor)'] || '').trim();
+      if (catRaw === '1' || catRaw === '2') {
+        if (!_catTally[part]) _catTally[part] = { '1': 0, '2': 0 };
+        _catTally[part][catRaw]++;
+      }
       var qty = num(r['Current Stock']);
       p.stock += qty;
       var lotNo = (r['DTF Lot #'] || '').trim();
@@ -2315,8 +2334,35 @@ function parseInventory(text) {
         });
       }
     });
+    // Majority per part; a tie resolves to flavour (see the tally above).
+    var resolved = {};
+    Object.keys(_catTally).forEach(function(pk){
+      var t = _catTally[pk];
+      resolved[pk] = (t['2'] >= t['1']) ? '2' : '1';
+    });
+    categoryByPart = resolved;
     return byPart;
   } catch (e) { return {}; }
+}
+
+// The category of a material row: the first of its part #s the inventory feed has a
+// category for. Unambiguous in practice — checked 2026-09-02: zero SKU groups span both
+// categories, so no group has to be arbitrated. Returns '' for a material with no
+// categorised part (56 of 1,021 today, all of them consumed but absent from the
+// inventory sheet); those show under All and under neither Raw nor Flavors, which is why
+// the three counts do not sum.
+function matCategoryOf(m) {
+  var parts = (m && (m.stockParts || m.partNums)) || [];
+  for (var i = 0; i < parts.length; i++) {
+    var c = categoryByPart[parts[i]];
+    if (c) return c;
+  }
+  return '';
+}
+function matMatchesCategory(m) {
+  if (matCategory === 'all') return true;
+  var c = matCategoryOf(m);
+  return matCategory === 'raw' ? c === '1' : c === '2';
 }
 
 // A truncated or half-generated CSV parses fine — it is merely short — and the old
@@ -11487,21 +11533,21 @@ function expiringBtnStyle(active) {
 // Repaint the three segment buttons to reflect the active filter. Called at the end
 // of every Materials render (via filterMaterials) so the highlight survives re-render.
 // The segments are mutually exclusive, so "All" is simply neither flag set.
+// Repaint the section toggles in place, so filterMaterials can refresh highlighting
+// without a full re-render. Short only and the inventory sections now live in two
+// separate wrappers (see the toolbar), so both are walked; the category buttons are
+// painted by renderMaterials itself, since changing category re-renders anyway.
 function paintShortToggle() {
-  var wrap = document.getElementById('materialsShortToggle');
-  if (!wrap) return;
-  var btns = wrap.getElementsByClassName('seg-btn');
-  var i, b;
-  for (i = 0; i < btns.length; i++) {
-    b = btns[i];
-    if (b.getAttribute('data-fefo') === '1') {
-      b.style.cssText = fefoBtnStyle(materialsFefoOnly);
-    } else if (b.getAttribute('data-expiring') === '1') {
-      b.style.cssText = expiringBtnStyle(materialsExpiringOnly);
-    } else if (b.getAttribute('data-short') === '1') {
-      b.style.cssText = shortBtnStyle(materialsShortOnly, true);
-    } else {
-      b.style.cssText = shortBtnStyle(!materialsShortOnly && !materialsExpiringOnly && !materialsFefoOnly, false);
+  var wraps = [document.getElementById('materialsShortToggle'),
+               document.getElementById('materialsSectionToggle')];
+  for (var w = 0; w < wraps.length; w++) {
+    if (!wraps[w]) continue;
+    var btns = wraps[w].getElementsByClassName('seg-btn');
+    for (var i = 0; i < btns.length; i++) {
+      var b = btns[i];
+      if (b.getAttribute('data-fefo') === '1')          b.style.cssText = fefoBtnStyle(materialsFefoOnly);
+      else if (b.getAttribute('data-expiring') === '1') b.style.cssText = expiringBtnStyle(materialsExpiringOnly);
+      else if (b.getAttribute('data-short') === '1')    b.style.cssText = shortBtnStyle(materialsShortOnly, true);
     }
   }
 }
@@ -11516,11 +11562,9 @@ function setMaterialsShortOnly(v) {
   renderMaterials();
 }
 
-function setMaterialsAllSegment() {
-  materialsShortOnly = false;
-  materialsExpiringOnly = false;
-  materialsFefoOnly = false;
-  trackEvent('materials_filter_change', { filter: 'short_only', value: 'all' });
+function setMatCategory(c) {
+  matCategory = c;
+  trackEvent('materials_filter_change', { filter: 'category', value: c });
   window._selectedMaterial = null;
   renderMaterials();
 }
@@ -11599,7 +11643,11 @@ function filterMaterials() {
   // Segment badges reflect every OTHER filter (time window + zero-usage already
   // baked into matList, plus search) but never the short toggle itself, so toggling
   // it changes what's shown, not the counts.
-  var countAll = 0, countShort = 0, countExpiring = 0, countFefo = 0;
+  var countShort = 0, countExpiring = 0, countFefo = 0;
+  // Category counts are gated by search AND the active section, mirroring how the section
+  // counts are gated by search AND the active category: each badge answers "how many would
+  // I get if I clicked this", never "how many exist in total".
+  var catAll = 0, catRaw = 0, catFlavor = 0;
   matList.forEach(function(m, i) {
     var row = document.getElementById('mat-row-'+i);
     var ir = document.getElementById('mat-inline-row-'+i);
@@ -11613,22 +11661,33 @@ function filterMaterials() {
     var shortRow = matIsShort(m);
     var expiringRow = matIsExpiring(m);
     var fefoRow = matHasFefoReview(m);
-    if (searchMatch) { countAll++; if (shortRow) countShort++; if (expiringRow) countExpiring++; if (fefoRow) countFefo++; }
+    var catOK = matMatchesCategory(m);
+    var sectionOK = (!materialsShortOnly || shortRow) && (!materialsExpiringOnly || expiringRow) && (!materialsFefoOnly || fefoRow);
+    if (searchMatch && catOK) { if (shortRow) countShort++; if (expiringRow) countExpiring++; if (fefoRow) countFefo++; }
+    if (searchMatch && sectionOK) {
+      catAll++;
+      var c = matCategoryOf(m);
+      if (c === '1') catRaw++; else if (c === '2') catFlavor++;
+    }
     // Short gate stacks AFTER search: visible only if it passes search AND (short
     // filter off OR the row is short). Rows stay in the DOM (just hidden), so the
     // rank numbers baked into each row are preserved.
-    var visible = searchMatch && (!materialsShortOnly || shortRow) && (!materialsExpiringOnly || expiringRow) && (!materialsFefoOnly || fefoRow);
+    var visible = searchMatch && catOK && sectionOK;
     if (row) row.style.display = visible ? '' : 'none';
     if (ir) ir.style.display = (visible && window._selectedMaterial===m.name) ? '' : 'none';
   });
-  var elAll = document.getElementById('shortCountAll');
   var elShort = document.getElementById('shortCountShort');
   var elExp = document.getElementById('shortCountExpiring');
   var elFefo = document.getElementById('shortCountFefo');
   if (elFefo) elFefo.innerHTML = countFefo;
-  if (elAll) elAll.innerHTML = countAll;
   if (elShort) elShort.innerHTML = countShort;
   if (elExp) elExp.innerHTML = countExpiring;
+  var elCatAll = document.getElementById('matCatCountAll');
+  var elCatRaw = document.getElementById('matCatCountRaw');
+  var elCatFlav = document.getElementById('matCatCountFlavor');
+  if (elCatAll) elCatAll.innerHTML = catAll;
+  if (elCatRaw) elCatRaw.innerHTML = catRaw;
+  if (elCatFlav) elCatFlav.innerHTML = catFlavor;
   // The pick log has no table rows of its own, so the loop above was a no-op for it;
   // apply the same search query to its material groups instead.
   _filterFefoOps(q);
@@ -13164,12 +13223,24 @@ function renderMaterials() {
         // 0.5px divider, then the All / Short only segmented control. Counts are
         // filled in by filterMaterials() (called at the end of render); highlight
         // is painted by paintShortToggle().
+        // Category axis first: what KIND of material, independent of the sections after it.
+        +'<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+        +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          +'<button type="button" onclick="setMatCategory(\'all\')" style="'+shortBtnStyle(matCategory==='all',false)+'">All <span class="seg-count" id="matCatCountAll" style="font-size:10px;opacity:.75;">0</span></button>'
+          +'<button type="button" onclick="setMatCategory(\'raw\')" style="'+shortBtnStyle(matCategory==='raw',false)+'">Raw materials <span class="seg-count" id="matCatCountRaw" style="font-size:10px;opacity:.75;">0</span></button>'
+          +'<button type="button" onclick="setMatCategory(\'flavor\')" style="'+shortBtnStyle(matCategory==='flavor',false)+'">Flavors <span class="seg-count" id="matCatCountFlavor" style="font-size:10px;opacity:.75;">0</span></button>'
+        +'</div>'
+        // Short only stands alone: a plain toggle, not one of a set, so clicking it again
+        // clears it rather than needing an "All" beside it to switch back.
         +'<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
         +'<div id="materialsShortToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-          +'<button type="button" class="seg-btn" data-short="0" onclick="setMaterialsAllSegment()" style="'+shortBtnStyle(!materialsShortOnly,false)+'">All <span class="seg-count" id="shortCountAll" style="font-size:10px;opacity:.75;">0</span></button>'
-          +'<button type="button" class="seg-btn" data-short="1" onclick="setMaterialsShortOnly(true)" style="'+shortBtnStyle(materialsShortOnly,true)+'">Short only <span class="seg-count" id="shortCountShort" style="font-size:10px;opacity:.75;">0</span></button>'
-          +'<button type="button" class="seg-btn" data-fefo="1" onclick="setMaterialsFefoOnly(true)" title="Materials holding a lot that was picked past while an earlier-expiring lot was still usable, and that lot is now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days with at least '+FEFO_REVIEW_MIN_KG+' kg left." style="'+fefoBtnStyle(materialsFefoOnly)+'">FEFO review <span class="seg-count" id="shortCountFefo" style="font-size:10px;opacity:.75;">0</span></button>'
-          +'<button type="button" class="seg-btn" data-expiring="1" onclick="setMaterialsExpiringOnly(true)" title="Materials holding stock that is already past date, expires within '+EXPIRY_SOON_DAYS+' days, or that first-expiry-first-out says will not be used in time." style="'+expiringBtnStyle(materialsExpiringOnly)+'">Expiring <span class="seg-count" id="shortCountExpiring" style="font-size:10px;opacity:.75;">0</span></button>'
+          +'<button type="button" class="seg-btn" data-short="1" onclick="setMaterialsShortOnly('+(materialsShortOnly?'false':'true')+')" style="'+shortBtnStyle(materialsShortOnly,true)+'">Short only <span class="seg-count" id="shortCountShort" style="font-size:10px;opacity:.75;">0</span></button>'
+        +'</div>'
+        // Inventory-health sections, their own group. Each is a toggle for the same reason.
+        +'<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+        +'<div id="materialsSectionToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          +'<button type="button" class="seg-btn" data-fefo="1" onclick="setMaterialsFefoOnly('+(materialsFefoOnly?'false':'true')+')" title="Materials holding a lot that was picked past while an earlier-expiring lot was still usable, and that lot is now expired or expiring within '+FEFO_REVIEW_HORIZON_DAYS+' days with at least '+FEFO_REVIEW_MIN_KG+' kg left." style="'+fefoBtnStyle(materialsFefoOnly)+'">FEFO review <span class="seg-count" id="shortCountFefo" style="font-size:10px;opacity:.75;">0</span></button>'
+          +'<button type="button" class="seg-btn" data-expiring="1" onclick="setMaterialsExpiringOnly('+(materialsExpiringOnly?'false':'true')+')" title="Materials holding stock that is already past date, expires within '+EXPIRY_SOON_DAYS+' days, or that first-expiry-first-out says will not be used in time." style="'+expiringBtnStyle(materialsExpiringOnly)+'">Expiring <span class="seg-count" id="shortCountExpiring" style="font-size:10px;opacity:.75;">0</span></button>'
         +'</div>'
         // Second-level toggle, only while FEFO review is the active segment: the same
         // pick data read two ways. "Lots at risk" is the remediation list (what to go
