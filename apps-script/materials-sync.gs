@@ -45,8 +45,16 @@ var KEY_HEADERS = ['Order Lot #', 'Part #'];
 // over rows already copied still appends nothing. Column 0 positionally, not by name, because
 // Google Forms owns that header and renames it with the form's locale.
 var PROP_LAST_ROW = 'materialsSync.lastSourceRow';  // last source row known to be synced
-var MAX_RUNTIME_MS = 4.5 * 60 * 1000;               // hard ceiling is 6 min; stop well short
-var APPEND_CHUNK = 2000;                            // rows per write, so progress survives a stop
+// Apps Script kills an execution at 6 minutes. Every one of the 11 failures logged 9/1-9/2
+// ran 6 min 1 s, i.e. straight into the wall, so the budget has to leave real room.
+var MS_WALL_MS = 6 * 60 * 1000;                     // the hard kill, for reference
+var MS_SAFETY_MS = 45 * 1000;                       // never plan work inside this of the wall
+var MAX_RUNTIME_MS = 3.5 * 60 * 1000;               // was 4.5, which left only 90s of slack
+// Was 2000. The sweep only checks the clock BETWEEN chunks, so the chunk size sets how far it
+// can overshoot its budget: at 2000 rows off this source one chunk is tens of seconds, and two
+// of those after a 130s bind is how a 4.5-minute ceiling became a 6-minute kill. Writes to the
+// destination are ~200 ms, so smaller chunks cost almost nothing and check the clock 4x as often.
+var APPEND_CHUNK = 500;
 
 function _msProps() { return PropertiesService.getScriptProperties(); }
 function _msGetPointer() {
@@ -676,11 +684,24 @@ function auditMaterialsSync(days) {
 
 // Applies the repair: append what is missing, delete what the source no longer says.
 // `force` lifts the MS_MAX_DELETE ceiling — only after auditMaterialsSync has shown you why.
-function reconcileMaterials(days, force) {
+// deadline: absolute ms timestamp this must not work past. Optional — a manual
+// reconcileMaterialsNow() gets its own full 6-minute execution and passes nothing.
+//
+// It needed one because it had none: syncMaterialsAndReconcile could start it with two minutes
+// left and _msDiff plus a deleteRows loop would run straight through the wall, losing the whole
+// execution. Safe to stop midway — appends land past the last row and the delete ranges are
+// descending, so nothing shifts under the loop, and the next trigger recomputes the diff and
+// finishes the job.
+function reconcileMaterials(days, force, deadline) {
+  if (!deadline) deadline = Date.now() + MS_WALL_MS - MS_SAFETY_MS;
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) { console.log('Sync is mid-write; skipping this reconcile.'); return; }
   try {
     var d = _msDiff(days), i, n = 0;
+    if (Date.now() > deadline) {
+      console.log('Reconcile: the diff alone used the budget; repairs deferred to the next trigger.');
+      return;
+    }
     if (!d.missing.length && !d.stale.length) return;
     if (d.stale.length > MS_MAX_DELETE && !force) {
       console.error('Reconcile stopped: ' + d.stale.length + ' destination row(s) would be deleted, '
@@ -701,8 +722,14 @@ function reconcileMaterials(days, force) {
       var vals = _msFullRows(d.source, d.missing, d.width);
       d.dest.getRange(d.dest.getLastRow() + 1, 1, vals.length, d.width).setValues(vals);
     }
-    var ranges = _msDeleteRanges(d.stale);
-    for (i = 0; i < ranges.length; i++) { d.dest.deleteRows(ranges[i].start, ranges[i].count); n += ranges[i].count; }
+    var ranges = _msDeleteRanges(d.stale), deferred = 0;
+    for (i = 0; i < ranges.length; i++) {
+      // deleteRows is the slowest call here and the count is unbounded, so the clock is checked
+      // every range rather than once at the top.
+      if (Date.now() > deadline) { deferred = ranges.length - i; break; }
+      d.dest.deleteRows(ranges[i].start, ranges[i].count); n += ranges[i].count;
+    }
+    if (deferred) console.log('Reconcile stopped ' + deferred + ' delete range(s) short of the budget; the next trigger finishes them.');
     // Rows were removed from the middle of the destination, but the pointer counts SOURCE rows,
     // so it stays valid. Left alone deliberately.
     console.log('Reconciled: deleted ' + n + ', appended ' + d.missing.length + '.');
@@ -857,9 +884,16 @@ function syncMaterialsAndReconcile() {
   // after it is ~2s. Both functions in this run share that one bind, so the reconcile costs
   // seconds when it follows the sweep. At 1 minute the guard fired on the bind alone and the
   // reconcile would never once have run.
-  if (Date.now() - t0 > 240000) {
-    console.log('Sweep took ' + Math.round((Date.now() - t0) / 1000) + 's; reconcile deferred to the next trigger.');
+  // Deferral threshold derived from the wall rather than hand-picked: only start a reconcile if
+  // there is more than the safety margin left to do it in. At the old flat 240000 a sweep could
+  // finish at 239s and hand the reconcile 76s of real headroom, which is not enough for a diff
+  // plus a delete loop — that is the 6 min 1 s kill.
+  var elapsed = Date.now() - t0;
+  var deadline = t0 + MS_WALL_MS - MS_SAFETY_MS;
+  if (Date.now() > deadline - 60000) {
+    console.log('Sweep took ' + Math.round(elapsed / 1000) + 's; reconcile deferred to the next trigger.');
     return;
   }
-  try { reconcileMaterials(3); } catch (err) { console.error('reconcile step: ' + err); }
+  // Same deadline, so both steps answer to one clock started at the top of this execution.
+  try { reconcileMaterials(3, false, deadline); } catch (err) { console.error('reconcile step: ' + err); }
 }
