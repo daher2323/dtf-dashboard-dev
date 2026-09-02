@@ -1025,7 +1025,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v6';  // v6: part records carry `category`, so a cache-hydrated load can classify Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v7';  // v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -2477,7 +2477,12 @@ function fetchInventoryIfNeeded(force) {
       // leaves untouched — so replacing the data has to drop them explicitly or the
       // stale computation outlives the stale input.
       _fefoInvalidate();
-      try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, ts: Date.now() })); } catch(e) {}
+      // archiveLots rides along because it is derived at merge time and read much later.
+      // Left out, a cache-hydrated load restored the DEGRADED lotIndex (archive feed
+      // returned nothing) while _archiveLots reverted to null, so the "archived lots not
+      // loaded" warning stayed hidden — the coverage drop then read as fewer mispicks,
+      // which is the exact misreading that warning exists to prevent.
+      try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, archiveLots: _archiveLots, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     } else {
       inventoryLotIndex = keepIndex;
@@ -4117,7 +4122,7 @@ function _loadStockCaches() {
     var ri = sessionStorage.getItem(INVENTORY_CACHE_KEY);
     // Same size test on the way in: a cache is only as trustworthy as the fetch that
     // wrote it, and a gutted payload must not be able to survive a reload.
-    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; _stockHydratedFromCache = true; } }
+    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; _stockHydratedFromCache = true; if (typeof ci.archiveLots === 'number') _archiveLots = ci.archiveLots; } }
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
