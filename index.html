@@ -13258,25 +13258,6 @@ function renderMaterials() {
   var allTimeHint = matWindow===0 && allTimeLabel
     ? '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+allTimeLabel+'</span>'
     : '';
-  // Count on the Lot Health button, so the buying screen says whether there is anything
-  // worth switching for. Computed over the FULL list including zero-usage rows, not the
-  // rows currently on screen: a stranded lot usually belongs to a material nothing has
-  // drawn lately, so a count gated on the visible list would read 0 exactly when it
-  // mattered. Blank at 0 rather than showing a zero — nothing to go and look at.
-  var _lotHealthBadge = '';
-  (function(){
-    // matList already absorbs zeroUsageList when the checkbox is on, so dedupe by name
-    // or every zero-usage material counts twice.
-    var full = (window._matList || []).concat(zeroUsageList || []);
-    var seen = {}, n = 0;
-    for (var i = 0; i < full.length; i++) {
-      var nm = full[i] && full[i].name;
-      if (!nm || seen[nm]) continue;
-      seen[nm] = 1;
-      if (matHasFefoReview(full[i]) || matIsExpiring(full[i])) n++;
-    }
-    if (n > 0) _lotHealthBadge = String(n);
-  })();
   // Zero-usage checkbox \u2014 same architecture as showZeroDes on Jars/Bottles/etc.
   // Shown when there are zero-usage ingredients to reveal, when already on, or while
   // inventory is still loading (so it doesn't pop in late once the count is known).
@@ -13308,7 +13289,7 @@ function renderMaterials() {
         // different screen, not a filter on this one. No leading divider: it is first now.
         +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
           +'<button type="button" onclick="setMatView(\'stock\')" title="Consumption and on-hand stock \u2014 the buying screen." style="'+navBtnStyle(matView==='stock')+'">Inventory &amp; usage</button>'
-          +'<button type="button" onclick="setMatView(\'lothealth\')" title="Per-lot expiry and FEFO condition. A separate view, so it never filters the list above." style="'+navBtnStyle(matView==='lothealth')+'">Lot Health'+(_lotHealthBadge ? ' <span class="seg-count" style="font-size:10px;opacity:.75;">'+_lotHealthBadge+'</span>' : '')+'</button>'
+          +'<button type="button" onclick="setMatView(\'lothealth\')" title="Per-lot expiry and FEFO condition. A separate view, so it never filters the list above." style="'+navBtnStyle(matView==='lothealth')+'">Lot Health</button>'
         +'</div>'
         // Category axis, stock view only: what KIND of material. Hidden on Lot Health,
         // which is read whole — you want every lot at risk, not the flavours among them.
