@@ -202,6 +202,29 @@
     .mat-table > thead, .mat-table > colgroup { display: none; }
     .mat-table > tbody > tr > td { border-bottom: 0 !important; }
     .mat-table > tbody > tr > td.mat-seam { border-right: 0 !important; }
+    /* ── Materials toolbar, portrait phone ──────────────────────────────
+       Each control group wraps onto its own line at this width, and inline-styled
+       flex groups then hug the left with dead space beside them — five ragged
+       clusters stacked up, which is what read as disorganised. Give every group the
+       full width and let its buttons share it, so each line is a proper segmented
+       control. Same treatment .agf-seg already gets on the Order Aging bar. */
+    .mat-seg { width: 100%; }
+    .mat-seg button { flex: 1 1 0; min-width: 0; padding-left: 4px; padding-right: 4px;
+                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* The 1px vertical rules separated groups sitting SIDE BY SIDE. Once every group is
+       its own full-width row they are just debris between them. No !important: the spans
+       carry no inline display, so a plain rule wins, and this block must not introduce an
+       !important display that could outrank the inline none filterMaterials sets on rows. */
+    .mat-div { display: none; }
+    /* The window group lives in the sub-bar and is right-aligned there, which leaves it
+       hanging off the right edge on its own wrapped line. Full width, like the rest. */
+    .mat-winbar { width: 100%; margin-left: 0 !important; justify-content: stretch !important; }
+    .mat-winbar > div { flex: 1 1 auto; }
+    .mat-winbar button { flex: 1 1 0; min-width: 0; white-space: nowrap; }
+    /* Search was a fixed 248px next to Export; let it take whatever is left instead. */
+    .mat-searchbar { width: 100%; }
+    .mat-searchbar > div:first-child { flex: 1 1 auto; min-width: 0; }
+    .mat-searchbar input { width: 100% !important; }
     .mat-table > tbody > tr > td.mat-c-hist { display: none !important; }
 
     /* The card. Its border-bottom and selected-row background are inline on the
@@ -11657,11 +11680,11 @@ function matWindowGroupHTML() {
   // FIRST: without it, a stored matWindow of 12 with under a year of data would render a
   // group where nothing is highlighted, since the 12-month button is not drawn at all.
   if (matWindow === 12 && !sp.has12mo) matWindow = 6;
-  return '<div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end;">'
+  return '<div class="mat-winbar" style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end;">'
     + (matWindow === 0 && sp.label
         ? '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">' + esc(sp.label) + '</span>'
         : '')
-    + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+    + '<div class="mat-seg" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
       + '<button onclick="setMatWindow(6)" style="' + navBtnStyle(matWindow === 6) + '">Past 6 months</button>'
       + (sp.has12mo ? '<button onclick="setMatWindow(12)" style="' + navBtnStyle(matWindow === 12) + '">Past 12 months</button>' : '')
       + '<button onclick="setMatWindow(0)" style="' + navBtnStyle(matWindow === 0) + '">All time</button>'
@@ -13374,15 +13397,15 @@ function renderMaterials() {
         // View switch leads the bar now that the time window has moved to the top right.
         // It decides which of the groups after it are shown at all \u2014 Lot Health is a
         // different screen, not a filter on this one. No leading divider: it is first now.
-        +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+        +'<div class="mat-seg" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
           +'<button type="button" onclick="setMatView(\'stock\')" title="Consumption and on-hand stock \u2014 the buying screen." style="'+navBtnStyle(matView==='stock')+'">Inventory &amp; usage</button>'
           +'<button type="button" onclick="setMatView(\'lothealth\')" title="Per-lot expiry and FEFO condition. A separate view, so it never filters the list above." style="'+navBtnStyle(matView==='lothealth')+'">Lot Health</button>'
         +'</div>'
         // Category axis, stock view only: what KIND of material. Hidden on Lot Health,
         // which is read whole — you want every lot at risk, not the flavours among them.
         +(matView === 'stock'
-          ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
-            +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          ? '<span class="mat-div" style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+            +'<div class="mat-seg" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
             +'<button type="button" onclick="setMatCategory(\'all\')" style="'+shortBtnStyle(matCategory==='all',false)+'">All <span class="seg-count" id="matCatCountAll" style="font-size:10px;opacity:.75;">0</span></button>'
             +'<button type="button" onclick="setMatCategory(\'raw\')" style="'+shortBtnStyle(matCategory==='raw',false)+'">Raw materials <span class="seg-count" id="matCatCountRaw" style="font-size:10px;opacity:.75;">0</span></button>'
             +'<button type="button" onclick="setMatCategory(\'flavor\')" style="'+shortBtnStyle(matCategory==='flavor',false)+'">Flavors <span class="seg-count" id="matCatCountFlavor" style="font-size:10px;opacity:.75;">0</span></button>'
@@ -13390,8 +13413,8 @@ function renderMaterials() {
           : '')
         // Stock view only: shortage. A plain toggle — click it again to clear.
         +(matView === 'stock'
-          ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
-            +'<div id="materialsShortToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          ? '<span class="mat-div" style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+            +'<div id="materialsShortToggle" class="mat-seg" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
               +'<button type="button" class="seg-btn" data-short="1" onclick="setMaterialsShortOnly('+(materialsShortOnly?'false':'true')+')" style="'+shortBtnStyle(materialsShortOnly,true)+'">Short only <span class="seg-count" id="shortCountShort" style="font-size:10px;opacity:.75;">0</span></button>'
             +'</div>'
           : '')
@@ -13402,14 +13425,14 @@ function renderMaterials() {
         // Exclusive rather than togglable: one has to be active or the view has nothing to
         // show, and \u201coff\u201d would just be the stock table under a Lot Health heading.
         +(matView === 'lothealth'
-          ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
-            +'<div id="materialsSectionToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+          ? '<span class="mat-div" style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+            +'<div id="materialsSectionToggle" class="mat-seg" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
               +'<button type="button" class="seg-btn" data-fefo="1" onclick="setMaterialsFefoOnly(true)" title="The individual picks \u2014 by day, week, month or quarter \u2014 where an earlier-expiring lot was available and was passed over. Caught the same day, a pick can still be put right." style="'+fefoBtnStyle(materialsFefoOnly)+'">Pick opportunities</button>'
               +'<button type="button" class="seg-btn" data-expiring="1" onclick="setMaterialsExpiringOnly(true)" title="Materials holding stock that is already past date, expires within '+EXPIRY_SOON_DAYS+' days, or that first-expiry-first-out says will not be used in time." style="'+expiringBtnStyle(materialsExpiringOnly)+'">Expiring <span class="seg-count" id="shortCountExpiring" style="font-size:10px;opacity:.75;">0</span></button>'
             +'</div>'
             +(materialsExpiringOnly
-              ? '<span style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
-                +'<div id="materialsSkippedToggle" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+              ? '<span class="mat-div" style="width:1px;height:24px;background:#2c2c2a;flex-shrink:0;"></span>'
+                +'<div id="materialsSkippedToggle" class="mat-seg" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
                   +'<button type="button" class="seg-btn" data-skipped="1" onclick="setMaterialsSkippedOnly('+(matSkippedOnly?'false':'true')+')" title="Narrow to lots that are expiring AND keep getting walked past on the pick sheet \u2014 at least '+FEFO_REVIEW_MIN_KG+' kg, expired or within '+FEFO_REVIEW_HORIZON_DAYS+' days. What to go move today." style="'+shortBtnStyle(matSkippedOnly,true)+'">Skipped only <span class="seg-count" id="skippedCount" style="font-size:10px;opacity:.75;">0</span></button>'
                 +'</div>'
               : '')
@@ -13419,7 +13442,7 @@ function renderMaterials() {
       +zeroUsageCheckbox
     +'</div>'
     // Right group \u2014 search + export. The consumption window moved to the sub-bar.
-    +'<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">'
+    +'<div class="mat-searchbar" style="display:flex;align-items:center;gap:10px;flex-shrink:0;">'
       +'<div style="position:relative;display:inline-flex;align-items:center;">'
       +'<input id="matSearchInput" type="text" placeholder="Search ingredient, part # or T# \u2026" oninput="matSearch=this.value;filterMaterials();document.getElementById(\'matSearchClear\').style.display=this.value?\'flex\':\'none\';" value="'+esc(matSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:248px;height:28px;">'
       +'<button id="matSearchClear" onclick="matSearch=\'\';document.getElementById(\'matSearchInput\').value=\'\';filterMaterials();this.style.display=\'none\';" style="display:'+(matSearch?'flex':'none')+';position:absolute;right:6px;width:16px;height:16px;border-radius:50%;border:none;background:#444441;cursor:pointer;align-items:center;justify-content:center;padding:0;flex-shrink:0;">'
