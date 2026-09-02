@@ -2345,12 +2345,14 @@ function parseInventory(text) {
   } catch (e) { return {}; }
 }
 
-// The category of a material row: the first of its part #s the inventory feed has a
-// category for. Unambiguous in practice — checked 2026-09-02: zero SKU groups span both
-// categories, so no group has to be arbitrated. Returns '' for a material with no
-// categorised part (56 of 1,021 today, all of them consumed but absent from the
-// inventory sheet); those show under All and under neither Raw nor Flavors, which is why
-// the three counts do not sum.
+// The category the inventory feed actually states for a material row: the first of its
+// part #s that has one. Unambiguous in practice — checked 2026-09-02: zero SKU groups
+// span both categories, so no group has to be arbitrated. Returns '' when NOTHING is
+// stated, which is 56 of 1,021 consumed materials today: all of them consumed but absent
+// from the inventory sheet, so there is no row to carry a category.
+//
+// Kept honest — '' means unknown, never raw — so a caller that needs to tell the two
+// apart still can. The Raw default lives in matCategoryEffective, one layer up.
 function matCategoryOf(m) {
   var parts = (m && (m.stockParts || m.partNums)) || [];
   for (var i = 0; i < parts.length; i++) {
@@ -2359,9 +2361,16 @@ function matCategoryOf(m) {
   }
   return '';
 }
+// What the toolbar sorts on. Uncategorised falls to Raw, so Raw + Flavors sums to All
+// and nothing hides between the tabs. The cost is that "we have not classified this yet"
+// and "this is a raw material" now look identical on screen — matCategoryOf above is the
+// way back to that distinction if it is ever needed.
+function matCategoryEffective(m) {
+  return matCategoryOf(m) || '1';
+}
 function matMatchesCategory(m) {
   if (matCategory === 'all') return true;
-  var c = matCategoryOf(m);
+  var c = matCategoryEffective(m);
   return matCategory === 'raw' ? c === '1' : c === '2';
 }
 
@@ -11666,8 +11675,7 @@ function filterMaterials() {
     if (searchMatch && catOK) { if (shortRow) countShort++; if (expiringRow) countExpiring++; if (fefoRow) countFefo++; }
     if (searchMatch && sectionOK) {
       catAll++;
-      var c = matCategoryOf(m);
-      if (c === '1') catRaw++; else if (c === '2') catFlavor++;
+      if (matCategoryEffective(m) === '2') catFlavor++; else catRaw++;
     }
     // Short gate stacks AFTER search: visible only if it passes search AND (short
     // filter off OR the row is short). Rows stay in the DOM (just hidden), so the
