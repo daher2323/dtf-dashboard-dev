@@ -307,6 +307,21 @@ function syncMaterials() {
     var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
 
     var srcLastRow = source.getLastRow(), srcLastCol = source.getLastColumn();
+    // Always logged, because it is the number that decides whether a run lives or dies and it
+    // was previously invisible — a sweep with nothing to copy printed NOTHING, so the only clue
+    // was a gap before the reconcile's first line. Measured on this source: 108s on one run,
+    // 318s on the next, for identical work. Materializing the workbook, not reading it.
+    var bindMs = Date.now() - started;
+    console.log('Source bind: ' + Math.round(bindMs / 1000) + 's (' + srcLastRow + ' rows).');
+    // If the bind alone spent the budget, stop here rather than spending more on the
+    // destination key read — that is ~24k rows x 3 columns and buys nothing we can use, since
+    // the append loop below would break on its first clock check anyway. Returning now leaves
+    // the pointer untouched, so the next trigger resumes exactly where this one would have.
+    if (bindMs > MAX_RUNTIME_MS) {
+      console.log('Bind alone exceeded the ' + (MAX_RUNTIME_MS / 60000)
+        + ' min budget; skipping this sweep. Nothing lost — the pointer is unchanged.');
+      return;
+    }
     if (srcLastRow < 2) return;
     var srcHeaders = source.getRange(1, 1, 1, srcLastCol).getValues()[0];
     var keyIdx = _msKeyIdx(srcHeaders);
@@ -371,7 +386,7 @@ function syncMaterials() {
 
     if (totalAppended) console.log('Synced ' + totalAppended + ' new row(s); pointer at ' + (row - 1) + '.');
     if (stoppedEarly) {
-      console.log('Stopped at the 4.5 min mark with ' + (srcLastRow - row + 1)
+      console.log('Stopped at the ' + (MAX_RUNTIME_MS / 60000) + ' min mark with ' + (srcLastRow - row + 1)
         + ' source row(s) still to read — the next trigger resumes from row ' + row + '.');
     }
   } catch (err) {
