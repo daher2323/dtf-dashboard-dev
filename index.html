@@ -5556,7 +5556,10 @@ function renderSubBar() {
       + '<button onclick="setProcView(\'lids\')" style="'+navBtnStyle(pl)+'">Lids</button>'
       + '<button onclick="setProcView(\'desiccants\')" style="'+navBtnStyle(pd)+'">Desiccants</button>'
       + '<button onclick="setProcView(\'neckbands\')" style="'+navBtnStyle(pn)+'">Neckbands</button>'
-      + '</div>';
+      + '</div>'
+      // Materials only — matWindow scopes consumption history, which the container tabs
+      // do not have. margin-left:auto inside the group pushes it to the right edge.
+      + (pm ? matWindowGroupHTML() : '');
   } else if (mainSection === 'orders') {
     sb.innerHTML =
       salesToggle
@@ -11585,6 +11588,50 @@ function setMaterialsShortOnly(v) {
   renderMaterials();
 }
 
+// Span of the consumption feed, for the window buttons and the All-time label. Read
+// straight from materialsData (a module global) so the SUB-BAR can build the window
+// group without waiting on renderMaterials — the two used to derive it separately and
+// would have drifted the moment one changed.
+function matDataSpan() {
+  var ds = [], i;
+  for (i = 0; i < materialsData.length; i++) if (materialsData[i].date) ds.push(materialsData[i].date);
+  if (!ds.length) return { min: null, max: null, label: '', has12mo: false };
+  var mn = new Date(Math.min.apply(null, ds)), mx = new Date(Math.max.apply(null, ds));
+  function f(d) { return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); }
+  return { min: mn, max: mx, label: f(mn) + '–' + f(mx),
+           has12mo: (Date.now() - mn) >= 1000 * 60 * 60 * 24 * 365 };
+}
+
+// The consumption window, rendered into the Procurement sub-bar beside the Materials /
+// Jars / Bottles tabs rather than inside the page. It is set once and left alone, so a
+// row of its own in the content pushed the table down for a control nobody touches.
+function matWindowGroupHTML() {
+  var sp = matDataSpan();
+  // The same snap renderMaterials applies. Repeated here because the sub-bar is painted
+  // FIRST: without it, a stored matWindow of 12 with under a year of data would render a
+  // group where nothing is highlighted, since the 12-month button is not drawn at all.
+  if (matWindow === 12 && !sp.has12mo) matWindow = 6;
+  return '<div style="display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end;">'
+    + (matWindow === 0 && sp.label
+        ? '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">' + esc(sp.label) + '</span>'
+        : '')
+    + '<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      + '<button onclick="setMatWindow(6)" style="' + navBtnStyle(matWindow === 6) + '">Past 6 months</button>'
+      + (sp.has12mo ? '<button onclick="setMatWindow(12)" style="' + navBtnStyle(matWindow === 12) + '">Past 12 months</button>' : '')
+      + '<button onclick="setMatWindow(0)" style="' + navBtnStyle(matWindow === 0) + '">All time</button>'
+    + '</div>'
+  + '</div>';
+}
+
+// Must repaint the sub-bar as well as the content: the buttons now live up there, so
+// renderMaterials alone would move the data and leave the highlight behind.
+function setMatWindow(n) {
+  matWindow = n;
+  window._selectedMaterial = null;
+  renderSubBar();
+  renderMaterials();
+}
+
 function setMatView(v) {
   if (v === matView) return;
   if (v === 'lothealth') {
@@ -13246,18 +13293,13 @@ function renderMaterials() {
     tableRows = '<tr><td colspan="'+colSpan+'" style="padding:28px 10px;text-align:center;color:#5f5e5a;font-size:12px;font-family:system-ui;">No materials in this window.</td></tr>';
   }
 
-  // Compute data date range for "All time" label
-  var matDates = materialsData.map(function(r){ return r.date; }).filter(Boolean);
-  var matMinDate = matDates.length ? new Date(Math.min.apply(null, matDates)) : null;
-  var matMaxDate = matDates.length ? new Date(Math.max.apply(null, matDates)) : null;
-  function fmtMo(d){ return d.toLocaleDateString('en-US',{month:'short',year:'numeric'}); }
-  var allTimeLabel = matMinDate && matMaxDate ? fmtMo(matMinDate)+'–'+fmtMo(matMaxDate) : '';
+  // Data date range for the "All time" column label and the 12-month availability
+  // check. Shared with the sub-bar window buttons via matDataSpan, so the two cannot
+  // disagree about how much history exists.
+  var _span = matDataSpan();
+  var allTimeLabel = _span.label;
   // Snap matWindow=12 back to 6 if we don't have 12 months of data yet
-  if (matWindow===12 && !(matMinDate&&(now-matMinDate)>=1000*60*60*24*365)) matWindow=6;
-
-  var allTimeHint = matWindow===0 && allTimeLabel
-    ? '<span style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+allTimeLabel+'</span>'
-    : '';
+  if (matWindow === 12 && !_span.has12mo) matWindow = 6;
   // Zero-usage checkbox \u2014 same architecture as showZeroDes on Jars/Bottles/etc.
   // Shown when there are zero-usage ingredients to reveal, when already on, or while
   // inventory is still loading (so it doesn't pop in late once the count is known).
@@ -13267,18 +13309,6 @@ function renderMaterials() {
         +'Show materials with zero usage'+(!inventoryLoaded ? ' (\u2026)' : (zeroUsageCount > 0 && !matShowZeroUsage ? ' ('+zeroUsageCount+')' : ''))
       +'</label>'
     : '';
-  // The consumption window sits with the search and export at the top right, not in
-  // the filter bar. It is set once and left alone (6 months, near enough always), so
-  // giving it the leftmost, most-scanned position pushed the controls people do use
-  // along.
-  var matWindowGroup = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">'
-    +'<div style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    +'<button onclick="matWindow=6;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===6)+'">Past 6 months</button>'
-    +(matMinDate&&(now-matMinDate)>=1000*60*60*24*365?'<button onclick="matWindow=12;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===12)+'">Past 12 months</button>':'')
-    +'<button onclick="matWindow=0;window._selectedMaterial=null;renderMaterials();" style="'+navBtnStyle(matWindow===0)+'">All time</button>'
-    +'</div>'
-    +allTimeHint
-  +'</div>';
 
   var pickerHTML='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px;">'
     // Left group \u2014 the filters, with the zero-usage checkbox beneath
@@ -13329,10 +13359,7 @@ function renderMaterials() {
       +'</div>'
       +zeroUsageCheckbox
     +'</div>'
-    // Right group \u2014 the window on top, then search + export beneath it. Right-
-    // aligned so both rows share an edge whatever the window buttons add up to.
-    +'<div style="display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex-shrink:0;">'
-    +matWindowGroup
+    // Right group \u2014 search + export. The consumption window moved to the sub-bar.
     +'<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">'
       +'<div style="position:relative;display:inline-flex;align-items:center;">'
       +'<input id="matSearchInput" type="text" placeholder="Search ingredient, part # or T# \u2026" oninput="matSearch=this.value;filterMaterials();document.getElementById(\'matSearchClear\').style.display=this.value?\'flex\':\'none\';" value="'+esc(matSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:248px;height:28px;">'
@@ -13347,7 +13374,6 @@ function renderMaterials() {
         +'</button>'
       +'</div>'
     +'</div>'
-    +'</div>'   // closes the right-hand column (window row + search/export row)
   +'</div>';
 
   // Expiry coverage + exposure across every in-stock lot in the feed (not just the
