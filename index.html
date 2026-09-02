@@ -209,8 +209,14 @@
        full width and let its buttons share it, so each line is a proper segmented
        control. Same treatment .agf-seg already gets on the Order Aging bar. */
     .mat-seg { width: 100%; }
+    /* justify-content matters here and is easy to miss: shortBtnStyle / fefoBtnStyle /
+       expiringBtnStyle all set display:inline-flex INLINE, and a stretched inline-flex
+       defaults to flex-start — so the label hugged the left of its full-width segment and
+       read as a stray caption rather than a control. navBtnStyle sets no display, which is
+       why the window and view rows looked right and these did not. */
     .mat-seg button { flex: 1 1 0; min-width: 0; padding-left: 4px; padding-right: 4px;
-                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                      justify-content: center; white-space: nowrap; overflow: hidden;
+                      text-overflow: ellipsis; }
     /* The 1px vertical rules separated groups sitting SIDE BY SIDE. Once every group is
        its own full-width row they are just debris between them. No !important: the spans
        carry no inline display, so a plain rule wins, and this block must not introduce an
