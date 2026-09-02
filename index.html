@@ -2455,6 +2455,13 @@ function _inventoryLooksComplete(parsed, current) {
   var have = Object.keys(current || {}).length;
   return !(have && n < have * 0.8);
 }
+// Consecutive rejected inventory payloads. Reset only on SUCCESS — deliberately not on
+// re-entry, or the 5-minute refresh timer would hand back a fresh burst of retries every
+// cycle and a genuinely dead feed would be polled forever. Once the burst is spent, each
+// later cycle gets its single ordinary attempt, which is enough to recover on its own.
+var _invRejects = 0;
+var INVENTORY_MAX_REJECT_RETRIES = 4;
+
 function fetchInventoryIfNeeded(force) {
   if (inventoryLoaded && !force) return;
   if (_invFetching) return;   // a cold inventory read can take ~60s; never stack them
@@ -2488,6 +2495,7 @@ function fetchInventoryIfNeeded(force) {
       // loaded" warning stayed hidden — the coverage drop then read as fewer mispicks,
       // which is the exact misreading that warning exists to prevent.
       try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, archiveLots: _archiveLots, ts: Date.now() })); } catch(e) {}
+      _invRejects = 0;
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     } else {
       inventoryLotIndex = keepIndex;
@@ -2495,6 +2503,29 @@ function fetchInventoryIfNeeded(force) {
       console.warn('Inventory fetch rejected: ' + Object.keys(parsed || {}).length
         + ' parts parsed (need at least ' + INVENTORY_MIN_PARTS + ' and 80% of the '
         + Object.keys(inventoryByPart || {}).length + ' already held). Keeping existing data.');
+      // Try again straight away rather than waiting out the 5-minute refresh timer.
+      //
+      // The published inventory tab intermittently serves its header row plus a single row
+      // of #VALUE!/#N/A instead of the data — 222 bytes against 372,481 — while the sheet
+      // itself renders perfectly, because Google evaluates the publish snapshot separately
+      // from the interactive one. Measured 2026-09-02 across two batches of 20 fetches:
+      // 50% then 75% good, fluctuating, and identical on the stable and cache-busted URLs,
+      // so this is the publish pipeline, not caching. The archive tab beside it was 8/8
+      // identical, so it is this tab's IMPORTRANGE.
+      //
+      // One fetch with no retry meant a fresh load had roughly even odds of showing
+      // skeletons for five minutes. Four quick retries take the chance of drawing nothing
+      // but bad snapshots from ~50% to ~3%. Bounded so a genuinely dead feed cannot spin,
+      // and only ever fires where a payload was REJECTED — a successful fetch resets the
+      // counter, so this cannot mask a feed that is merely slow.
+      if (_invRejects < INVENTORY_MAX_REJECT_RETRIES) {
+        _invRejects++;
+        setTimeout(function(){ fetchInventoryIfNeeded(true); }, 1200 * _invRejects);
+      } else {
+        console.warn('Inventory feed returned an unusable payload ' + _invRejects
+          + ' times running. Check that the inventory tab of Materials_Dashboard_View still'
+          + ' resolves — the published CSV is serving errors where the sheet reads fine.');
+      }
     }
   }).catch(function(e){
     // Belt and braces: an in-flight latch that never clears would silently disable
