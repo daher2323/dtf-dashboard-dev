@@ -1025,7 +1025,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v5';  // v5: lotIndex now also carries archived (spent) lots; v4 discarded pre-size-guard payloads
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v6';  // v6: part records carry `category`, so a cache-hydrated load can classify Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -1250,10 +1250,6 @@ var matView = 'stock';
 // otherwise follow you back onto the buying screen.
 var _matZeroUsageStock = false;
 var matCategory = 'all';
-// DTF Part # -> '1' (raw material) | '2' (flavor), from the inventory feed's
-// "Category (1 Raw)(2 Flavor)" column. Empty until the inventory fetch lands, so the
-// category buttons are inert rather than wrong before then.
-var categoryByPart = {};
 var materialsShortOnly = false; // Materials toolbar "Short only" toggle: hide rows whose Available is not Short (afterDemand >= 0). Persists across re-renders and sub-tab switches.
 var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
 var drillCustomer = null; // Materials "By customer" → product drill: selected customer name, or null while showing the customer list. Reset when a different material is opened; cleared by the Back button.
@@ -2352,13 +2348,16 @@ function parseInventory(text) {
         });
       }
     });
-    // Majority per part; a tie resolves to flavour (see the tally above).
-    var resolved = {};
+    // Majority per part; a tie resolves to flavour (see the tally above). Written ONTO
+    // the byPart record rather than into a map beside it, because that record is what
+    // gets cached in sessionStorage — a separate map was silently lost on every
+    // cache-hydrated load, leaving every material to fall to the Raw default and the
+    // Flavors count reading 0 about half the time.
     Object.keys(_catTally).forEach(function(pk){
+      if (!byPart[pk]) return;
       var t = _catTally[pk];
-      resolved[pk] = (t['2'] >= t['1']) ? '2' : '1';
+      byPart[pk].category = (t['2'] >= t['1']) ? '2' : '1';
     });
-    categoryByPart = resolved;
     return byPart;
   } catch (e) { return {}; }
 }
@@ -2374,8 +2373,8 @@ function parseInventory(text) {
 function matCategoryOf(m) {
   var parts = (m && (m.stockParts || m.partNums)) || [];
   for (var i = 0; i < parts.length; i++) {
-    var c = categoryByPart[parts[i]];
-    if (c) return c;
+    var rec = inventoryByPart[parts[i]];
+    if (rec && rec.category) return rec.category;
   }
   return '';
 }
