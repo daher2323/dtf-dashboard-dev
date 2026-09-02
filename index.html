@@ -13,7 +13,13 @@
   /* --shell-pad is the single source for the page gutter: .mat-panel sizes itself
      to the viewport minus this, and the gutter differs per breakpoint. Override the
      variable, not the padding, or the panel silently goes over- or under-wide. */
-  .shell { --shell-pad: 1.5rem; max-width: 1400px; margin: 0 auto; padding: var(--shell-pad); }
+  /* --shell-pad-top is separate from --shell-pad on purpose. The gap under the sub-bar
+     was the full 1.5rem gutter plus the sub-bar's own 8px, which read as a gulf between
+     the tab row and the first control under it. Only the TOP wanted trimming: the
+     horizontal value is load-bearing (see .mat-panel's width calc above), so it must
+     stay 1.5rem. Each breakpoint that overrides --shell-pad sets this alongside it. */
+  .shell { --shell-pad: 1.5rem; --shell-pad-top: 14px; max-width: 1400px; margin: 0 auto;
+           padding: var(--shell-pad-top) var(--shell-pad) var(--shell-pad); }
 
   .app-bar { display: flex; align-items: stretch; background: #141618; border-bottom: 0.5px solid #2c2c2a; padding: 0; min-height: 68px; position: sticky; top: 0; z-index: 100; }
   .brand-wrap { display: flex; align-items: center; gap: 12px; padding: 10px 20px 10px 4px; margin-right: 16px; border-right: 0.5px solid #2c2c2a; flex-shrink: 0; cursor: pointer; }
@@ -280,7 +286,7 @@
     .lbl-row > div:nth-child(3) { grid-column: 1; text-align: left !important; font-weight: 500; }  /* units */
     .lbl-row > div:nth-child(4) { grid-column: 2; text-align: right !important; }                    /* weeks */
     .lbl-row > div:nth-child(5), .lbl-row > div:nth-child(6) { grid-column: 1 / -1; font-size: 11px; }
-    .shell { --shell-pad: 8px; }
+    .shell { --shell-pad: 8px; --shell-pad-top: 8px; }
     .app-bar { padding: 0 8px; min-height: 56px; }
     /* App bar → two rows on phones: [logo · Refresh/Admin] on top, the full-width
        scrollable tab bar below. Single-row, the tabs get squeezed to ~0 width
@@ -598,7 +604,7 @@
      Keyed on HEIGHT, not width, so a desktop browser window is never affected —
      932px wide is an ordinary desktop width and must keep the desktop layout. */
   @media (max-height: 500px) and (orientation: landscape) {
-    .shell { --shell-pad: 10px; padding-bottom: 16px; }
+    .shell { --shell-pad: 10px; --shell-pad-top: 10px; padding-bottom: 16px; }
 
     /* Chrome: 68px of app-bar + 44px of sub-bar was a quarter of the screen,
        permanently pinned. Compacted to ~42px + ~34px. The sub-bar's sticky
