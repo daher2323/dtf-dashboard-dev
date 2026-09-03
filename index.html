@@ -506,12 +506,12 @@
        before the bar gets any, so on a phone the figures were crushed against each
        other. Name takes its own line, the bar goes the way every other share bar
        does here (the % it annotates stays), and units/lots/% share the line below.
-       The product chips lose their 150px indent, which was aligning them under a
-       name column that no longer exists. */
+       The product block keeps its own left accent indent — it is a table now, not a row
+       of chips, so it does not need the old 150px alignment to a name column. */
     .proc-cust-row { flex-wrap: wrap; gap: 3px 10px !important; }
     .proc-cust-row > :nth-child(1) { width: 100% !important; }
     .proc-cust-row > :nth-child(3) { flex: 1 1 auto; text-align: left !important; width: auto !important; }
-    .proc-cust-prods { padding-left: 0 !important; }
+    .proc-cust-prods { margin-left: 4px !important; }
 
     .proc-toolbar { flex-direction: column; align-items: stretch !important; gap: 10px; }
     .proc-toolbar > div:last-child { justify-content: flex-start; }
@@ -11199,6 +11199,22 @@ function generateProcSynopsis(sid) {
   el.innerHTML = html;
 }
 
+// Open/close one customer's product list in a Jars/Bottles/Lids/Scoops/Desiccants/
+// Neckbands panel. Mirrors matToggleLot: flip the block, rotate the chevron, and record
+// the state so a re-render (a refresh landing, the By quarter/By customer toggle) leaves
+// open rows open. Keyed on sid + row index, so two SKUs expanded at once keep their own.
+function toggleProcCust(rowId) {
+  if (!window._procCustOpen) window._procCustOpen = {};
+  var block = document.getElementById('pcp-' + rowId);
+  if (!block) return;
+  var willOpen = block.style.display === 'none';
+  block.style.display = willOpen ? 'block' : 'none';
+  var chev = document.getElementById('pcv-' + rowId);
+  if (chev) chev.style.transform = willOpen ? 'rotate(90deg)' : 'rotate(0deg)';
+  if (willOpen) window._procCustOpen[rowId] = true;
+  else delete window._procCustOpen[rowId];
+}
+
 function switchProcTab(sid, tab) {
   _procTab[sid] = tab;
   var custEl = document.getElementById('pcust-' + sid);
@@ -14851,7 +14867,12 @@ function renderProcurement() {
       if (!skuCust[sku][cust]) skuCust[sku][cust] = {units:0, lots:new Set(), products:{}};
       skuCust[sku][cust].units += u;
       skuCust[sku][cust].lots.add(lot);
-      skuCust[sku][cust].products[prod] = (skuCust[sku][cust].products[prod]||0) + u;
+      // Per product: units AND the distinct lots behind them, so the expanded breakdown can
+      // show a lot count per product the way the Materials drill does. Was a bare running
+      // total, which could only ever produce a chip.
+      if (!skuCust[sku][cust].products[prod]) skuCust[sku][cust].products[prod] = {units:0, lots:new Set()};
+      skuCust[sku][cust].products[prod].units += u;
+      skuCust[sku][cust].products[prod].lots.add(lot);
     }
   });
 
@@ -14946,8 +14967,13 @@ function renderProcurement() {
 
     // Customer breakdown
     var custBreakdown = skuCust[sku] ? Object.entries(skuCust[sku]).map(function(e) {
+      // No slice: the row is expandable now, so every product is reachable. It used to cut
+              // to the top 5 and drop the rest silently — Alpha Lion showed 5 of its products
+              // against 75 lots, with no indication anything was missing.
       return {cust:e[0], units:e[1].units, lots:e[1].lots.size,
-              products:Object.entries(e[1].products).sort(function(a,b){return b[1]-a[1];}).slice(0,5)};
+              products:Object.keys(e[1].products).map(function(k){
+                return {name:k, units:e[1].products[k].units, lots:e[1].products[k].lots.size};
+              }).sort(function(a,b){ return b.units - a.units; })};
     }).sort(function(a,b){return b.units-a.units;}) : [];
 
     return {sku:sku, qtrs:qtrs, tag:tag, ytdLots:ytdLots.size, ytdUnits:ytdUnits,
@@ -15096,26 +15122,76 @@ function renderProcurement() {
     // Customer + product breakdown HTML
     var totalCustUnits = cd.custBreakdown.reduce(function(s,c){return s+c.units;},0) || 1;
     var maxCustUnits = cd.custBreakdown.length ? cd.custBreakdown[0].units : 1;
-    var custRows = cd.custBreakdown.map(function(c) {
+    // Customer rows are accordions, matching the Materials panel: click one and its full
+    // product list opens beneath it. It used to print the top 5 products as one line of
+    // chips and drop the rest with nothing to say so — Alpha Lion showed 5 products against
+    // 75 lots, and the omission was invisible.
+    //
+    // The product block is rendered hidden rather than built on click, the same way
+    // matToggleLot works. This whole panel only renders when its SKU row is expanded, so
+    // the markup is bounded, and a pure display toggle keeps the open/closed state out of
+    // the render path.
+    var unitsHdr = isDes ? 'Desiccants' : isNeck ? 'Neckbands' : isScoop ? 'Scoops' : 'Units';
+    var custRows = cd.custBreakdown.map(function(c, ci) {
       var barW = Math.round((c.units / maxCustUnits) * 100);
       var pct = ((c.units / totalCustUnits) * 100).toFixed(1);
-      var prodList = c.products.map(function(p){
-        var prodName = p[0].indexOf('-') !== -1 ? p[0].split('-').slice(1).join('-').trim() : p[0];
-        return '<span style="font-size:10px;color:#5f5e5a;white-space:nowrap;">'+esc(prodName)
-          +' <span style="color:#444441;">'+p[1].toLocaleString()+'</span></span>';
-      }).join('<span style="color:#2c2c2a;margin:0 4px;">·</span>');
+      var rowId = sid + '-c' + ci;
+      var open = !!(window._procCustOpen && window._procCustOpen[rowId]);
+      var maxProd = c.products.length ? c.products[0].units : 1;
+
+      var prodRows = c.products.map(function(p) {
+        // "Customer - Product" throughout; the customer is the row above, so only the
+        // product half belongs in here.
+        var nm = p.name.indexOf('-') !== -1 ? p.name.split('-').slice(1).join('-').trim() : p.name;
+        var pw = Math.round((p.units / maxProd) * 100);
+        var pShare = c.units ? ((p.units / c.units) * 100).toFixed(1) : '0.0';
+        var tdP = 'padding:5px 10px;border-bottom:0.5px solid #232326;font-size:11px;white-space:nowrap;';
+        return '<tr>'
+          + '<td style="' + tdP + 'color:#c9c7c1;white-space:normal;word-break:break-word;line-height:1.35;">' + esc(nm || '(unnamed)') + '</td>'
+          + '<td style="' + tdP + 'text-align:right;color:#e8e6e0;font-variant-numeric:tabular-nums;">' + p.units.toLocaleString() + '</td>'
+          + '<td style="' + tdP + 'text-align:right;color:#888780;font-variant-numeric:tabular-nums;">' + p.lots + '</td>'
+          + '<td class="pnl-bar-cell" style="' + tdP + 'padding-right:14px;width:120px;">'
+            + '<div style="display:flex;align-items:center;gap:6px;">'
+              + '<div class="pnl-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
+                + '<div style="height:100%;width:' + pw + '%;background:#378ADD;border-radius:2px;opacity:.7;"></div>'
+              + '</div>'
+              + '<span style="font-size:10px;color:#5f5e5a;width:34px;text-align:right;">' + pShare + '%</span>'
+            + '</div>'
+          + '</td>'
+        + '</tr>';
+      }).join('');
+
+      var thP = 'text-align:right;padding:4px 10px;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:#5f5e5a;font-weight:500;white-space:nowrap;';
+      var prodBlock = c.products.length
+        ? '<div class="proc-cust-prods" id="pcp-' + rowId + '" style="display:' + (open ? 'block' : 'none') + ';margin:4px 0 2px 14px;border-left:2px solid #378ADD;background:#151719;">'
+            + '<div class="pnl-sub-scroll" style="overflow-x:auto;">'
+            + '<table class="pnl-sub-table pnl-on-card" style="width:100%;border-collapse:separate;border-spacing:0;">'
+            + '<thead><tr>'
+              + '<th style="' + thP + 'text-align:left;">Product</th>'
+              + '<th style="' + thP + '">' + esc(unitsHdr) + '</th>'
+              + '<th style="' + thP + '">Lots</th>'
+              + '<th class="pnl-bar-cell" style="' + thP + 'padding-right:14px;">Share</th>'
+            + '</tr></thead>'
+            + '<tbody>' + prodRows + '</tbody>'
+            + '</table></div></div>'
+        : '';
+
+      var chev = '<span id="pcv-' + rowId + '" style="display:inline-block;color:#5f5e5a;font-size:9px;transition:transform .15s;transform:rotate(' + (open ? 90 : 0) + 'deg);margin-right:5px;">&#9654;</span>';
+      var canOpen = c.products.length > 0;
       return '<div style="padding:8px 14px;border-bottom:0.5px solid #2c2c2a;">'
-        +'<div class="proc-cust-row" style="display:flex;align-items:center;gap:10px;margin-bottom:5px;">'
-          +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;width:140px;flex-shrink:0;">'+esc(c.cust)+'</div>'
-          +'<div class="pnl-bar" style="flex:1;height:5px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
-            +'<div style="height:100%;width:'+barW+'%;background:#378ADD;border-radius:2px;opacity:.7;"></div>'
-          +'</div>'
-          +'<div style="font-size:11px;color:#e8e6e0;font-weight:500;width:80px;text-align:right;flex-shrink:0;">'+c.units.toLocaleString()+'</div>'
-          +'<div style="font-size:10px;color:#888780;width:36px;text-align:right;flex-shrink:0;">'+c.lots+' lot'+(c.lots!==1?'s':'')+'</div>'
-          +'<div style="font-size:10px;font-weight:500;color:#888780;width:36px;text-align:right;flex-shrink:0;">'+pct+'%</div>'
-        +'</div>'
-        +(prodList ? '<div class="proc-cust-prods" style="padding-left:150px;display:flex;flex-wrap:wrap;gap:4px;">'+prodList+'</div>' : '')
-      +'</div>';
+        + '<div class="proc-cust-row"' + (canOpen ? ' onclick="toggleProcCust(' + jsStr(rowId) + ')"' : '')
+          + ' style="display:flex;align-items:center;gap:10px;' + (canOpen ? 'cursor:pointer;' : '') + '">'
+          + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;width:140px;flex-shrink:0;">' + (canOpen ? chev : '') + esc(c.cust) + '</div>'
+          + '<div class="pnl-bar" style="flex:1;height:5px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
+            + '<div style="height:100%;width:' + barW + '%;background:#378ADD;border-radius:2px;opacity:.7;"></div>'
+          + '</div>'
+          + '<div style="font-size:11px;color:#e8e6e0;font-weight:500;width:80px;text-align:right;flex-shrink:0;">' + c.units.toLocaleString() + '</div>'
+          + '<div style="font-size:10px;color:#888780;width:54px;text-align:right;flex-shrink:0;">' + c.products.length + ' prod' + (c.products.length !== 1 ? 's' : '') + '</div>'
+          + '<div style="font-size:10px;color:#888780;width:36px;text-align:right;flex-shrink:0;">' + c.lots + ' lot' + (c.lots !== 1 ? 's' : '') + '</div>'
+          + '<div style="font-size:10px;font-weight:500;color:#888780;width:36px;text-align:right;flex-shrink:0;">' + pct + '%</div>'
+        + '</div>'
+        + prodBlock
+      + '</div>';
     }).join('');
 
     var custSection = custRows;
