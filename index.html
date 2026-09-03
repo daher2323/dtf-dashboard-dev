@@ -483,7 +483,7 @@
     .pnl-bar-cell { width: 46px !important; padding-left: 6px !important; padding-right: 10px !important; }
     .pnl-bar-only { display: none !important; }
 
-    /* Six sub-tabs in one segmented pill overflow a phone: Neckbands sat past the
+    /* Seven sub-tabs in one segmented pill overflow a phone: the last ones sat past the
        right edge, and reaching it meant scrolling the whole page sideways — which
        drags the sticky bars along with it. Scroll the pill itself instead, the way
        .main-tabs already does. min-width:0 is required for a flex item to be
@@ -1263,8 +1263,8 @@ var selectedDetailYear = new Date().getFullYear();
 var selectedDetailRange = null;
 var selectedPerfRange = null;
 var perfMixView       = 'all'; // 'all' | 'powder' | 'capsule' — Trend product-mix toggle
-var procView = 'materials'; // 'materials' | 'jars' | 'bottles' | 'lids' | 'desiccants'
-var procSearch = '';        // case-insensitive SKU filter on jars/bottles/lids/desiccants/neckbands
+var procView = 'materials'; // 'materials' | 'jars' | 'bottles' | 'lids' | 'scoops' | 'desiccants' | 'neckbands'
+var procSearch = '';        // case-insensitive SKU filter on jars/bottles/lids/scoops/desiccants/neckbands
 var matYear = new Date().getFullYear(); // kept for renderMatInline compat
 var matWindow = 6; // lookback months: 6 | 12 | 0=all
 var matSearch = '';
@@ -5627,13 +5627,14 @@ function renderSubBar() {
         + '</div>';
     }
   } else if (mainSection === 'procurement') {
-    var pm = procView==='materials', pj = procView==='jars', pb = procView==='bottles', pl = procView==='lids', pd = procView==='desiccants', pn = procView==='neckbands';
+    var pm = procView==='materials', pj = procView==='jars', pb = procView==='bottles', pl = procView==='lids', pd = procView==='desiccants', pn = procView==='neckbands', pc = procView==='scoops';
     sb.innerHTML =
       '<div class="proc-subtabs" style="display:flex;gap:2px;padding:3px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
       + '<button onclick="setProcView(\'materials\')" style="'+navBtnStyle(pm)+'">Materials</button>'
       + '<button onclick="setProcView(\'jars\')" style="'+navBtnStyle(pj)+'">Jars</button>'
       + '<button onclick="setProcView(\'bottles\')" style="'+navBtnStyle(pb)+'">Bottles</button>'
       + '<button onclick="setProcView(\'lids\')" style="'+navBtnStyle(pl)+'">Lids</button>'
+      + '<button onclick="setProcView(\'scoops\')" style="'+navBtnStyle(pc)+'">Scoops</button>'
       + '<button onclick="setProcView(\'desiccants\')" style="'+navBtnStyle(pd)+'">Desiccants</button>'
       + '<button onclick="setProcView(\'neckbands\')" style="'+navBtnStyle(pn)+'">Neckbands</button>'
       + '</div>'
@@ -11234,13 +11235,19 @@ function exportProcurement() {
   var cutoff = new Date(TRACKING_START);
   var isDes  = procView === 'desiccants';
   var isNeck = procView === 'neckbands';
-  var Label  = procView === 'jars' ? 'Jar' : procView === 'bottles' ? 'Bottle' : procView === 'lids' ? 'Lid' : procView === 'desiccants' ? 'Desiccant' : 'Neckband';
+  var isScoop = procView === 'scoops';
+  var Label  = procView === 'jars' ? 'Jar' : procView === 'bottles' ? 'Bottle' : procView === 'lids' ? 'Lid' : procView === 'scoops' ? 'Scoop' : procView === 'desiccants' ? 'Desiccant' : 'Neckband';
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
 
   function getSku(r) {
     if (procView === 'lids') return normMatName([r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' '));
     if (isDes)  { var dv=(r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv)?'':dv; }
     if (isNeck) { var nv=(r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv)?'':nv; }
+    // Scoops read like neckbands — an identity column with None/N/A for products that
+    // take none — but their UNITS come from Final Units, not a count column: one scoop
+    // per product, always. Desiccants are the exception there, not the rule (several go
+    // in a jar to pull moisture down).
+    if (isScoop) { var sv=(r['Scoop']||'').trim(); return /^(none|n\/a)$/i.test(sv)?'':sv; }
     return normMatName((r[procView==='jars'?'Jar Size':'Bottle Size']||'').trim());
   }
   function getUnits(r) { return isDes ? num(r['Number of Desiccants Used']) : num(r['Final Units']); }
@@ -14786,12 +14793,13 @@ function renderProcurement() {
   var now = new Date();
   var curQk = getQuarterKey(now);
   var cutoff = new Date(TRACKING_START);
-  var col = procView === 'jars' ? 'jarSize' : procView === 'bottles' ? 'bottleSize' : procView === 'lids' ? 'lidSize' : procView === 'desiccants' ? 'desiccant' : 'neckband';
-  var label = procView === 'jars' ? 'jar' : procView === 'bottles' ? 'bottle' : procView === 'lids' ? 'lid' : procView === 'desiccants' ? 'desiccant' : 'neckband';
-  var Label = procView === 'jars' ? 'Jar' : procView === 'bottles' ? 'Bottle' : procView === 'lids' ? 'Lid' : procView === 'desiccants' ? 'Desiccant' : 'Neckband';
+  var col = procView === 'jars' ? 'jarSize' : procView === 'bottles' ? 'bottleSize' : procView === 'lids' ? 'lidSize' : procView === 'scoops' ? 'scoop' : procView === 'desiccants' ? 'desiccant' : 'neckband';
+  var label = procView === 'jars' ? 'jar' : procView === 'bottles' ? 'bottle' : procView === 'lids' ? 'lid' : procView === 'scoops' ? 'scoop' : procView === 'desiccants' ? 'desiccant' : 'neckband';
+  var Label = procView === 'jars' ? 'Jar' : procView === 'bottles' ? 'Bottle' : procView === 'lids' ? 'Lid' : procView === 'scoops' ? 'Scoop' : procView === 'desiccants' ? 'Desiccant' : 'Neckband';
 
   var isDes = procView === 'desiccants';
   var isNeck = procView === 'neckbands';
+  var isScoop = procView === 'scoops';
 
   function getSku(r) {
     if (procView === 'lids') {
@@ -14800,6 +14808,7 @@ function renderProcurement() {
     }
     if (isDes)  { var dv = (r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv) ? '' : dv; }
     if (isNeck) { var nv = (r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv) ? '' : nv; }
+    if (isScoop) { var sv = (r['Scoop']||'').trim(); return /^(none|n\/a)$/i.test(sv) ? '' : sv; }
     return normMatName((r[procView === 'jars' ? 'Jar Size' : 'Bottle Size']||'').trim());
   }
 
@@ -15136,7 +15145,7 @@ function renderProcurement() {
       +'<table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
       +'<thead><tr>'
         +'<th style="'+thSL+'">Quarter</th>'
-        +'<th style="'+thS+'">'+(isDes?'Desiccants':isNeck?'Neckbands':'Units')+'</th>'
+        +'<th style="'+thS+'">'+(isDes?'Desiccants':isNeck?'Neckbands':isScoop?'Scoops':'Units')+'</th>'
         +'<th style="'+thS+'width:70px;">vs prev</th>'
         +'<th style="'+thS+'">Lots</th>'
         +'<th style="'+thS+'">% of total</th>'
@@ -15222,7 +15231,7 @@ function toggleProcExportPopover(e) {
   closeProcExportPopover();
   var wrap = document.getElementById('proc-export-wrap');
   if (!wrap) return;
-  var labelPl = procView === 'jars' ? 'Jars' : procView === 'bottles' ? 'Bottles' : procView === 'lids' ? 'Lids' : procView === 'desiccants' ? 'Desiccants' : 'Neckbands';
+  var labelPl = procView === 'jars' ? 'Jars' : procView === 'bottles' ? 'Bottles' : procView === 'lids' ? 'Lids' : procView === 'scoops' ? 'Scoops' : procView === 'desiccants' ? 'Desiccants' : 'Neckbands';
   var now = new Date();
   var isDes  = procView === 'desiccants';
   var cutoff = new Date(TRACKING_START);
@@ -15232,6 +15241,7 @@ function toggleProcExportPopover(e) {
     if (procView==='lids') return normMatName([r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' '));
     if (isDes)  { var dv=(r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv)?'':dv; }
     if (procView==='neckbands') { var nv=(r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv)?'':nv; }
+    if (procView==='scoops') { var sv=(r['Scoop']||'').trim(); return /^(none|n\/a)$/i.test(sv)?'':sv; }
     return normMatName((r[procView==='jars'?'Jar Size':'Bottle Size']||'').trim());
   }
   function getUnits2(r) { return isDes ? num(r['Number of Desiccants Used']) : num(r['Final Units']); }
