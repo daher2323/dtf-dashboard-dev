@@ -15148,7 +15148,15 @@ function renderProcurement() {
     // bars beside it for good. Deriving instead keeps the row geometry still and lets
     // the bars thin as history accumulates — down to SPARK_MIN_BAR, past which the
     // canvas does grow, because unreadable slivers would be worse than a wider cell.
+    //
+    // A one-quarter series draws NOTHING. Each bar is scaled against the SKU's own maximum,
+    // so a single bar is by definition that maximum: full height, and full canvas width once
+    // there are no gaps to subtract. Nine rows of identical 112x28 blue slabs, which is what
+    // clamping the series to the feed's coverage produced on Scoops. A sparkline needs two
+    // points before it can say anything, and a shape that cannot vary is worse than an empty
+    // slot — it reads as a chart whose values all happen to match.
     var SPARK_CANVAS = 112, SPARK_GAP = 3, SPARK_MIN_BAR = 4;
+    var sparkOn = cd.qtrs.length >= 2;
     var qn = cd.qtrs.length || 1;
     var sparkBarW = Math.max(SPARK_MIN_BAR, (SPARK_CANVAS - SPARK_GAP*(qn-1)) / qn);
     var sparkTotalW = qn*sparkBarW + SPARK_GAP*(qn-1);
@@ -15188,8 +15196,10 @@ function renderProcurement() {
         +'</div>'
         +(isDes||isNeck ? '<div>'+pctB(cd.ytdUnits, cd.ytd25Units, false)+'</div>' : (cd.ytdPct!==null?'<div>'+pctB(cd.ytdPct, cd.ytdPct25, false)+'</div>':'<div style="height:18px;"></div>'))
       +'</div>'
-      +'<div style="display:flex;align-items:flex-end;gap:'+SPARK_GAP+'px;height:28px;flex-shrink:0;margin-left:16px;width:'+sparkTotalW.toFixed(1)+'px;">'+sparkBars+'</div>'
-      +'<svg id="pc-'+sid+'" width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;margin-left:8px;transition:transform .15s;transform:'+(expanded?'rotate(180deg)':'')+'"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      +(sparkOn ? '<div style="display:flex;align-items:flex-end;gap:'+SPARK_GAP+'px;height:28px;flex-shrink:0;margin-left:16px;width:'+sparkTotalW.toFixed(1)+'px;">'+sparkBars+'</div>' : '')
+      // Takes over the sparkline's 16px gap when there is no sparkline, so the chevron does
+      // not end up hugging the percentage.
+      +'<svg id="pc-'+sid+'" width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;margin-left:'+(sparkOn?8:16)+'px;transition:transform .15s;transform:'+(expanded?'rotate(180deg)':'')+'"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     +'</div>';
 
     // Detail table
