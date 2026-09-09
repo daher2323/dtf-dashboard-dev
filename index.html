@@ -2933,6 +2933,12 @@ function computeFefoOps() {
       }
       out.push({
         when: when,
+        // The submission clock, for DISPLAY ONLY. Every bucketing, grouping and threshold
+        // decision in this view stays day-level on `when` (see _fefoPickTs) — this exists
+        // so a reader working today's queue can see which picks are still on the floor.
+        // null on a slip with no readable time, where the cell shows just the date rather
+        // than inventing an hour.
+        whenTs: mine[i].tf,
         part: used.part,
         material: mine[i].material || (inventoryByPart[used.part] ? inventoryByPart[used.part].material : '') || '',
         orderLot: mine[i].orderLot || '',
@@ -3020,6 +3026,11 @@ function computeFefoOps() {
     // exists to protect. OR deleted the green tick; AND keeps it.
     if (!d0.drawnEarlier) prev.drawnEarlier = false;
     if (d0.fixedAt != null && (prev.fixedAt == null || d0.fixedAt < prev.fixedAt)) prev.fixedAt = d0.fixedAt;
+    // EARLIEST slip, mirroring `when`. A merged row can cover several slips against one
+    // older lot on one day (a run split across newer drums), and the time being reported
+    // is when the run first went past that lot — the latest would date the decision to a
+    // top-up made after it.
+    if (d0.whenTs != null && (prev.whenTs == null || d0.whenTs < prev.whenTs)) prev.whenTs = d0.whenTs;
   }
   // Earliest-expiring drum first, so the cell reads in the same order as the rest of the view.
   for (oi = 0; oi < merged.length; oi++) {
@@ -3199,6 +3210,15 @@ function _fefoOpsShortDate(ms) {
   var d = new Date(ms);
   return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
 }
+// Clock time of a submission. Lowercase am/pm, matching the Fixed column, which is the
+// other place in this table a time is shown — the two sit two columns apart and have to
+// read as the same kind of stamp.
+function _fefoOpsClock(ms) {
+  var d = new Date(ms);
+  var h = d.getHours(), mi = d.getMinutes(), ap = h < 12 ? 'am' : 'pm';
+  h = h % 12; if (h === 0) h = 12;
+  return h + ':' + (mi < 10 ? '0' : '') + mi + ap;
+}
 // How a correction is stamped. Same-day corrections are the norm — and the point — so showing
 // the date next to a pick from that same date says nothing; the time does. Older corrections
 // keep the date, where the day is the useful part and the clock is noise.
@@ -3206,9 +3226,7 @@ function _fefoOpsFixedStamp(fixedMs, pickMs) {
   if (fixedMs == null) return '—';
   var f = new Date(fixedMs), p = new Date(pickMs);
   if (f.toDateString() !== p.toDateString()) return _fefoOpsShortDate(fixedMs);
-  var h = f.getHours(), mi = f.getMinutes(), ap = h < 12 ? 'am' : 'pm';
-  h = h % 12; if (h === 0) h = 12;
-  return h + ':' + (mi < 10 ? '0' : '') + mi + ap;
+  return _fefoOpsClock(fixedMs);
 }
 // "used since" used to sit on any lot under 25 kg, including ones that had already expired.
 // The wording now follows the lot's actual state, and the badge carries the quantity so it
@@ -3585,9 +3603,9 @@ function _fefoOpsPanelHTML() {
       // viewport squeeze them until content spills its cell (fixed layout does not reflow to
       // fit); the wrapper scrolls horizontally in that case.
       var body = '<div style="background:#141618;border-bottom:0.5px solid #2c2c2a;overflow-x:auto;">'
-        + '<table style="width:100%;min-width:1124px;table-layout:fixed;border-collapse:collapse;">'
+        + '<table style="width:100%;min-width:1170px;table-layout:fixed;border-collapse:collapse;">'
         + '<colgroup>'
-          + '<col style="width:76px;">'     // Picked on
+          + '<col style="width:122px;">'    // Picked on (+ clock time)
           + '<col style="width:240px;">'    // Production lot (+ brand · product beneath)
           + '<col style="width:150px;">'    // Pulled
           + '<col style="width:205px;">'    // Should have pulled
@@ -3615,7 +3633,9 @@ function _fefoOpsPanelHTML() {
             var nm = _fefoOpsLotName(d.orderLot);
             var _uS = matUnitShort(d.material || g.material || '');
             return '<tr style="border-top:0.5px solid #2c2c2a;' + (d.fixedAt ? 'opacity:.62;' : '') + '">'
-              + '<td style="' + td + 'color:#cfcdc7;">' + _fefoOpsShortDate(d.when) + '</td>'
+              + '<td style="' + td + 'color:#cfcdc7;">' + _fefoOpsShortDate(d.when)
+                + (d.whenTs != null ? ' <span style="font-size:10px;color:#888780;">' + _fefoOpsClock(d.whenTs) + '</span>' : '')
+              + '</td>'
               + '<td style="' + td + 'color:#888780;">' + (d.orderLot ? esc(d.orderLot) : '—')
                 // Brand and product on a second line: this is the whole point of the
                 // "this week" read — knowing which product it was is what lets someone
@@ -15609,7 +15629,7 @@ function exportMaterials() {
   var _opsN = 0;
   _opsOrder.forEach(function(p){ _opsN += _ops.groups[p].rows.length; });
   if (_opsN) {
-    var s5Headers = ['Picked On','Material','Part #','Production Lot','Brand','Product','Lots Pulled Instead','Their Expiries','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart (worst)','Run Needed','Swap Possible','Corrected','Outcome','Its Stock Now'];
+    var s5Headers = ['Picked On','Picked At','Material','Part #','Production Lot','Brand','Product','Lots Pulled Instead','Their Expiries','Should Have Pulled T#','Its Expiry','Days Left Then','Months Apart (worst)','Run Needed','Swap Possible','Corrected','Outcome','Its Stock Now'];
     var s5Rows = [
       ['FEFO pick opportunities — ' + _ops.P.label],
       ['Exported: '+dateStr+' · '+_opsN+' flagged pick'+(_opsN===1?'':'s')+' across '+_opsOrder.length+' material'+(_opsOrder.length===1?'':'s')
@@ -15648,6 +15668,7 @@ function exportMaterials() {
         var nm = _fefoOpsLotName(d.orderLot);
         s5Rows.push([
           _matExpDateStr(d.when),
+          d.whenTs != null ? _fefoOpsClock(d.whenTs) : '',
           g.material || '', d.part, d.orderLot || '',
           nm ? nm.brand : '', nm ? nm.product : '',
           d.pulled.map(function(pl){ return pl.lot; }).join(', '),
@@ -15666,7 +15687,7 @@ function exportMaterials() {
       });
     });
     var ws5 = XLSX.utils.aoa_to_sheet(s5Rows);
-    ws5['!cols'] = [{wch:12},{wch:40},{wch:10},{wch:15},{wch:20},{wch:38},{wch:12},{wch:14},{wch:20},{wch:12},{wch:14},{wch:13},{wch:12},{wch:14},{wch:12},{wch:12},{wch:13}];
+    ws5['!cols'] = [{wch:12},{wch:10},{wch:40},{wch:10},{wch:15},{wch:20},{wch:38},{wch:12},{wch:14},{wch:20},{wch:12},{wch:14},{wch:13},{wch:12},{wch:14},{wch:12},{wch:12},{wch:13}];
     ws5['!merges'] = [
       {s:{r:0,c:0},e:{r:0,c:s5Headers.length-1}},
       {s:{r:1,c:0},e:{r:1,c:s5Headers.length-1}},
