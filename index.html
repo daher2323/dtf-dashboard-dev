@@ -11142,7 +11142,20 @@ function generateProcSynopsis(sid) {
   var sentences = [];
 
   // Sentence 1: top-line usage
-  if (!hasLY) {
+  //
+  // Three cases, and the first exists because the other two both misread a column younger
+  // than the comparison window. "We started using 80cc Long in Q3 2026" is what the second
+  // branch said about a scoop size that has been in the building for years — the first
+  // quarter carrying data is the quarter the SHEET started recording, not the quarter the
+  // scoop arrived. Where there is no baseline the sentence reports what was measured and
+  // over what window, and makes no claim about a trend.
+  if (!cd.hasBaseline && cd.trackedSince) {
+    sentences.push('We\'ve recorded ' + n(cd.ytdUnits) + ' units of ' + cd.sku
+      + ' across ' + cd.ytdLots + ' lot' + (cd.ytdLots!==1?'s':'')
+      + ' since ' + typeLabel + ' tracking began on ' + cd.trackedSince
+      + (cd.ytdPct != null ? ', ' + cd.ytdPct + '% of tracked ' + typeLabel + ' usage' : '')
+      + '. There is no prior-year window to compare against yet, so no trend can be read from this.');
+  } else if (!hasLY) {
     var firstQ = cd.qtrs.filter(function(q){return q.units>0;})[0];
     var when = firstQ ? 'in ' + firstQ.label : 'this year';
     sentences.push('We started using ' + cd.sku + ' ' + when
@@ -11290,11 +11303,6 @@ function exportProcurement() {
 
   var allRowsCombined = allRows.concat(allRows25);
 
-  // Build quarters
-  var displayQtrs = [];
-  var dq = new Date(TRACKING_START);
-  while (getQuarterKey(dq) <= curQk) { displayQtrs.push(getQuarterKey(dq)); dq.setMonth(dq.getMonth()+3); }
-
   // Build skuQtr
   var skuQtr = {}, totalQtrUnits = {};
   allRowsCombined.forEach(function(r) {
@@ -11315,6 +11323,20 @@ function exportProcurement() {
   var ytdStart    = new Date(nowYr,0,1);
   var ytd25start  = new Date(nowYr-1,0,1);
   var ytd25cutoff = new Date(nowYr-1,now.getMonth(),now.getDate(),23,59,59);
+
+  // Same coverage read as the screen, and the quarter columns are clamped to it the same
+  // way — a workbook that gets forwarded has to carry the same basis as the view it came
+  // from, and has to carry it on its own face (the notes below), since nobody opening the
+  // file can see the header that explained it.
+  var cov = procColumnCoverage(allRowsCombined, getSku, cutoff, ytd25start);
+  var qStart = cov.firstSeen ? new Date(cov.firstSeen.getFullYear(), Math.floor(cov.firstSeen.getMonth()/3)*3, 1) : new Date(TRACKING_START);
+  if (qStart < new Date(TRACKING_START)) qStart = new Date(TRACKING_START);
+  var displayQtrs = [];
+  var dq = new Date(qStart);
+  while (getQuarterKey(dq) <= curQk) { displayQtrs.push(getQuarterKey(dq)); dq.setMonth(dq.getMonth()+3); }
+  var covScope = (!cov.firstSeen || displayQtrs[0] === getQuarterKey(new Date(TRACKING_START)))
+    ? 'Q1 2025 \u2192 present'
+    : 'tracked since ' + cov.sinceStr + '  \u00b7  ' + cov.dayCount + ' day' + (cov.dayCount===1?'':'s') + ' of data';
 
   // Build summary rows — respect the active search filter so the export
   // mirrors what's visible on screen.
@@ -11339,7 +11361,12 @@ function exportProcurement() {
       if(dt.getFullYear()===PRIOR_YEAR) fy25+=u;
     });
     var chg = ytd25>0 ? (ytd-ytd25)/ytd25 : null;
-    var tag = ytd25>0 ? (chg>0.05?'↑ Growing':chg<-0.05?'↓ Declining':'→ Flat') : 'New';
+    // 'No baseline' outranks the rest — see procColumnCoverage. Printing 'New' against every
+    // SKU of a column that has only been recorded for four days states something about the
+    // product that is only true of the feed.
+    var tag = !cov.hasBaseline
+      ? 'No baseline'
+      : ytd25>0 ? (chg>0.05?'↑ Growing':chg<-0.05?'↓ Declining':'→ Flat') : 'New';
     return {sku:sku, qVals:qVals, fy25:fy25, ytd:ytd, ytd25:ytd25, chg:chg, tag:tag};
   }).sort(function(a,b){return b.ytd-a.ytd;});
 
@@ -11349,15 +11376,23 @@ function exportProcurement() {
 
   // ── Sheet 1: Quarterly Summary ──
   var qtrLabels = displayQtrs.map(function(qk){ return quarterLabel(qk)+(qk===curQk?' (partial)':''); });
-  // 'Total since Q1 2025' mirrors the Total row now closing each card's quarterly
-  // table — it's the sum of the quarter columns to its left, partial quarter included.
-  var s1Headers = [Label+' SKU','Trajectory'].concat(qtrLabels).concat(['Total since Q1 2025','FY '+PRIOR_YEAR,'YTD '+nowYr,'YTD Change','% of Usage']);
+  // 'Total since <first quarter>' mirrors the Total row now closing each card's quarterly
+  // table — it's the sum of the quarter columns to its left, partial quarter included. The
+  // quarter is named rather than hardcoded because the column series is clamped to the
+  // feed's own coverage (see procColumnCoverage), so it is not always Q1 2025.
+  var s1Headers = [Label+' SKU','Trajectory'].concat(qtrLabels).concat(['Total since '+quarterLabel(displayQtrs[0]),'FY '+PRIOR_YEAR,'YTD '+nowYr,'YTD Change','% of Usage']);
+  // 0 or 1 rows, so a workbook with a full baseline keeps exactly the blank line it had.
+  var s1Note = (!cov.hasBaseline && cov.firstSeen)
+    ? [[Label+' consumption has only been recorded since '+cov.sinceStr+', so there is no comparable '+(nowYr-1)+' window to measure against and Trajectory reads "No baseline" throughout.'
+        + ' A trajectory here would describe the tracking rather than the '+Label.toLowerCase()+'. YTD '+nowYr+' likewise covers '+cov.dayCount+' day'+(cov.dayCount===1?'':'s')+' of data, not the year.']]
+    : [];
   var s1Rows = [
     ['DTF Operations Center — Procurement Export'],
-    [Label+' usage  ·  Q1 2025 → present  ·  Generated '+dateStr],
+    [Label+' usage  ·  '+covScope+'  ·  Generated '+dateStr]
+  ].concat(s1Note).concat([
     [],
     s1Headers
-  ];
+  ]);
 
   summaryData.forEach(function(d) {
     var row = [d.sku, d.tag].concat(d.qVals).concat([
@@ -11386,13 +11421,14 @@ function exportProcurement() {
   var w1 = [{wch:30},{wch:13}].concat(displayQtrs.map(function(){return{wch:13};})).concat([{wch:19},{wch:14},{wch:12},{wch:12},{wch:12}]);
   ws1['!cols'] = w1;
   ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:s1Headers.length-1}},{s:{r:1,c:0},e:{r:1,c:s1Headers.length-1}}];
+  if (s1Note.length) ws1['!merges'].push({s:{r:2,c:0},e:{r:2,c:s1Headers.length-1}});
   XLSX.utils.book_append_sheet(wb, ws1, 'Quarterly Summary');
 
   // ── Sheet 2: Lot Detail ──
   var detailHeaders = ['Date','Lot #',Label+' SKU','Customer','Product','Line','Projected Units','Final Units','Deviation %','Status'];
   var s2Rows = [
     ['DTF Operations Center — Lot Detail by '+Label+' SKU'],
-    ['All lots from Q1 2025 onward  ·  Sorted by date descending  ·  Generated '+dateStr],
+    ['All lots from '+quarterLabel(displayQtrs[0])+' onward  ·  Sorted by date descending  ·  Generated '+dateStr],
     [],
     detailHeaders
   ];
@@ -14821,6 +14857,47 @@ function renderOrdersSummary() {
   content.innerHTML = viewHTML;
 }
 
+// When did this procurement column start carrying data, and is that early enough for a
+// prior-year comparison to mean anything?
+//
+// The trajectory tag was derived purely from `ytd25Units > 0`, so a column the sheet only
+// started recording last week tagged every SKU "New" — a true statement about the feed and a
+// false one about the business: the scoop sizes are ten years old, the tracking is eight days
+// old. Same root cause drew seven empty quarters in the sparkline and put "Q1 2025 → present"
+// on a header covering four days of data. All three read this instead of asserting a history
+// the feed does not have.
+//
+// hasBaseline is quarter-granular against the START of the comparison window, not its end.
+// Two boundaries, both deliberate:
+//   - against the START, because a window the column only joined halfway through under-counts
+//     the prior-year figure, and every SKU then reads "Up" against it. Testing the end instead
+//     would hand scoops a bogus baseline on Jan 1 2027 off four months of 2026 data.
+//   - by QUARTER, not by day, because the columns that DO have full history start on the
+//     year's first production day (Jan 6 2025, not Jan 1) — a day-exact test would fail
+//     jars, bottles, lids, desiccants and neckbands too, which is the opposite mistake.
+//
+// dayCount counts distinct days that carry data, not the span: scoops span 8 calendar days
+// but only ran on 4 of them, and the span reads as more evidence than there is.
+function procColumnCoverage(rows, getSku, cutoff, windowStart) {
+  var first = null, days = {}, n = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!(r['Lot Number'] || '').trim()) continue;
+    if (!getSku(r)) continue;
+    var dt = new Date(r['Date']);
+    if (isNaN(dt) || dt < cutoff) continue;
+    if (first === null || dt < first) first = dt;
+    var dk = dateKey(dt);
+    if (!days[dk]) { days[dk] = true; n++; }
+  }
+  return {
+    firstSeen: first,
+    dayCount: n,
+    hasBaseline: first !== null && getQuarterKey(first) <= getQuarterKey(windowStart),
+    sinceStr: first === null ? '' : first.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
+  };
+}
+
 function renderProcurement() {
   // The unforced calls cover a first visit (nothing loaded yet); refreshStockFeedsIfStale
   // covers arriving with data that loaded a long time ago, which the loaded flags alone
@@ -14896,14 +14973,21 @@ function renderProcurement() {
     }
   });
 
-  // Build all quarters Q1 2025 → current
-  var displayQtrs = [];
-  var dq = new Date(TRACKING_START);
-  while (getQuarterKey(dq) <= curQk) { displayQtrs.push(getQuarterKey(dq)); dq.setMonth(dq.getMonth()+3); }
-
-  // Build SKU results
   var ytd25cutoff = new Date(nowYr-1, now.getMonth(), now.getDate(), 23, 59, 59);
   var ytd25start  = new Date(nowYr-1, 0, 1);
+  var cov = procColumnCoverage(allRowsCombined, getSku, cutoff, ytd25start);
+
+  // Build all quarters the column actually covers → current. Clamped to the first quarter
+  // carrying data rather than always starting at TRACKING_START: seven empty sparkline bars
+  // in front of one filled one read as a product that died, not as a feed that just started.
+  // Everything downstream of displayQtrs follows — the quarterly table, and the all-time
+  // rollup, whose % denominator is now the covered quarters rather than quarters nobody was
+  // recording in.
+  var qStart = cov.firstSeen ? new Date(cov.firstSeen.getFullYear(), Math.floor(cov.firstSeen.getMonth()/3)*3, 1) : new Date(TRACKING_START);
+  if (qStart < new Date(TRACKING_START)) qStart = new Date(TRACKING_START);
+  var displayQtrs = [];
+  var dq = new Date(qStart);
+  while (getQuarterKey(dq) <= curQk) { displayQtrs.push(getQuarterKey(dq)); dq.setMonth(dq.getMonth()+3); }
 
   // Total YTD for % of usage
   var totalYtdUnits = 0, totalYtd25Units = 0;
@@ -14980,8 +15064,14 @@ function renderProcurement() {
     var ytdPct25 = totalYtd25Units > 0 ? parseFloat(((ytd25Units / totalYtd25Units) * 100).toFixed(1)) : null;
     var ytdChg   = ytd25Units > 0 ? (ytdUnits - ytd25Units) / ytd25Units * 100 : null;
 
-    // Tag based on YTD comparison
-    var tag = ytd25Units > 0
+    // Tag based on YTD comparison. 'nobase' is a statement about the FEED, and it outranks
+    // the others: where the column was not being recorded across the comparison window, no
+    // SKU can have a prior-year figure, so "New" would be printed on every row — which is
+    // how these ten-year-old scoop sizes came to be labelled brand new. 'new' survives for
+    // the columns that do have history, where it means what it says.
+    var tag = !cov.hasBaseline
+      ? 'nobase'
+      : ytd25Units > 0
       ? (ytdChg > 5 ? 'up' : ytdChg < -5 ? 'down' : 'flat')
       : 'new';
 
@@ -15029,6 +15119,8 @@ function renderProcurement() {
   var rows = visibleResults.map(function(cd) {
     var sid = 'proc_' + safeid(cd.sku);
     var expanded = !!window._procExpanded[sid];
+    // 'nobase' falls through to the neutral grey. The blue 'new' rail drew the eye down a
+    // column of rows whose only shared property was that nothing is known about them yet.
     var borderColor = cd.tag==='up'?'#1D9E75':cd.tag==='down'?'#791F1F':cd.tag==='new'?'#378ADD':'#444441';
     var bar26Color  = cd.tag==='down'?'#791F1F':'#378ADD';
     var tagEl = cd.tag==='up'
@@ -15037,6 +15129,10 @@ function renderProcurement() {
       ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;flex-shrink:0;">&#x2193; Down</span>'
       : cd.tag==='flat'
       ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2c2c2a;color:#888780;flex-shrink:0;">&#x2192; Flat</span>'
+      : cd.tag==='nobase'
+      // Names the missing DATA, not the SKU, and says so on hover — the whole defect here was
+      // a row asserting something about the product that only held for the feed.
+      ? '<span title="' + esc(Label + ' consumption has only been recorded since ' + cov.sinceStr + ' (' + cov.dayCount + ' day' + (cov.dayCount===1?'':'s') + ' of data), so there is no comparable ' + (nowYr-1) + ' window to measure against. This is a gap in the tracking, not a sign that this ' + label + ' is new.') + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2c2c2a;color:#5f5e5a;flex-shrink:0;cursor:help;">No baseline</span>'
       : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#0C447C;color:#85B7EB;flex-shrink:0;">New</span>';
 
     var w25 = cd.ytd25Units ? Math.round((cd.ytd25Units/maxYtd)*100) : 0;
@@ -15106,7 +15202,13 @@ function renderProcurement() {
       for (var pi=idx-1; pi>=0; pi--) { if (cd.qtrs[pi].units>0){prevWithData=cd.qtrs[pi];break;} }
       var unitsDelta = '';
       if (prevWithData && q.units>0 && q.key!==curQk) unitsDelta = pctB(q.units, prevWithData.units, true);
-      else if (!prevWithData && q.units>0) unitsDelta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
+      // The 'new' chip on a SKU's first quarter with data is the same claim as the row badge
+      // and needs the same guard: with no baseline it marks the quarter the FEED started, so
+      // it would reprint "new" inside the drilldown of a scoop that has run for years. Left
+      // to fall through, which lands the current quarter on 'In progress' — the accurate
+      // label for the only quarter scoops have — and leaves an older first quarter blank,
+      // there being no prior quarter to compare it against.
+      else if (!prevWithData && q.units>0 && cov.hasBaseline) unitsDelta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
       else if (q.key===curQk && q.units>0) unitsDelta = '<span style="font-size:10px;color:#5f5e5a;">In progress</span>';
       var prevPct = null;
       for (var ci=idx-1; ci>=0; ci--) { if (cd.qtrs[ci].pctOfTotal!==null){prevPct=cd.qtrs[ci].pctOfTotal;break;} }
@@ -15131,6 +15233,11 @@ function renderProcurement() {
 
     var procDataObj = {
       sku: cd.sku, type: label,
+      // The synopsis opened with "We started using <sku> in Q3 2026" whenever there was no
+      // prior-year figure — the same false claim as the New badge, only spelled out in a
+      // sentence. It needs the coverage verdict to tell "this SKU is new" from "this column
+      // is new", and cannot recompute it: it reads only this object out of the DOM.
+      hasBaseline: cov.hasBaseline, trackedSince: cov.sinceStr,
       ytdUnits: cd.ytdUnits, ytd25Units: cd.ytd25Units,
       ytdLots: cd.ytdLots, ytd25Lots: cd.ytd25Lots,
       ytdPct: cd.ytdPct, ytdPct25: cd.ytdPct25,
@@ -15273,6 +15380,11 @@ function renderProcurement() {
   }).join('');
 
   var ytdLabelFull = now.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  // Keeps "Q1 2025 → present" for the columns that genuinely reach back that far, and states
+  // the real start date for the ones that do not, with the number of days behind it.
+  var covScope = (!cov.firstSeen || displayQtrs[0] === getQuarterKey(new Date(TRACKING_START)))
+    ? 'Q1 2025 \u2192 present'
+    : 'tracked since ' + cov.sinceStr + ' \u00b7 ' + cov.dayCount + ' day' + (cov.dayCount===1?'':'s') + ' of data';
   var procSearchHTML = '<div style="position:relative;display:inline-flex;align-items:center;">'
     +'<input id="procSearchInput" type="text" placeholder="Search '+label+'s…" oninput="filterProcurement()" value="'+esc(procSearch)+'" style="padding:4px 28px 4px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;width:220px;height:28px;">'
     +'<button id="procSearchClear" onclick="procSearch=\'\';document.getElementById(\'procSearchInput\').value=\'\';filterProcurement();" style="display:'+(procSearch?'flex':'none')+';position:absolute;right:6px;width:16px;height:16px;border-radius:50%;border:none;background:#444441;cursor:pointer;align-items:center;justify-content:center;padding:0;flex-shrink:0;">'
@@ -15282,7 +15394,14 @@ function renderProcurement() {
   document.getElementById('content').innerHTML =
     '<div class="proc-toolbar" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;gap:12px;">'
       +'<div>'
-        +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">'+Label+' usage — Q1 2025 &#x2192; present &middot; sorted by YTD &middot; thru '+ytdLabelFull+'</div>'
+        +'<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.05em;">'+Label+' usage &mdash; '+esc(covScope)+' &middot; sorted by YTD &middot; thru '+ytdLabelFull+'</div>'
+        // Said once, here, rather than repeated down the rows: why every trajectory reads
+        // "No baseline". Only appears while that is actually the case.
+        +(!cov.hasBaseline && cov.firstSeen
+          ? '<div style="margin-top:5px;font-size:11px;color:#5f5e5a;max-width:640px;line-height:1.45;">'
+              +esc(Label+' consumption has only been recorded since '+cov.sinceStr+', so there is no comparable '+(nowYr-1)+' window yet. A trajectory here would describe the tracking rather than the '+label+', so none is shown.')
+            +'</div>'
+          : '')
         +((hiddenCount > 0 || showZeroDes)
           ? '<div style="margin-top:5px;"><label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#5f5e5a;cursor:pointer;user-select:none;">'
               +'<input type="checkbox" onchange="showZeroDes=this.checked;renderProcurement()" '+(showZeroDes?'checked':'')+' style="accent-color:#378ADD;cursor:pointer;">'
