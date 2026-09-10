@@ -457,9 +457,13 @@
     .proc-row > :nth-child(1) { width: auto !important; flex: 1 1 auto; display: flex !important; align-items: center; gap: 8px; margin-bottom: 10px; }
     .proc-row > :nth-child(1) > div:first-child { margin-bottom: 0 !important; }
     .proc-row > :nth-child(2) { flex: 1 1 100% !important; order: 2; min-width: 0; margin-bottom: 6px; }
-    .proc-row > :nth-child(3),
-    .proc-row > :nth-child(4) { width: auto !important; flex: 1 1 0 !important; order: 3; text-align: left !important; border-left: none !important; padding-left: 0 !important; margin-left: 0 !important; }
-    .proc-row > :nth-child(5) { display: none !important; }
+    /* Keyed on classes, not nth-child. There are three stat blocks now (Lots YTD, Avg / mo,
+       % of usage) and the sparkline is CONDITIONAL — a one-quarter SKU draws none — so
+       :nth-child(5) landed on the sparkline for most rows and on the chevron for those,
+       hiding the affordance that says the row opens. filterProcurement toggles the outer
+       [data-proc-sku] wrapper, not these children, so the !important display is safe here. */
+    .proc-row > .proc-stat { width: auto !important; flex: 1 1 0 !important; order: 3; text-align: left !important; border-left: none !important; padding-left: 0 !important; margin-left: 0 !important; }
+    .proc-row > .proc-spark { display: none !important; }
 
     /* Procurement toolbar stacks: the "… usage — Q1 … sorted by YTD" meta line
        and the "Show …s with zero usage" checkbox each span the full width (no
@@ -11304,7 +11308,7 @@ function exportProcurement() {
   var allRowsCombined = allRows.concat(allRows25);
 
   // Build skuQtr
-  var skuQtr = {}, totalQtrUnits = {};
+  var skuQtr = {}, totalQtrUnits = {}, skuMonth = {};
   allRowsCombined.forEach(function(r) {
     var dt = new Date(r['Date']); if (isNaN(dt)||dt<cutoff) return;
     var lot = (r['Lot Number']||'').trim(); if (!lot) return;
@@ -11316,6 +11320,9 @@ function exportProcurement() {
     skuQtr[sku][qk].units += u;
     skuQtr[sku][qk].lots.add(lot);
     totalQtrUnits[qk] = (totalQtrUnits[qk]||0) + u;
+    var mk = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2, '0');
+    if (!skuMonth[sku]) skuMonth[sku] = {};
+    skuMonth[sku][mk] = (skuMonth[sku][mk]||0) + u;
   });
 
   // YTD windows
@@ -11337,6 +11344,32 @@ function exportProcurement() {
   var covScope = (!cov.firstSeen || displayQtrs[0] === getQuarterKey(new Date(TRACKING_START)))
     ? 'Q1 2025 \u2192 present'
     : 'tracked since ' + cov.sinceStr + '  \u00b7  ' + cov.dayCount + ' day' + (cov.dayCount===1?'':'s') + ' of data';
+
+  // Run-rate window — same construction as the screen (coverage month start, current month
+  // excluded, divide by months actually present). Duplicated rather than shared because the
+  // export duplicates the whole compute; the caveat then has to go on the sheet's own face,
+  // since nobody opening the workbook can see the panel note that explained it.
+  var covMonthStart = cov.firstSeen
+    ? new Date(cov.firstSeen.getFullYear(), cov.firstSeen.getMonth(), 1)
+    : new Date(TRACKING_START.getFullYear(), TRACKING_START.getMonth(), 1);
+  var trackMonthStart = new Date(TRACKING_START.getFullYear(), TRACKING_START.getMonth(), 1);
+  if (covMonthStart < trackMonthStart) covMonthStart = trackMonthStart;
+  var procMonthKeys = [];
+  var mPtr = new Date(covMonthStart);
+  while (mPtr <= now) { procMonthKeys.push(mPtr.getFullYear()+'-'+String(mPtr.getMonth()+1).padStart(2,'0')); mPtr.setMonth(mPtr.getMonth()+1); }
+  var doneMonthKeys = procMonthKeys.slice(0, procMonthKeys.length - 1);
+  var mo3Keys = doneMonthKeys.slice(-3);
+  var mo6Keys = doneMonthKeys.slice(-6);
+  var lastMoKey = doneMonthKeys.length ? doneMonthKeys[doneMonthKeys.length-1] : null;
+  var lastMoLabel = lastMoKey
+    ? new Date(parseInt(lastMoKey.slice(0,4),10), parseInt(lastMoKey.slice(5),10)-1, 1).toLocaleDateString('en-US',{month:'short',year:'numeric'})
+    : 'n/a';
+  function monthMean(mmap, keys) {
+    if (!keys.length) return null;
+    var t = 0;
+    keys.forEach(function(k){ t += (mmap[k]||0); });
+    return Math.round(t / keys.length);
+  }
 
   // Build summary rows — respect the active search filter so the export
   // mirrors what's visible on screen.
@@ -11367,7 +11400,19 @@ function exportProcurement() {
     var tag = !cov.hasBaseline
       ? 'No baseline'
       : ytd25>0 ? (chg>0.05?'↑ Growing':chg<-0.05?'↓ Declining':'→ Flat') : 'New';
-    return {sku:sku, qVals:qVals, fy25:fy25, ytd:ytd, ytd25:ytd25, chg:chg, tag:tag};
+    var mmap = skuMonth[sku] || {};
+    var avgMo3 = monthMean(mmap, mo3Keys);
+    var avgMo6 = monthMean(mmap, mo6Keys);
+    // Carried as its own column, not just prose. Without it the 6-mo average is read as a
+    // demand baseline when for some SKUs half those months are simply empty — the same
+    // misread the on-screen sub-line and tooltip exist to prevent.
+    var zero6 = 0;
+    mo6Keys.forEach(function(k){ if (!(mmap[k] > 0)) zero6++; });
+    return {sku:sku, qVals:qVals, fy25:fy25, ytd:ytd, ytd25:ytd25, chg:chg, tag:tag,
+            lastMonthUnits: lastMoKey ? (mmap[lastMoKey] || 0) : null,
+            avgMo3: avgMo3, avgMo6: avgMo6, zero6: zero6,
+            avgQtr3: avgMo3 !== null ? avgMo3 * 3 : null,
+            moVsPct: (avgMo3 !== null && avgMo6) ? ((avgMo3 - avgMo6) / avgMo6 * 100) : null};
   }).sort(function(a,b){return b.ytd-a.ytd;});
 
   var totalYtd = summaryData.reduce(function(s,r){return s+r.ytd;},0)||1;
@@ -11380,7 +11425,21 @@ function exportProcurement() {
   // table — it's the sum of the quarter columns to its left, partial quarter included. The
   // quarter is named rather than hardcoded because the column series is clamped to the
   // feed's own coverage (see procColumnCoverage), so it is not always Q1 2025.
-  var s1Headers = [Label+' SKU','Trajectory'].concat(qtrLabels).concat(['Total since '+quarterLabel(displayQtrs[0]),'FY '+PRIOR_YEAR,'YTD '+nowYr,'YTD Change','% of Usage']);
+  // The six run-rate columns ship only when there is a completed month to compute them from.
+  // On Scoops — four days of data, no finished month — every one of them was 'N/A' on every
+  // row, under a 'Last Full Month (n/a)' header, over a TOTAL row of zeros that read as a
+  // measured rate of nothing. Dropping them follows the same rule as the Open Orders export
+  // (see _ooBuildSheet): a column with no value on any row reads as missing data rather than
+  // "doesn't apply here", and a fabricated zero is worse than an absent column.
+  var hasRate = doneMonthKeys.length > 0;
+  // Named to sit alongside the Materials export's own run-rate columns ('Last Month',
+  // '3-mo Avg', '6-mo Avg', '3mo vs 6mo (%)') — same tokens, with the cadence spelled out
+  // because this sheet carries a per-quarter figure beside the per-month ones.
+  var rateHeaders = hasRate
+    ? ['Last Full Month ('+lastMoLabel+')','3-mo Avg / Month','6-mo Avg / Month','3-mo Avg / Quarter',
+       '3mo vs 6mo (%)','Empty Months (of '+mo6Keys.length+')']
+    : [];
+  var s1Headers = [Label+' SKU','Trajectory'].concat(qtrLabels).concat(['Total since '+quarterLabel(displayQtrs[0]),'FY '+PRIOR_YEAR,'YTD '+nowYr,'YTD Change','% of Usage']).concat(rateHeaders);
   // 0 or 1 rows, so a workbook with a full baseline keeps exactly the blank line it had.
   var s1Note = (!cov.hasBaseline && cov.firstSeen)
     ? [[Label+' consumption has only been recorded since '+cov.sinceStr+', so there is no comparable '+(nowYr-1)+' window to measure against and Trajectory reads "No baseline" throughout.'
@@ -11388,7 +11447,22 @@ function exportProcurement() {
     : [];
   var s1Rows = [
     ['DTF Operations Center — Procurement Export'],
-    [Label+' usage  ·  '+covScope+'  ·  Generated '+dateStr]
+    [Label+' usage  ·  '+covScope+'  ·  Generated '+dateStr],
+    // The run-rate basis, stated where the numbers are. A reader assuming the current month
+    // is inside these averages reads every one of them as a drop for three weeks of every
+    // month, and there is no header on a spreadsheet to explain otherwise. Where the columns
+    // were dropped it says that instead, so their absence is not read as an oversight.
+    [hasRate
+      ? 'Run rate: rolling averages over completed calendar months only (through '+lastMoLabel+') — '
+        + now.toLocaleDateString('en-US',{month:'long'})+' is partial and excluded.'
+        + ' Averages divide by the months actually recorded'
+        + (mo6Keys.length < 6 ? ' ('+mo6Keys.length+' available, not 6)' : '')
+        + ', and Avg / Quarter is the 3-month pace × 3.'
+        + ' Empty Months counts how many of those months recorded no usage at all — they are real zeros and are in the divisor,'
+        + ' so a SKU with gaps shows a lower average than its active months suggest.'
+      : 'No monthly run-rate columns: '+Label.toLowerCase()+' consumption has only been recorded since '
+        + (cov.sinceStr || 'this month') + ', and ' + now.toLocaleDateString('en-US',{month:'long'})
+        + ' is still in progress. A rolling average needs at least one completed calendar month.']
   ].concat(s1Note).concat([
     [],
     s1Headers
@@ -11401,27 +11475,49 @@ function exportProcurement() {
       d.ytd,
       d.chg !== null ? d.chg : 'N/A',
       parseFloat((d.ytd/totalYtd*100).toFixed(1))+'%'
-    ]);
+    ]).concat(hasRate ? [
+      d.lastMonthUnits !== null ? d.lastMonthUnits : 'N/A',
+      d.avgMo3 !== null ? d.avgMo3 : 'N/A',
+      d.avgMo6 !== null ? d.avgMo6 : 'N/A',
+      d.avgQtr3 !== null ? d.avgQtr3 : 'N/A',
+      // 'N/A', not 0: no 6-month baseline to divide by is not a flat trend.
+      d.moVsPct !== null ? parseFloat(d.moVsPct.toFixed(1)) : 'N/A',
+      d.zero6
+    ] : []);
     s1Rows.push(row);
   });
 
   // Totals row
   var totQtrs = displayQtrs.map(function(qk){ return summaryData.reduce(function(s,d){ return s+(skuQtr[d.sku][qk]?skuQtr[d.sku][qk].units:0); },0); });
+  // The run-rate totals sum the per-SKU averages, which is the column's own monthly rate —
+  // an average of averages would be a different and useless number. Nulls contribute 0.
+  function sumRate(f) { return summaryData.reduce(function(s,d){ return s + (f(d) || 0); }, 0); }
   s1Rows.push(['TOTAL',''].concat(totQtrs).concat([
     totQtrs.reduce(function(s,v){return s+v;}, 0),
     summaryData.reduce(function(s,d){return s+d.fy25;},0),
     summaryData.reduce(function(s,d){return s+d.ytd;},0),
     '',
     '100.0%'
-  ]));
+  ]).concat(hasRate ? [
+    sumRate(function(d){return d.lastMonthUnits;}),
+    sumRate(function(d){return d.avgMo3;}),
+    sumRate(function(d){return d.avgMo6;}),
+    sumRate(function(d){return d.avgQtr3;}),
+    '',
+    ''
+  ] : []));
 
   var ws1 = XLSX.utils.aoa_to_sheet(s1Rows);
 
   // Column widths
-  var w1 = [{wch:30},{wch:13}].concat(displayQtrs.map(function(){return{wch:13};})).concat([{wch:19},{wch:14},{wch:12},{wch:12},{wch:12}]);
+  var w1 = [{wch:30},{wch:13}].concat(displayQtrs.map(function(){return{wch:13};})).concat([{wch:19},{wch:14},{wch:12},{wch:12},{wch:12}])
+    .concat(hasRate ? [{wch:22},{wch:18},{wch:18},{wch:20},{wch:16},{wch:18}] : []);
   ws1['!cols'] = w1;
-  ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:s1Headers.length-1}},{s:{r:1,c:0},e:{r:1,c:s1Headers.length-1}}];
-  if (s1Note.length) ws1['!merges'].push({s:{r:2,c:0},e:{r:2,c:s1Headers.length-1}});
+  // Rows 0-2 are title / scope / run-rate basis, all always present; s1Note, when it exists,
+  // is row 3. Merge indices track that order — get it wrong and a caveat renders clipped to
+  // the first column, which is how a caveat stops being read.
+  ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:s1Headers.length-1}},{s:{r:1,c:0},e:{r:1,c:s1Headers.length-1}},{s:{r:2,c:0},e:{r:2,c:s1Headers.length-1}}];
+  if (s1Note.length) ws1['!merges'].push({s:{r:3,c:0},e:{r:3,c:s1Headers.length-1}});
   XLSX.utils.book_append_sheet(wb, ws1, 'Quarterly Summary');
 
   // ── Sheet 2: Lot Detail ──
@@ -14935,6 +15031,7 @@ function renderProcurement() {
   var ytdStart = new Date(nowYr, 0, 1);
   var allRowsCombined = allRows.concat(allRows25);
   var skuQtr = {};
+  var skuMonth = {};
   var skuCust = {};
   var totalQtrUnits = {};
   // For desiccants we also track final units per quarter to compute avg per unit
@@ -14951,6 +15048,11 @@ function renderProcurement() {
     skuQtr[sku][qk].lots.add(lot);
     skuQtr[sku][qk].units += u;
     totalQtrUnits[qk] = (totalQtrUnits[qk]||0) + u;
+    // Monthly buckets for the run-rate figures. Same pass, same row filter as the quarterly
+    // ones, so the two can never disagree about what was counted.
+    var mk = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2, '0');
+    if (!skuMonth[sku]) skuMonth[sku] = {};
+    skuMonth[sku][mk] = (skuMonth[sku][mk]||0) + u;
     // For avg desiccants per unit
     if (isDes) {
       if (!skuQtrFinalUnits[sku]) skuQtrFinalUnits[sku] = {};
@@ -14988,6 +15090,41 @@ function renderProcurement() {
   var displayQtrs = [];
   var dq = new Date(qStart);
   while (getQuarterKey(dq) <= curQk) { displayQtrs.push(getQuarterKey(dq)); dq.setMonth(dq.getMonth()+3); }
+
+  // Monthly window for the run-rate figures (3-mo / 6-mo rolling averages), mirroring the
+  // Materials view's avg3/avg6 convention. Two things carry over from there deliberately:
+  //
+  //  - It starts at the column's own coverage month, not TRACKING_START. A column first
+  //    recorded in September averaged against eight months nobody was recording would read
+  //    as a collapse in usage; this is the same defect procColumnCoverage was added for.
+  //  - The CURRENT month is excluded. It is partial by definition, and a run rate that
+  //    drops every 1st of the month and climbs back by the 28th is not a run rate. The
+  //    figures therefore end at the last completed month, and the panel says so.
+  var covMonthStart = cov.firstSeen
+    ? new Date(cov.firstSeen.getFullYear(), cov.firstSeen.getMonth(), 1)
+    : new Date(TRACKING_START.getFullYear(), TRACKING_START.getMonth(), 1);
+  var trackMonthStart = new Date(TRACKING_START.getFullYear(), TRACKING_START.getMonth(), 1);
+  if (covMonthStart < trackMonthStart) covMonthStart = trackMonthStart;
+  var procMonthKeys = [];
+  var mPtr = new Date(covMonthStart);
+  while (mPtr <= now) { procMonthKeys.push(mPtr.getFullYear()+'-'+String(mPtr.getMonth()+1).padStart(2,'0')); mPtr.setMonth(mPtr.getMonth()+1); }
+  var doneMonthKeys = procMonthKeys.slice(0, procMonthKeys.length - 1);
+  var mo3Keys = doneMonthKeys.slice(-3);
+  var mo6Keys = doneMonthKeys.slice(-6);
+  var lastMoKey = doneMonthKeys.length ? doneMonthKeys[doneMonthKeys.length-1] : null;
+  var lastMoLabel = lastMoKey
+    ? new Date(parseInt(lastMoKey.slice(0,4),10), parseInt(lastMoKey.slice(5),10)-1, 1).toLocaleDateString('en-US',{month:'short',year:'numeric'})
+    : '';
+  var curMoLabel = now.toLocaleDateString('en-US',{month:'long'});
+  // Divides by the months actually IN the slice, not by 3 or 6. A column with two completed
+  // months of history has a two-month average, not a 6-month average with four phantom
+  // zeros in it. A zero-usage month inside the covered window is a real zero and does count.
+  function monthMean(mmap, keys) {
+    if (!keys.length) return null;
+    var t = 0;
+    keys.forEach(function(k){ t += (mmap[k]||0); });
+    return Math.round(t / keys.length);
+  }
 
   // Total YTD for % of usage
   var totalYtdUnits = 0, totalYtd25Units = 0;
@@ -15060,6 +15197,28 @@ function renderProcurement() {
     var ytdAvgPerUnit   = isDes && ytdFinalUnits   > 0 ? parseFloat((ytdUnits   / ytdFinalUnits).toFixed(2))   : null;
     var ytd25AvgPerUnit = isDes && ytd25FinalUnits > 0 ? parseFloat((ytd25Units / ytd25FinalUnits).toFixed(2)) : null;
 
+    // Run rate: 3-mo and 6-mo rolling monthly averages, plus the 3-mo figure restated per
+    // quarter. The quarterly number is the monthly one x 3 BY CONSTRUCTION rather than a
+    // mean over completed quarters — procurement asked for both cadences, and two figures
+    // over one window that can drift apart is how a board loses its readers.
+    var mmap = skuMonth[sku] || {};
+    var lastMonthUnits = lastMoKey ? (mmap[lastMoKey] || 0) : null;
+    var avgMo3 = monthMean(mmap, mo3Keys);
+    var avgMo6 = monthMean(mmap, mo6Keys);
+    var avgQtr3 = avgMo3 !== null ? avgMo3 * 3 : null;
+    // How much of each window is a zero month. This is the one thing that makes a rolling
+    // average read as the opposite of the truth, and it is not hypothetical: 25oz Red HDPE
+    // has [0, 0, 0, 149414, 44469, 15307] over its last six, so its 3-mo pace is exactly
+    // double its 6-mo baseline and the chip says "+100%" about a SKU whose usage is in fact
+    // falling month over month. The zeros are real and belong in the divisor — a month we
+    // bought none is part of the rate — but a reader has to be told they are in there.
+    var zero3 = 0, zero6 = 0;
+    mo3Keys.forEach(function(k){ if (!(mmap[k] > 0)) zero3++; });
+    mo6Keys.forEach(function(k){ if (!(mmap[k] > 0)) zero6++; });
+    // Recent pace against the longer baseline — the same 3-vs-6 read the Materials table's
+    // "vs 6-mo" column makes. Needs both, and needs avg6 non-zero to divide by.
+    var moVsPct = (avgMo3 !== null && avgMo6) ? ((avgMo3 - avgMo6) / avgMo6 * 100) : null;
+
     var ytdPct   = totalYtdUnits   > 0 ? parseFloat(((ytdUnits   / totalYtdUnits)   * 100).toFixed(1)) : null;
     var ytdPct25 = totalYtd25Units > 0 ? parseFloat(((ytd25Units / totalYtd25Units) * 100).toFixed(1)) : null;
     var ytdChg   = ytd25Units > 0 ? (ytdUnits - ytd25Units) / ytd25Units * 100 : null;
@@ -15090,6 +15249,8 @@ function renderProcurement() {
             ytd25Lots:ytd25Lots.size, ytd25Units:ytd25Units, ytdPct:ytdPct, ytdPct25:ytdPct25,
             ytdChg:ytdChg, ytdAvgPerUnit:ytdAvgPerUnit, ytd25AvgPerUnit:ytd25AvgPerUnit,
             allUnits:allUnits, allLots:allLotSet.size, allPct:allPct, firstQk:firstQk,
+            lastMonthUnits:lastMonthUnits, avgMo3:avgMo3, avgMo6:avgMo6, avgQtr3:avgQtr3,
+            moVsPct:moVsPct, zero3:zero3, zero6:zero6,
             custBreakdown:custBreakdown};
   });
 
@@ -15116,6 +15277,17 @@ function renderProcurement() {
     return '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;'+(ml?'margin-left:5px;':'')+'background:'+(pos?'#085041':'#791F1F')+';color:'+(pos?'#9FE1CB':'#F09595')+'">'+(pos?'+':'')+p.toFixed(1)+'%</span>';
   }
 
+  // Run-rate trend chip, matching the Materials table's "vs 6-mo" badge rather than pctB:
+  // it has a neutral ~flat state under 5%, because a 2% wobble between two rolling averages
+  // is noise and a green chip on it reads as a decision to act.
+  function trendB(pct) {
+    if (pct === null || pct === undefined) return '';
+    if (Math.abs(pct) < 5) return '<span style="font-size:10px;font-weight:500;padding:1px 5px;border-radius:4px;background:#2c2c2a;color:#888780;">~flat</span>';
+    var up = pct > 0;
+    return '<span style="font-size:10px;font-weight:500;padding:1px 5px;border-radius:4px;background:'+(up?'#085041':'#791F1F')+';color:'+(up?'#9FE1CB':'#F09595')+'">'+(up?'&#8593;':'&#8595;')+' '+Math.abs(Math.round(pct))+'%</span>';
+  }
+  function nOrDash(v) { return (v === null || v === undefined) ? '&#x2014;' : v.toLocaleString(); }
+
   var rows = visibleResults.map(function(cd) {
     var sid = 'proc_' + safeid(cd.sku);
     var expanded = !!window._procExpanded[sid];
@@ -15134,6 +15306,28 @@ function renderProcurement() {
       // a row asserting something about the product that only held for the feed.
       ? '<span title="' + esc(Label + ' consumption has only been recorded since ' + cov.sinceStr + ' (' + cov.dayCount + ' day' + (cov.dayCount===1?'':'s') + ' of data), so there is no comparable ' + (nowYr-1) + ' window to measure against. This is a gap in the tracking, not a sign that this ' + label + ' is new.') + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2c2c2a;color:#5f5e5a;flex-shrink:0;cursor:help;">No baseline</span>'
       : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#0C447C;color:#85B7EB;flex-shrink:0;">New</span>';
+
+    // One sentence per fact, and it names the windows: the whole risk with a rolling
+    // average is a reader assuming a window it does not have.
+    var unitNoun = isDes ? 'desiccants' : isNeck ? 'neckbands' : isScoop ? 'scoops' : 'units';
+    var avgTitle = cd.avgMo3 === null
+      ? 'No completed month of ' + label + ' data yet, so there is no run rate to report. '
+        + curMoLabel + ' is still in progress and partial months are excluded.'
+      : 'Average ' + unitNoun + ' per month over the last ' + mo3Keys.length + ' completed month'
+        + (mo3Keys.length===1?'':'s') + ' (through ' + lastMoLabel + '): ' + cd.avgMo3.toLocaleString() + '.'
+        + (cd.avgMo6 !== null ? ' Over the last ' + mo6Keys.length + ': ' + cd.avgMo6.toLocaleString() + '.' : '')
+        + (cd.avgQtr3 !== null ? ' At the 3-month pace that is ' + cd.avgQtr3.toLocaleString() + ' per quarter.' : '')
+        + ' ' + curMoLabel + ' is excluded — a partial month would drag the rate down and recover by month end.'
+        // Only when it applies. mo3Keys is the tail of mo6Keys, so zero6 >= zero3 always and
+        // the 6-month count alone tells the story; the 3-month count is added when the recent
+        // window is affected too. This is what stops a "+100%" chip from being read as growth
+        // when the baseline half is simply empty.
+        + (cd.zero6
+            ? ' Note: ' + cd.zero6 + ' of those ' + mo6Keys.length + ' months had no ' + unitNoun + ' at all'
+              + (cd.zero3 ? ', ' + cd.zero3 + ' of them in the last ' + mo3Keys.length : '')
+              + '. Empty months count as zeros in the average, so an interrupted history reads as a lower rate'
+              + (cd.zero3 < cd.zero6 ? ' — and here it is the 6-month baseline that carries the gaps, which lifts the 3-mo vs 6-mo chip on its own.' : '.')
+            : '');
 
     var w25 = cd.ytd25Units ? Math.round((cd.ytd25Units/maxYtd)*100) : 0;
     var w26 = cd.ytdUnits   ? Math.round((cd.ytdUnits/maxYtd)*100)   : 0;
@@ -15184,19 +15378,33 @@ function renderProcurement() {
         +'<div style="width:60px;flex-shrink:0;">'+pctB(cd.ytdUnits, cd.ytd25Units, false)+'</div>'
         +'</div>'
       +'</div>'
-      +'<div style="width:100px;flex-shrink:0;text-align:right;padding-left:16px;">'
+      +'<div class="proc-stat" style="width:100px;flex-shrink:0;text-align:right;padding-left:16px;">'
         +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">Lots YTD</div>'
         +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;">'+cd.ytdLots+'</div>'
         +(cd.ytd25Lots?'<div style="font-size:10px;color:#5f5e5a;">was '+cd.ytd25Lots+'</div>':'<div style="height:16px;"></div>')
       +'</div>'
-      +'<div style="width:140px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;">'
+      // Run rate. The headline is the 3-month average because that is the figure a reorder
+      // is sized against; the 6-month sits under it as the baseline the chip compares to,
+      // so the column answers "how many a month" and "and is that rising" in one glance.
+      // The quarterly restatement and the exact window live in the tooltip and the panel
+      // strip — a third figure here would not fit without taking width off the YTD bars.
+      +'<div class="proc-stat" style="width:124px;flex-shrink:0;text-align:right;padding-left:16px;" title="'+esc(avgTitle)+'">'
+        +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;cursor:help;">Avg / mo</div>'
+        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;display:flex;align-items:center;justify-content:flex-end;gap:5px;">'
+          +'<span>'+nOrDash(cd.avgMo3)+'</span>'+trendB(cd.moVsPct)
+        +'</div>'
+        +(cd.avgMo6 !== null
+          ? '<div style="font-size:10px;color:#5f5e5a;">6-mo '+cd.avgMo6.toLocaleString()+'</div>'
+          : '<div style="height:16px;"></div>')
+      +'</div>'
+      +'<div class="proc-stat" style="width:140px;flex-shrink:0;text-align:right;border-left:0.5px solid #2c2c2a;padding-left:16px;">'
         +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;">'+(isDes||isNeck?'Total YTD':'% of '+label+' usage')+'</div>'
         +'<div style="font-size:14px;font-weight:500;color:#e8e6e0;">'
           +(isDes||isNeck ? cd.ytdUnits.toLocaleString() : (cd.ytdPct!==null?cd.ytdPct+'%':'&#x2014;'))
         +'</div>'
         +(isDes||isNeck ? '<div>'+pctB(cd.ytdUnits, cd.ytd25Units, false)+'</div>' : (cd.ytdPct!==null?'<div>'+pctB(cd.ytdPct, cd.ytdPct25, false)+'</div>':'<div style="height:18px;"></div>'))
       +'</div>'
-      +(sparkOn ? '<div style="display:flex;align-items:flex-end;gap:'+SPARK_GAP+'px;height:28px;flex-shrink:0;margin-left:16px;width:'+sparkTotalW.toFixed(1)+'px;">'+sparkBars+'</div>' : '')
+      +(sparkOn ? '<div class="proc-spark" style="display:flex;align-items:flex-end;gap:'+SPARK_GAP+'px;height:28px;flex-shrink:0;margin-left:16px;width:'+sparkTotalW.toFixed(1)+'px;">'+sparkBars+'</div>' : '')
       // Takes over the sparkline's 16px gap when there is no sparkline, so the chevron does
       // not end up hugging the percentage.
       +'<svg id="pc-'+sid+'" width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;margin-left:'+(sparkOn?8:16)+'px;transition:transform .15s;transform:'+(expanded?'rotate(180deg)':'')+'"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
@@ -15376,12 +15584,64 @@ function renderProcurement() {
       +'<tbody>'+tableRows+totalRow+'</tbody>'
     +'</table></div>';
 
+    // Run-rate strip: the monthly cadence procurement buys on, spelled out above the tabs
+    // where there is room for the windows and the quarterly restatement. Pinned above the
+    // tab bar rather than inside "By quarter" — it is a property of the SKU, not of either
+    // breakdown, the same way the Materials panel keeps its stat strip outside its tabs.
+    var rateCell = function(lbl, val, sub, accent) {
+      return '<div style="flex:1 1 120px;min-width:0;padding:0 14px 0 0;">'
+        +'<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;white-space:nowrap;">'+esc(lbl)+'</div>'
+        +'<div style="font-size:14px;font-weight:500;color:'+(accent||'#e8e6e0')+';font-variant-numeric:tabular-nums;">'+val+'</div>'
+        +'<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">'+sub+'</div>'
+      +'</div>';
+    };
+    // A window's sub-line says how many months it averaged AND how many of them were empty,
+    // because those two facts together are the whole basis of the figure above them.
+    var winSub = function(nMonths, zeros) {
+      if (!nMonths) return '&#x2014;';
+      return esc(nMonths + ' completed month' + (nMonths===1?'':'s'))
+        + (zeros ? ' <span style="color:#E0894A;">' + esc(zeros + ' with no usage') + '</span>' : '');
+    };
+    var rateStrip;
+    if (!doneMonthKeys.length) {
+      // Five dashes in a row is not a report. Where no month has finished, the strip says
+      // why and when it fills in, which is the only useful thing it can say.
+      var fillsIn = new Date(now.getFullYear(), now.getMonth()+1, 1).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+      rateStrip = '<div style="padding:11px 14px 12px;border-bottom:0.5px solid #2c2c2a;background:#17191b;font-size:11px;color:#5f5e5a;line-height:1.5;">'
+        +esc('No monthly run rate yet: ' + label + ' consumption has only been recorded since ' + (cov.sinceStr || 'this month')
+            + ', and ' + curMoLabel + ' is still in progress. A rate needs one finished month, so this fills in on ' + fillsIn + '.')
+      +'</div>';
+    } else {
+      rateStrip = '<div style="padding:11px 14px 12px;border-bottom:0.5px solid #2c2c2a;background:#17191b;">'
+        +'<div style="display:flex;flex-wrap:wrap;gap:10px 0;">'
+          +rateCell('Last full month', nOrDash(cd.lastMonthUnits), esc(lastMoLabel))
+          +rateCell('Avg / month (3-mo)', nOrDash(cd.avgMo3), winSub(mo3Keys.length, cd.zero3), '#85B7EB')
+          +rateCell('Avg / month (6-mo)', nOrDash(cd.avgMo6), winSub(mo6Keys.length, cd.zero6))
+          +rateCell('Avg / quarter (3-mo)', nOrDash(cd.avgQtr3), '3-mo pace &times; 3')
+          +rateCell('3-mo vs 6-mo', (cd.moVsPct === null ? '<span style="font-size:14px;color:#5f5e5a;">&#x2014;</span>' : trendB(cd.moVsPct)),
+                    cd.moVsPct === null ? 'no 6-mo baseline'
+                      // Named for what it is when the gaps sit only in the baseline half: the
+                      // chip is then an artifact of an empty window, not a change in demand.
+                      : (cd.zero6 > cd.zero3 ? 'baseline has empty months'
+                      : cd.moVsPct > 0 ? 'recent pace is higher'
+                      : cd.moVsPct < 0 ? 'recent pace is lower' : 'holding'))
+        +'</div>'
+        // Says the basis on the strip's own face. The alternative — a reader assuming the
+        // current month is in here — makes every figure look like a drop for three weeks.
+        +'<div style="margin-top:9px;font-size:10px;color:#5f5e5a;line-height:1.45;">'
+          +'Completed calendar months only &mdash; '+esc(curMoLabel)+' is still in progress and is excluded.'
+          +' Averages divide by the months actually recorded, so a shorter history is a shorter average, not a diluted one.'
+        +'</div>'
+      +'</div>';
+    }
+
     var activeTab = _procTab[sid] || 'qtr';
     var navS = function(active) { return 'padding:4px 12px;border-radius:6px;border:'+(active?'1.5px solid #378ADD':'1.5px solid transparent')+';background:'+(active?'#0C447C':'transparent')+';color:'+(active?'#85B7EB':'#888780')+';font-weight:'+(active?'500':'400')+';font-size:12px;cursor:pointer;font-family:system-ui;'; };
 
     var detailTable = '<div id="pb-'+sid+'" style="display:'+(expanded?'block':'none')+';border-top:0.5px solid #2c2c2a;">'
       +'<script type="application/json" id="pdata-'+sid+'">'+JSON.stringify(procDataObj)+'<\/script>'
       +'<div id="psynopsis-'+sid+'" style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;background:#141618;min-height:44px;"></div>'
+      +rateStrip
       +'<div style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-bottom:0.5px solid #2c2c2a;background:#1a1d20;">'
         +'<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
           +'<button id="ptab-qtr-'+sid+'"  onclick="switchProcTab(\''+sid+'\',\'qtr\')"  style="'+navS(activeTab==='qtr')+'">By quarter</button>'
