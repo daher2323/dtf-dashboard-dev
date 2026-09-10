@@ -501,8 +501,8 @@
     .pnl-sub-table td { font-size: 11px !important; }
     .pnl-sub-table td:first-child, .pnl-sub-table th:first-child { padding-left: 10px !important; max-width: 46vw !important; }
 
-    /* Jars/Bottles/… → expanded panel, By customer. The row is name(140) + bar +
-       units(80) + lots(36) + %(36) with 10px gaps — about 340px of fixed width
+    /* Jars/Bottles/… → expanded panel, By customer. The row is name(200) + bar +
+       units(80) + lots(36) + %(36) with 10px gaps — about 400px of fixed width
        before the bar gets any, so on a phone the figures were crushed against each
        other. Name takes its own line, the bar goes the way every other share bar
        does here (the % it annotates stays), and units/lots/% share the line below.
@@ -15318,7 +15318,15 @@ function renderProcurement() {
       return '<div style="padding:8px 14px;border-bottom:0.5px solid #2c2c2a;">'
         + '<div class="proc-cust-row"' + (canOpen ? ' onclick="toggleProcCust(' + jsStr(rowId) + ')"' : '')
           + ' style="display:flex;align-items:center;gap:10px;' + (canOpen ? 'cursor:pointer;' : '') + '">'
-          + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;width:140px;flex-shrink:0;">' + (canOpen ? chev : '') + esc(c.cust) + '</div>'
+          // 200px, not 140: the longest customer name in the feed is 24 characters
+          // ("Underground Formulations", ~150px at this size) plus the chevron, and at 140
+          // "Frontline Formulations" wrapped to two lines and set the row taller than every
+          // other row in the table. The width comes off a bar that is ~835px on a desktop
+          // window, so it costs the bar 7% and costs the name nothing. nowrap makes the
+          // no-wrap guarantee explicit rather than relying on the width; ellipsis + title
+          // are the net under it, so a longer name arriving later degrades to a truncation
+          // with the full name on hover instead of silently spilling over the bar.
+          + '<div style="font-size:12px;font-weight:500;color:#e8e6e0;width:200px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(c.cust) + '">' + (canOpen ? chev : '') + esc(c.cust) + '</div>'
           + '<div class="pnl-bar" style="flex:1;height:5px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
             + '<div style="height:100%;width:' + barW + '%;background:#378ADD;border-radius:2px;opacity:.7;"></div>'
           + '</div>'
