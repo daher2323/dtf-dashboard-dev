@@ -16670,7 +16670,7 @@ function renderBlend() {
     +   '<div style="flex:1 1 340px;padding:22px 24px;border-right:0.5px solid #2c3036;display:flex;align-items:flex-start;justify-content:center;box-sizing:border-box;">'
     +     '<div style="width:100%;max-width:420px;">'
     +       '<div style="font-size:15px;font-weight:600;color:#e8e6e0;">Look up a blend</div>'
-    +       '<div style="font-size:12px;color:#7d8288;margin:6px 0 14px;line-height:1.45;">Enter a product Lot # to see every component that went into it — part #s, ingredients and material lot (T#) numbers.</div>'
+    +       '<div style="font-size:12px;color:#7d8288;margin:6px 0 14px;line-height:1.45;">Enter a product Lot # to see every component that went into it — part #s, ingredients and material lot (T#) numbers, plus the jar, lid and case it was packed in.</div>'
     +       '<div style="display:flex;gap:8px;align-items:stretch;">'
     +         '<input id="blend-input" type="text" value="'+q+'" placeholder="e.g. 2607105" autocomplete="off" spellcheck="false" oninput="onBlendInput(this.value)" onkeydown="onBlendKey(event)" onfocus="this.style.borderColor=\'rgba(53,138,221,0.6)\'" onblur="this.style.borderColor=\'#444441\'" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:10px 12px;min-width:160px;flex:1 1 160px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;box-sizing:border-box;" />'
     +         '<button onclick="runBlendTrace()" style="box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;padding:0 18px;border-radius:8px;border:0.5px solid rgba(53,138,221,0.6);background:rgba(53,138,221,0.15);color:#85B7EB;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#85B7EB" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#85B7EB" stroke-width="1.3" stroke-linecap="round"/></svg>Look up</button>'
@@ -16686,6 +16686,11 @@ function renderBlend() {
     + '</div>'
     + '</div>';
 
+  // Packaging goes ABOVE the components table but below the summary: it is the secondary
+  // answer, and it renders even when the lot has no pick-sheet records at all — a lot that
+  // returns no components but does resolve a jar and lid is a real answer to "what is this
+  // lot", and it also tells the user the number was not a typo.
+  if (hasResult) html += blendPackagingHTML(lotPackaging(blendResult.lot));
   if (hasResult && blendResult.rows.length > 0) html += renderBlendTableHTML(blendResult);
   document.getElementById('content').innerHTML = html;
 }
@@ -16723,6 +16728,180 @@ function blendSummaryHTML(res) {
     + '</div>'
     + '</div>';
   return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:500px;">' + bubble + '</div>';
+}
+
+// ── Packaging spec for a lot ─────────────────────────────────────────────────
+// Secondary to the blend itself, but the same lookup answers "and what did it go
+// into" — jar/bottle, lid, neckband, desiccant, scoop, case. Read off the main
+// production feed, which carries all of it per production row.
+//
+// A lot can have SEVERAL production rows (300 of 3,223 do), and they genuinely
+// disagree: lot 2602074 ran both 55oz Black and 55oz White HDPE, 2602003 two box
+// sizes, 2512053 two lid colours. So every distinct value is kept and shown, never
+// just the first row's — picking one would silently hide half a run. Counts
+// (desiccants, boxes) are the opposite case: those are per-row quantities, not
+// specs, so they SUM.
+//
+// Three states, and collapsing any two of them would misinform:
+//   a value   → what it was packed in
+//   'None'    → a decision that it takes none (1,074 lots specify no desiccant)
+//   blank     → nobody recorded it. NOT the same as None.
+function _pkgFieldVals(rows, col) {
+  var vals = [], noneSeen = false, i, v;
+  for (i = 0; i < rows.length; i++) {
+    v = (rows[i][col] || '').trim();
+    if (!v) continue;
+    if (/^(none|n\/a)$/i.test(v)) { noneSeen = true; continue; }
+    if (vals.indexOf(v) === -1) vals.push(v);
+  }
+  return { vals: vals, none: noneSeen };
+}
+
+// First date the Scoop column carries anything, memoized. Needed because Scoop is
+// populated on 23 of 3,223 lots — it started being logged on 2026-09-02 — so a blank
+// scoop is overwhelmingly "not tracked yet" rather than "no scoop", and saying the
+// wrong one of those on a spec lookup is worse than saying nothing. Derived from the
+// feed, not hardcoded, so it stays true as coverage grows.
+var _scoopFirstSeen;
+function _pkgScoopSince() {
+  if (_scoopFirstSeen !== undefined) return _scoopFirstSeen;
+  var first = null;
+  allRows.concat(allRows25).forEach(function(r) {
+    var v = (r['Scoop'] || '').trim();
+    if (!v || /^(none|n\/a)$/i.test(v)) return;
+    var d = parseLocalDate(r['Date']);
+    if (d && (first === null || d < first)) first = d;
+  });
+  _scoopFirstSeen = first;
+  return first;
+}
+
+// A spec that spans several columns has to be assembled PER ROW and then deduped, not
+// column by column. Joining each column's distinct values independently produced
+// "45mm Black / White Ribbed" for a lot that actually ran 45mm Black Ribbed and 45mm
+// White Ribbed — it reads as a colour called "Black / White", and because the result is
+// one string the multi-value badge never fires, so the variance disappears entirely.
+// Composing per row keeps each real configuration intact and lets the badge do its job.
+function _pkgComboVals(rows, cols) {
+  var vals = [], noneSeen = false, i, j, parts, v, combo;
+  for (i = 0; i < rows.length; i++) {
+    parts = [];
+    for (j = 0; j < cols.length; j++) {
+      v = (rows[i][cols[j]] || '').trim();
+      if (!v) continue;
+      if (/^(none|n\/a)$/i.test(v)) { noneSeen = true; continue; }
+      parts.push(v);
+    }
+    if (!parts.length) continue;
+    combo = parts.join(' ');
+    if (vals.indexOf(combo) === -1) vals.push(combo);
+  }
+  return { vals: vals, none: noneSeen };
+}
+
+function lotPackaging(lot) {
+  var key = String(lot || '').trim();
+  if (!key) return null;
+  var rows = allRows.concat(allRows25).filter(function(r) {
+    return (r['Lot Number'] || '').trim() === key;
+  });
+  if (!rows.length) return null;
+  var jar = _pkgFieldVals(rows, 'Jar Size'), bot = _pkgFieldVals(rows, 'Bottle Size');
+  var desQty = 0, boxQty = 0;
+  rows.forEach(function(r) {
+    desQty += num(r['Number of Desiccants Used']);
+    boxQty += num(r['Amount of Boxes Used']);
+  });
+  return {
+    lot: key, rowCount: rows.length,
+    jar: jar, bottle: bot,
+    // Size + Color + Profile, the same three the Lids procurement tab keys its SKU on,
+    // composed per row so two lid configurations on one lot stay two values.
+    lid: _pkgComboVals(rows, ['Lid Size', 'Lid Color', 'Lid Profile']),
+    lidBrand: _pkgFieldVals(rows, 'Lid Brand'),
+    // Note the leading space — that is the sheet's actual header, not a typo here.
+    plastic: _pkgFieldVals(rows, ' Plastic Type'),
+    neckband: _pkgFieldVals(rows, 'Neckband Used'),
+    desiccant: _pkgFieldVals(rows, 'Desiccant'),
+    desiccantQty: desQty,
+    scoop: _pkgFieldVals(rows, 'Scoop'),
+    box: _pkgFieldVals(rows, 'Box Size Used'),
+    boxQty: boxQty,
+    line: _pkgFieldVals(rows, 'Line')
+  };
+}
+
+// One labelled spec. `f` is a _pkgFieldVals result; `missTip` explains a blank where
+// the reason is known (Scoop). Multiple values are all shown and flagged as such, so
+// a two-variant run reads as a two-variant run.
+function _pkgCell(label, f, sub, missTip) {
+  var body;
+  if (f && f.vals.length) {
+    body = '<span style="color:#e8e6e0;">' + f.vals.map(esc).join('<span style="color:#4a4d4a;"> &middot; </span>') + '</span>'
+      + (f.vals.length > 1
+          ? '<span title="This lot\'s production rows record more than one value for this field — both were run. Neither is a typo the dashboard can resolve, so both are shown." style="margin-left:6px;font-size:9px;font-weight:500;padding:1px 5px;border-radius:4px;background:#3a3320;color:#E0B84A;cursor:help;">' + f.vals.length + ' variants</span>'
+          : '')
+      // 'None' alongside a value means some rows specified none and others named one.
+      + (f.none ? '<span style="margin-left:6px;font-size:10px;color:#888780;">(some rows: none)</span>' : '');
+  } else if (f && f.none) {
+    body = '<span style="color:#888780;">None</span>';
+  } else {
+    body = '<span title="' + esc(missTip || 'Not recorded on this lot\'s production rows.') + '" style="color:#5f5e5a;cursor:help;">not recorded</span>';
+  }
+  return '<div style="flex:1 1 150px;min-width:0;padding:0 14px 0 0;">'
+    + '<div style="font-size:9px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;white-space:nowrap;">' + esc(label) + '</div>'
+    + '<div style="font-size:12px;line-height:1.4;word-break:break-word;">' + body + '</div>'
+    + (sub ? '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">' + sub + '</div>' : '')
+    + '</div>';
+}
+
+function blendPackagingHTML(pkg) {
+  if (!pkg) return '';
+  // Jar and bottle are alternatives, so the tile names whichever one this lot used and
+  // only falls back to the pair of labels when a lot somehow carries both.
+  var hasJar = pkg.jar.vals.length > 0, hasBot = pkg.bottle.vals.length > 0;
+  var contLabel = hasJar && hasBot ? 'Jar / Bottle' : hasBot ? 'Bottle' : 'Jar';
+  var cont = hasBot && !hasJar ? pkg.bottle
+           : hasJar && !hasBot ? pkg.jar
+           : { vals: pkg.jar.vals.concat(pkg.bottle.vals), none: pkg.jar.none || pkg.bottle.none };
+
+  // Brand and plastic type ride as the subline rather than as tiles of their own — they
+  // qualify the lid, they are not separate pieces of packaging.
+  var lidSub = [];
+  if (pkg.lidBrand.vals.length) lidSub.push(esc(pkg.lidBrand.vals.join(' / ')));
+  if (pkg.plastic.vals.length) lidSub.push(esc(pkg.plastic.vals.join(' / ')));
+
+  var scoopSince = pkg.scoop.vals.length ? null : _pkgScoopSince();
+  var scoopTip = scoopSince
+    ? 'The Scoop column has only been recorded since '
+      + scoopSince.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+      + ', so a blank here almost always means it was not logged rather than that the product ships without a scoop. Check the batch record.'
+    : 'Not recorded on this lot\'s production rows.';
+
+  var desSub = pkg.desiccantQty > 0
+    ? esc(Math.round(pkg.desiccantQty).toLocaleString() + ' used on this lot') : '';
+  var boxSub = pkg.boxQty > 0
+    ? esc(Math.round(pkg.boxQty).toLocaleString() + ' case' + (Math.round(pkg.boxQty)===1?'':'s') + ' used') : '';
+
+  return '<div style="margin-bottom:1.25rem;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap;">'
+      + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Packaging</div>'
+      + '<div style="font-size:10px;color:#5f5e5a;">from the production record'
+        + (pkg.rowCount > 1 ? esc(' \u00b7 ' + pkg.rowCount + ' production rows') : '')
+        + (pkg.line.vals.length ? esc(' \u00b7 ' + pkg.line.vals.join(', ')) : '')
+      + '</div>'
+    + '</div>'
+    + '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:14px 16px;">'
+      + '<div style="display:flex;flex-wrap:wrap;gap:14px 0;">'
+        + _pkgCell(contLabel, cont, '')
+        + _pkgCell('Lid', pkg.lid, lidSub.join('<span style="color:#4a4d4a;"> &middot; </span>'))
+        + _pkgCell('Neckband', pkg.neckband, '')
+        + _pkgCell('Desiccant', pkg.desiccant, desSub)
+        + _pkgCell('Scoop', pkg.scoop, '', scoopTip)
+        + _pkgCell('Case', pkg.box, boxSub)
+      + '</div>'
+    + '</div>'
+  + '</div>';
 }
 
 // A copyable value cell (readable value + copy icon) — same affordance as the
@@ -16828,10 +17007,45 @@ function exportBlend() {
     ['Ingredients: ' + res.materials + ' · Material lots: ' + res.tnums
       + ' · Units produced: ' + (res.units != null ? Math.round(res.units) : 'n/a')
       + (res.superseded ? ' · Excludes ' + res.superseded + ' replaced pull' + (res.superseded === 1 ? '' : 's') + ', listed below' : '')],
-    ['Exported: ' + dateStr],
-    [],
-    ['Part #', 'Ingredient', 'Material Lot (T#)', 'Status']
+    ['Exported: ' + dateStr]
   ];
+  // Packaging travels with the components — the workbook answers the same "what is this
+  // lot" question the screen does. One line per spec so it stays readable in a cell, and
+  // it states 'not recorded' explicitly rather than leaving a blank a reader would take
+  // for "none". Omitted entirely when the lot has no production rows to read it from.
+  var _pk = lotPackaging(res.lot);
+  if (_pk) {
+    var pv = function(f) {
+      if (f.vals.length) return f.vals.join(' | ') + (f.vals.length > 1 ? '  (' + f.vals.length + ' variants run on this lot)' : '')
+        + (f.none ? '  (some rows: none)' : '');
+      return f.none ? 'None' : 'not recorded';
+    };
+    var contLbl = _pk.bottle.vals.length && !_pk.jar.vals.length ? 'Bottle' : 'Jar';
+    var contF = _pk.bottle.vals.length && !_pk.jar.vals.length ? _pk.bottle
+      : _pk.jar.vals.length && !_pk.bottle.vals.length ? _pk.jar
+      : { vals: _pk.jar.vals.concat(_pk.bottle.vals), none: _pk.jar.none || _pk.bottle.none };
+    rows.push([]);
+    rows.push(['PACKAGING (from the production record'
+      + (_pk.rowCount > 1 ? ' · ' + _pk.rowCount + ' production rows' : '')
+      + (_pk.line.vals.length ? ' · ' + _pk.line.vals.join(', ') : '') + ')']);
+    rows.push([contLbl + ': ' + pv(contF)]);
+    rows.push(['Lid: ' + pv(_pk.lid)
+      + (_pk.lidBrand.vals.length ? '  · brand ' + _pk.lidBrand.vals.join(' / ') : '')
+      + (_pk.plastic.vals.length ? '  · ' + _pk.plastic.vals.join(' / ') : '')]);
+    rows.push(['Neckband: ' + pv(_pk.neckband)]);
+    rows.push(['Desiccant: ' + pv(_pk.desiccant)
+      + (_pk.desiccantQty > 0 ? '  · ' + Math.round(_pk.desiccantQty).toLocaleString() + ' used on this lot' : '')]);
+    // The one field whose blank has a known cause, so the cause ships with it.
+    var _sc = _pk.scoop.vals.length ? null : _pkgScoopSince();
+    rows.push(['Scoop: ' + pv(_pk.scoop)
+      + (_sc ? '  · the Scoop column has only been recorded since '
+               + _sc.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+               + ', so a blank most likely means not logged rather than no scoop' : '')]);
+    rows.push(['Case: ' + pv(_pk.box)
+      + (_pk.boxQty > 0 ? '  · ' + Math.round(_pk.boxQty).toLocaleString() + ' cases used' : '')]);
+  }
+  rows.push([]);
+  rows.push(['Part #', 'Ingredient', 'Material Lot (T#)', 'Status']);
   // Order to match the on-screen table: heaviest total kg pulled first (dosage
   // proxy), then ingredient, then T#. The kg value itself is not exported.
   var gq = {};
