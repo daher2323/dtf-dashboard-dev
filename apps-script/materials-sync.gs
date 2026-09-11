@@ -67,9 +67,22 @@ function _msGetPointer() {
 }
 function _msSetPointer(row) { _msProps().setProperty(PROP_LAST_ROW, String(row)); }
 
+// Dates arrive as Date objects from getValues(); normalise so source and destination agree.
+//
+// To the SECOND, not the millisecond, and that is not a concession to any particular way of
+// reading the sheet — the key was wrong at millisecond precision. The form's own timestamp
+// string carries whole seconds, so _msEventStamp builds a .000 Date while the source cell holds
+// .807; a row written by the fast submit path therefore did not match the source row the sweep
+// later read, and the sweep appended it a second time. Sub-second precision buys the key nothing
+// either way: two submissions of the same lot and part inside one second is not something a
+// person at a form can do.
+//
+// Rounding, not truncation, and that is measured rather than assumed: across the 500-row window
+// msProbeSheetsApi compared, .807 rendered up and .147 rendered down, every time. Flooring would
+// put the two sides a second apart on roughly half the rows. Both the REST read and the form
+// event carry that same rendering, which is why one rule settles both.
 function _msStamp(v) {
-  // Dates arrive as Date objects from getValues(); normalise so source and destination agree.
-  return (v instanceof Date) ? String(v.getTime()) : String(v || '').trim();
+  return (v instanceof Date) ? String(Math.round(v.getTime() / 1000)) : String(v || '').trim();
 }
 function _msKeyOf(row, keyIdx) {
   var parts = [_msStamp(row[0])], i;
@@ -442,7 +455,7 @@ var MS_RECONCILE_DAYS = 21;      // how far back to compare
 var MS_MAX_DELETE = 50;          // refuse to delete more than this in one run; something is wrong
 
 function _msNorm(v) {
-  if (v instanceof Date) return String(v.getTime());
+  if (v instanceof Date) return String(Math.round(v.getTime() / 1000));   // seconds: see _msStamp
   if (typeof v === 'number') return String(v);          // 350 and 350.00 are the same value
   return String(v == null ? '' : v).trim();
 }
@@ -1004,6 +1017,21 @@ function msProbeSheetsApi() {
   lastRow = colA.length;
   console.log('API column A: last row ' + lastRow + ' in ' + tCol + ' ms.');
 
+  // The sweep's pointer is a SOURCE ROW NUMBER, so "where does the data end" has to mean the same
+  // thing however the sheet is read, or the sweep silently stops short. Column A alone is not
+  // that number — a row with a blank timestamp but a lot and a part is still a pick — so ask the
+  // two key columns as well and take the furthest.
+  var keyIdx = _msKeyIdx(headers), restLast = lastRow, kcol, kvals, k;
+  for (k = 0; k < keyIdx.length; k++) {
+    kcol = _msColLetter(keyIdx[k] + 1);
+    t = Date.now();
+    kvals = _msApiGet("'" + SOURCE_SHEET_NAME + "'!" + kcol + ':' + kcol);
+    console.log('API column ' + kcol + ' "' + headers[keyIdx[k]] + '": last row ' + kvals.length
+      + ' in ' + (Date.now() - t) + ' ms.');
+    if (kvals.length > restLast) restLast = kvals.length;
+  }
+  console.log('REST says the data ends at row ' + restLast + '.');
+
   var start = Math.max(2, lastRow - MS_PROBE_ROWS + 1), n = lastRow - start + 1;
   t = Date.now();
   raw = _msApiGet(_msRangeA1(SOURCE_SHEET_NAME, start, 1, n, width));
@@ -1029,7 +1057,31 @@ function msProbeSheetsApi() {
   var live = src.getRange(start, 1, n, Math.min(width, src.getLastColumn())).getValues();
   console.log('getValues() on the same rectangle: ' + (Date.now() - t) + ' ms.');
 
-  var keyIdx = _msKeyIdx(headers), sigCols = _msSigCols(headers, width);
+  // getLastRow() counts a cell with ANY content, and the five (Check) columns are formulas that
+  // may be filled down well past the last submission — the same shape the production sheet has,
+  // where ~1,340 trailing rows compute #REF! off a blank lot. If the gap rows carry a lot or a
+  // part they are real picks and a REST row count would skip them; if they carry neither, then
+  // getLastRow() is the inflated number and the sweep has been paying for rows that are not there.
+  var liveLast = src.getLastRow();
+  console.log('getLastRow(): ' + liveLast + '  vs REST: ' + restLast + '.');
+  if (liveLast > restLast) {
+    var gapN = Math.min(liveLast - restLast, 50);
+    var gap = _msApiShape(_msApiGet(_msRangeA1(SOURCE_SHEET_NAME, restLast + 1, 1, gapN, width)),
+                          gapN, width, {});
+    var withKey = 0, g;
+    for (g = 0; g < gapN; g++) {
+      if (_msIsBlankKey(gap[g], keyIdx)) continue;
+      withKey++;
+      if (withKey <= 5) console.warn('gap row ' + (restLast + 1 + g) + ' HAS a key: '
+        + _msDescribe({ values: gap[g] }, keyIdx));
+    }
+    console.log('Gap rows ' + (restLast + 1) + '-' + liveLast + ': checked ' + gapN + ', '
+      + withKey + ' carry a lot or a part. ' + (withKey
+        ? 'A REST row count would skip real picks — it cannot be the end of the sweep.'
+        : 'Neither, so these are filled-down formulas and not submissions.'));
+  }
+
+  var sigCols = _msSigCols(headers, width);
   var keyBad = 0, rowBad = 0, cellBad = 0, a, b;
   for (i = 0; i < n; i++) {
     if (_msKeyOf(api[i], keyIdx) !== _msKeyOf(live[i], keyIdx)) {
