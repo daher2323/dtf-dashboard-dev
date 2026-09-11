@@ -1406,6 +1406,35 @@ function jsStr(s) {
     .replace(/"/g, '&quot;');
 }
 
+
+// ── Hand-typed product names, and why they have to be folded ──────────────
+// The Product cell is typed, so one product arrives spelled several ways. Frontline
+// Formulations' "TestaPlexx" / "Testaplexx" is the case that surfaced it: keyed on the raw
+// string it split into two rows, which halved its units, split its lots 2 and 1, and tagged
+// BOTH halves `new` — because neither spelling had a prior year of its own to compare against.
+// That last part is why this is worse than a cosmetic duplicate: a split invents a trend.
+//
+// So every aggregation over product names keys on prodKey() and labels with prodLabel(). The
+// label is always a spelling that occurs in the data, never the folded key — "testaplexx" is
+// not a name anyone will recognise on a page they are reading quickly.
+//
+// Customer names are NOT folded here. Same exposure in principle, but the customer key drives
+// rankings, the concentration card and the Sales tab's identity; that is a larger change than
+// this one and wants its own look at what is actually in the data.
+function prodKey(name) {
+  return String(name == null ? '' : name).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+// Most-used spelling wins, so a single mistyped row cannot rename a product. Ties break
+// alphabetically — arbitrary, but it stops the label flipping between refreshes.
+function prodLabel(counts) {
+  var best = null, bestN = -1, k;
+  for (k in counts) {
+    if (!counts.hasOwnProperty(k)) continue;
+    if (counts[k] > bestN || (counts[k] === bestN && k < best)) { best = k; bestN = counts[k]; }
+  }
+  return best === null ? '' : best;
+}
+
 // Parse a Date cell to a local-TZ calendar date (midnight in browser's local TZ).
 // Handles M/D/YYYY, M/D/YY, MM/DD/YYYY, and YYYY-MM-DD (ISO date-only).
 // Refuses strings containing 'T', 'Z', or a numeric timezone offset so that a
@@ -9023,12 +9052,15 @@ function _pmBucketDrilldownHTML(data, view) {
     if (!byCust[cust]) byCust[cust] = {lots:0, units:0, products:{}};
     byCust[cust].lots++;
     byCust[cust].units += l.finalUnits;
-    byCust[cust].products[prod] = (byCust[cust].products[prod]||0) + l.finalUnits;
+    var pkA = prodKey(prod);
+    var pbA = byCust[cust].products[pkA] || (byCust[cust].products[pkA] = {units:0, names:{}});
+    pbA.units += l.finalUnits;
+    pbA.names[prod] = (pbA.names[prod] || 0) + 1;
     total += l.finalUnits;
   });
   var custRows = Object.keys(byCust).map(function(c){
     var o = byCust[c];
-    var topProds = Object.keys(o.products).map(function(p){ return {name:p, units:o.products[p]}; })
+    var topProds = Object.keys(o.products).map(function(p){ return {name:prodLabel(o.products[p].names), units:o.products[p].units}; })
       .sort(function(a,b){ return b.units - a.units; }).slice(0,3);
     return {cust:c, lots:o.lots, units:o.units, pct: total ? o.units/total*100 : 0, topProds:topProds};
   }).sort(function(a,b){ return b.units - a.units; });
@@ -10133,18 +10165,20 @@ function _custQuarterFull(cust, qkey) {
     var dt = new Date(r['Date']); if (isNaN(dt)) continue;
     var t = dt.getTime();
     var pname = prodFull.split('-').slice(1).join('-').trim() || prodFull;
+    var pkey  = prodKey(pname);
     var line  = (r['Line']||'').trim();
     var lot   = (r['Lot Number']||'').trim();
     var units = num(r['Final Units']);
 
     if (t >= qStart && t <= qEnd) {
       // This quarter
-      if (!byProduct[pname]) byProduct[pname] = {units:0, lots:new Set(), lineLots:{}};
-      byProduct[pname].units += units;
-      if (lot) byProduct[pname].lots.add(lot);
+      if (!byProduct[pkey]) byProduct[pkey] = {units:0, lots:new Set(), lineLots:{}, names:{}};
+      byProduct[pkey].names[pname] = (byProduct[pkey].names[pname] || 0) + 1;
+      byProduct[pkey].units += units;
+      if (lot) byProduct[pkey].lots.add(lot);
       if (line && lot) {
-        if (!byProduct[pname].lineLots[line]) byProduct[pname].lineLots[line] = new Set();
-        byProduct[pname].lineLots[line].add(lot);
+        if (!byProduct[pkey].lineLots[line]) byProduct[pkey].lineLots[line] = new Set();
+        byProduct[pkey].lineLots[line].add(lot);
       }
       var mIdx = dt.getMonth() - startM;
       byMonth[mIdx].units += units;
@@ -10158,14 +10192,14 @@ function _custQuarterFull(cust, qkey) {
       totalUnits += units;
     } else if (t < qStart) {
       // Strictly prior — track for new/repeat logic + prior-quarter stats.
-      priorProductSet[pname] = true;
+      priorProductSet[pkey] = true;
       var pY  = dt.getFullYear();
       var pQ  = Math.floor(dt.getMonth() / 3) + 1;
       var pK  = pY + '-Q' + pQ;
       if (!priorQuarters[pK]) priorQuarters[pK] = {totalUnits:0, totalLots:new Set(), productSet:{}};
       priorQuarters[pK].totalUnits += units;
       if (lot) priorQuarters[pK].totalLots.add(lot);
-      priorQuarters[pK].productSet[pname] = true;
+      priorQuarters[pK].productSet[pkey] = true;
     }
   }
 
@@ -10179,7 +10213,7 @@ function _custQuarterFull(cust, qkey) {
       if (s > domLots) { domLots = s; domLine = lineKeys[k]; }
     }
     return {
-      name:  p,
+      name:  prodLabel(byProduct[p].names),
       units: byProduct[p].units,
       lots:  byProduct[p].lots.size,
       line:  domLine,
@@ -10598,9 +10632,11 @@ function computeCustomerData() {
     // Product name is everything after the first dash, the same split the quarter drill-down
     // uses, so the two panels name a product identically.
     var pname = prod.split('-').slice(1).join('-').trim() || prod;
+    var pkey  = prodKey(pname);
     if (!custProd[cust]) custProd[cust] = {};
-    var pRec = custProd[cust][pname];
-    if (!pRec) pRec = custProd[cust][pname] = {units:0, units25:0, lots:new Set(), lots25:new Set()};
+    var pRec = custProd[cust][pkey];
+    if (!pRec) pRec = custProd[cust][pkey] = {units:0, units25:0, lots:new Set(), lots25:new Set(), names:{}};
+    pRec.names[pname] = (pRec.names[pname] || 0) + 1;
     if (dt.getFullYear() === nowYr) {
       pRec.units += num(r['Final Units']);
       if (lot) pRec.lots.add(lot);
@@ -10703,7 +10739,7 @@ function computeCustomerData() {
     var pmap = custProd[cust] || {};
     var products = Object.keys(pmap).map(function(pn) {
       var pr = pmap[pn];
-      return { name: pn, units: pr.units, units25: pr.units25,
+      return { name: prodLabel(pr.names), units: pr.units, units25: pr.units25,
                lots: pr.lots.size, lots25: pr.lots25.size,
                avgRun:   pr.lots.size   ? Math.round(pr.units   / pr.lots.size)   : 0,
                avgRun25: pr.lots25.size ? Math.round(pr.units25 / pr.lots25.size) : 0 };
@@ -15240,9 +15276,11 @@ function renderProcurement() {
       // Per product: units AND the distinct lots behind them, so the expanded breakdown can
       // show a lot count per product the way the Materials drill does. Was a bare running
       // total, which could only ever produce a chip.
-      if (!skuCust[sku][cust].products[prod]) skuCust[sku][cust].products[prod] = {units:0, lots:new Set()};
-      skuCust[sku][cust].products[prod].units += u;
-      skuCust[sku][cust].products[prod].lots.add(lot);
+      var pkD = prodKey(prod);
+      if (!skuCust[sku][cust].products[pkD]) skuCust[sku][cust].products[pkD] = {units:0, lots:new Set(), names:{}};
+      skuCust[sku][cust].products[pkD].names[prod] = (skuCust[sku][cust].products[pkD].names[prod] || 0) + 1;
+      skuCust[sku][cust].products[pkD].units += u;
+      skuCust[sku][cust].products[pkD].lots.add(lot);
     }
   });
 
@@ -15412,7 +15450,7 @@ function renderProcurement() {
               // against 75 lots, with no indication anything was missing.
       return {cust:e[0], units:e[1].units, lots:e[1].lots.size,
               products:Object.keys(e[1].products).map(function(k){
-                return {name:k, units:e[1].products[k].units, lots:e[1].products[k].lots.size};
+                return {name:prodLabel(e[1].products[k].names), units:e[1].products[k].units, lots:e[1].products[k].lots.size};
               }).sort(function(a,b){ return b.units - a.units; })};
     }).sort(function(a,b){return b.units-a.units;}) : [];
 
