@@ -8245,7 +8245,26 @@ function renderWeekly() {
     // Nothing worth grading against a guessed target.
     statusLabel=''; statusBg=''; statusTxt='';
   } else if(!weekComplete){
-    statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775';
+    // A week that has ALREADY made its weekly target cannot be "behind pace" toward it.
+    //
+    // The two figures on this card come from two different sheets and they do not agree. The
+    // headline weekly target is the Weekly Targets sheet; the pace test grades completed days
+    // against the Daily Targets sheet, whose per-line weekly figures are the ones printed on the
+    // line cards below. Week 37 2026: 47,800 against 20,525 + 20,975 + 19,650 = 61,150, a 28%
+    // gap. So the badge read 90% of the daily plan and said "Behind pace" while the tile beside
+    // it read 118% and "+8,764 over target".
+    //
+    // Whichever target is the right one, the badge must not contradict the number it sits next
+    // to. Nothing is lost by deferring to it here: the day-by-day story is already told, per
+    // line, by the "N/3 days hit" chips and their own Behind / On track badges.
+    var targetMade = weeklyTarget>0 && weekUnits>=weeklyTarget*TARGET_HIT_THRESHOLD;
+    if(targetMade){
+      // Said plainly rather than as "On pace", which would understate it — the week's target is
+      // met with days still to run, and it can only go up from here.
+      statusLabel='Target met'; statusBg='#085041'; statusTxt='#9FE1CB';
+    } else {
+      statusLabel=onPace?'On pace':'Behind pace'; statusBg=onPace?'#085041':'#633806'; statusTxt=onPace?'#9FE1CB':'#FAC775';
+    }
   } else{ var finalPct=weeklyTarget?(weekUnits/weeklyTarget)*100:0; if(finalPct>100){statusLabel='Target exceeded';statusBg='#085041';statusTxt='#9FE1CB';}else if(finalPct>=TARGET_HIT_THRESHOLD*100){statusLabel='Target met';statusBg='#085041';statusTxt='#9FE1CB';}else{statusLabel='Target missed';statusBg='#791F1F';statusTxt='#F09595';} }
   // Build per-lot unit counts within this week's window only
   var weekLotUnits={};
