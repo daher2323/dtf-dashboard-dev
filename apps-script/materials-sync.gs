@@ -363,8 +363,24 @@ function _msColRangeA1(sheet, c) {
 // SERIAL_NUMBER cannot be told apart from a quantity, and an offset wrong by an hour breaks the
 // dedupe key, which IS the timestamp.
 var MS_RENDER = { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'FORMATTED_STRING' };
+
+// The slowest single REST call this execution has made. Globals reset per execution, so this is
+// naturally per-run. It exists because the cost of a call here is NOT proportional to what it
+// asks for: measured 12:30 on 9/11, reading the ONE header row took 151,803 ms in the same
+// execution where three whole columns took 148,932 ms. When the workbook is recalculating, every
+// read waits on it and the payload barely matters — so the only honest way to budget is to price
+// a call at what a call has actually cost today.
+var _msMaxCallMs = 0;
+function _msNoteCall(t0) {
+  var ms = Date.now() - t0;
+  if (ms > _msMaxCallMs) _msMaxCallMs = ms;
+  return ms;
+}
 function _msApiGet(a1) {
-  return Sheets.Spreadsheets.Values.get(_msSourceId(), a1, MS_RENDER).values || [];
+  var t0 = Date.now();
+  var v = Sheets.Spreadsheets.Values.get(_msSourceId(), a1, MS_RENDER).values || [];
+  _msNoteCall(t0);
+  return v;
 }
 
 // The string back to the Date that getValues() would have handed us. _msEventStamp is reused
@@ -451,11 +467,13 @@ function _msRestReader(dateCols) {
       if (last !== null) return last;
       var idx = _msKeyIdx(hdrs()), ranges = [_msColRangeA1(SOURCE_SHEET_NAME, 1)], i, n;
       for (i = 0; i < idx.length; i++) ranges.push(_msColRangeA1(SOURCE_SHEET_NAME, idx[i] + 1));
+      var t0 = Date.now();
       var res = Sheets.Spreadsheets.Values.batchGet(_msSourceId(), {
         ranges: ranges,
         valueRenderOption: MS_RENDER.valueRenderOption,
         dateTimeRenderOption: MS_RENDER.dateTimeRenderOption
       });
+      _msNoteCall(t0);
       var vr = res.valueRanges || [];
       last = 0;
       for (i = 0; i < vr.length; i++) { n = (vr[i].values || []).length; if (n > last) last = n; }
@@ -472,11 +490,23 @@ function _msRestReader(dateCols) {
   };
 }
 
-// The source, read the fast way where it is configured and the old way where it is not.
+// ONE reader per execution, and that is load-bearing rather than tidy. syncMaterialsAndReconcile
+// runs the sweep and then the reconcile, and _msDiff used to build its own reader — so a run paid
+// for the header row and the row count TWICE. That was invisible while a call cost 600 ms and
+// fatal once a call cost 100 s: the 12:45 execution on 9/11 spent 230 s opening the source, the
+// sweep correctly skipped itself, and then the reconcile opened it all over again and died at the
+// wall. Globals reset per execution, so this cache cannot go stale across runs; within a run the
+// source can gain a row from a form submit, which the pointer picks up on the next trigger.
+var _msSrcReader = null;
 function _msSourceReader(dest) {
-  if (_msRestAvailable()) return _msRestReader(_msDateCols(dest, 200));
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
-  return sheet ? _msSheetReader(sheet) : null;
+  if (_msSrcReader) return _msSrcReader;
+  if (_msRestAvailable()) {
+    _msSrcReader = _msRestReader(_msDateCols(dest, 200));
+  } else {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
+    _msSrcReader = sheet ? _msSheetReader(sheet) : null;
+  }
+  return _msSrcReader;
 }
 
 // ── The sweep ─────────────────────────────────────────────────────────────
@@ -513,7 +543,9 @@ function syncMaterials() {
     console.log('Source ready: ' + openMs + ' ms via ' + (_msRestAvailable() ? 'REST' : 'bind')
       + ' (' + srcLastRow + ' rows)  [lock ' + (tLock - started) + ', dest ' + (tDest - tLock)
       + ', date cols ' + (tCols - tDest) + ', headers ' + (tHdr - tCols)
-      + ', row count ' + (tLast - tHdr) + ' ms]');
+      + ', row count ' + (tLast - tHdr) + ' ms]'
+      + (_msMaxCallMs > 5000 ? '  — slowest REST call ' + Math.round(_msMaxCallMs / 1000)
+          + 's; the workbook is recalculating, not the reads being large.' : ''));
     // Kept for the fallback path, where opening the source can still eat the budget on its own.
     // Returning now leaves the pointer untouched, so the next trigger resumes exactly where this
     // one would have.
@@ -1258,8 +1290,18 @@ function syncMaterialsAndReconcile() {
   // plus a delete loop — that is the 6 min 1 s kill.
   var elapsed = Date.now() - t0;
   var deadline = t0 + MS_WALL_MS - MS_SAFETY_MS;
-  if (Date.now() > deadline - 60000) {
-    console.log('Sweep took ' + Math.round(elapsed / 1000) + 's; reconcile deferred to the next trigger.');
+  // What a reconcile actually costs, priced in calls rather than guessed in minutes. _msDiff is
+  // two window scans and two window loads before it writes anything — four source reads minimum,
+  // and more when the window breaks into runs. A flat 60 s of headroom was right while a call
+  // cost 600 ms and wrong the moment one cost 100 s, which is how the 12:45 run on 9/11 started a
+  // reconcile with 85 s left and lost the whole execution at the wall instead of deferring for
+  // free. When calls are fast this is inert (4 x 600 ms is well under the 60 s floor).
+  var need = Math.max(60000, 4 * _msMaxCallMs);
+  var remaining = deadline - Date.now();
+  if (remaining < need) {
+    console.log('Sweep took ' + Math.round(elapsed / 1000) + 's and a REST call is costing '
+      + Math.round(_msMaxCallMs / 1000) + 's; ' + Math.round(remaining / 1000)
+      + 's left is not enough for a diff. Reconcile deferred to the next trigger.');
     return;
   }
   // Same deadline, so both steps answer to one clock started at the top of this execution.
