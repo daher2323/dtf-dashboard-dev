@@ -313,34 +313,182 @@ function _msHeadersMatch(dest, srcHeaders) {
   return true;
 }
 
+
+// ── Reading the source without materialising the workbook ─────────────────
+// Established 2026-09-11 by msProbeSheetsApi, over the 500 most recent rows: the REST read agrees
+// with getValues() on every key and every signature cell, and costs 1.6s against a bind measured
+// at 0s, 1s, 149s, and — on the five executions killed on 9/10 — more than 361s. The bind is the
+// only thing in this script that can pass the six-minute wall, because it is a blocking call with
+// no clock inside it; every budget guard here sits after it and was never reached.
+//
+// The SOURCE moves to REST and the destination does not. The destination opens by id in ~200 ms
+// and is the side that gets written, which none of this writes.
+//
+// Falls back to the old SpreadsheetApp read when SOURCE_SS_ID is unset or the advanced service is
+// missing, so pasting this file without doing the two setup steps changes nothing.
+function _msRestAvailable() { return !!SOURCE_SS_ID && typeof Sheets !== 'undefined'; }
+
+function _msColLetter(n) {
+  var s = '', r;
+  while (n > 0) { r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - 1 - r) / 26; }
+  return s;
+}
+function _msSheetA1(sheet) { return "'" + String(sheet).replace(/'/g, "''") + "'!"; }
+function _msRangeA1(sheet, r1, c1, nr, nc) {
+  return _msSheetA1(sheet) + _msColLetter(c1) + r1 + ':' + _msColLetter(c1 + nc - 1) + (r1 + nr - 1);
+}
+function _msColRangeA1(sheet, c) {
+  return _msSheetA1(sheet) + _msColLetter(c) + ':' + _msColLetter(c);
+}
+
+// UNFORMATTED_VALUE keeps numbers as numbers — getValues() gives 350, and FORMATTED_VALUE would
+// give "350.00", which _msNorm cannot reconcile with it. FORMATTED_STRING is then the only date
+// rendering that does not require rebuilding the spreadsheet's timezone and DST by hand:
+// SERIAL_NUMBER cannot be told apart from a quantity, and an offset wrong by an hour breaks the
+// dedupe key, which IS the timestamp.
+var MS_RENDER = { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'FORMATTED_STRING' };
+function _msApiGet(a1) {
+  return Sheets.Spreadsheets.Values.get(SOURCE_SS_ID, a1, MS_RENDER).values || [];
+}
+
+// The string back to the Date that getValues() would have handed us. _msEventStamp is reused
+// rather than copied: it is the submit path's parser and it validates by round-tripping through
+// the script timezone, so a cell the sheet renders unexpectedly returns null instead of a
+// confidently wrong instant.
+function _msApiDate(v) {
+  var d = _msEventStamp(v);
+  if (d) return d;
+  // A date-only column carries no time for that regex to find. Same round-trip, fewer fields.
+  var s = _msTrim(v), m = s && s.match(/^(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})$/);
+  if (!m) return null;
+  var y = +m[3]; if (y < 100) y += 2000;
+  var dd = new Date(y, +m[1] - 1, +m[2]);
+  if (isNaN(dd.getTime())) return null;
+  return Utilities.formatDate(dd, Session.getScriptTimeZone(), 'M/d/yyyy')
+    === (+m[1]) + '/' + (+m[2]) + '/' + y ? dd : null;
+}
+
+// The API omits trailing empty cells and trailing empty rows; getValues() pads them. Every caller
+// here indexes by column, so that padding is not cosmetic. colOffset is the 0-based sheet column
+// the rectangle starts at, because dateCols is keyed on the sheet's columns, not the read's.
+function _msApiShape(rows, nr, nc, dateCols, colOffset) {
+  var out = [], i, j, r, v, d;
+  colOffset = colOffset || 0;
+  for (i = 0; i < nr; i++) {
+    r = [];
+    for (j = 0; j < nc; j++) {
+      v = (rows[i] && rows[i][j] !== undefined && rows[i][j] !== null) ? rows[i][j] : '';
+      if (dateCols[colOffset + j] && v !== '') { d = _msApiDate(v); if (d) v = d; }
+      r.push(v);
+    }
+    out.push(r);
+  }
+  return out;
+}
+
+// Which columns hold dates is asked of the DESTINATION: it is the side the comparison has to agree
+// with, and it is already open. Sampled over many rows, because a blank date cell in whichever row
+// you happened to pick would retire the whole column.
+function _msDateCols(dest, sample) {
+  var last = dest.getLastRow();
+  // An empty destination has nothing to teach. Column 0 is the Form timestamp positionally, which
+  // is the one thing about this sheet's shape that Forms guarantees.
+  if (last < 2) return { 0: true };
+  var w = dest.getLastColumn(), n = Math.min(sample || 200, last - 1);
+  var vals = dest.getRange(last - n + 1, 1, n, w).getValues(), out = {}, i, j;
+  for (i = 0; i < vals.length; i++)
+    for (j = 0; j < w; j++) if (vals[i][j] instanceof Date) out[j] = true;
+  return out;
+}
+
+// A stand-in for a Sheet offering only what this file asks of the source: where the data ends, how
+// wide it is, its headers, and a rectangle of values. The window and diff helpers below take one
+// of these rather than a Sheet, so one body of code serves the REST source and the SpreadsheetApp
+// destination without knowing which it holds.
+function _msSheetReader(sheet) {
+  return {
+    lastRow: function() { return sheet.getLastRow(); },
+    width: function() { return sheet.getLastColumn(); },
+    headers: function() { return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]; },
+    values: function(row, col, nr, nc) { return sheet.getRange(row, col, nr, nc).getValues(); }
+  };
+}
+
+function _msRestReader(dateCols) {
+  var headers = null, last = null;
+  function hdrs() {
+    if (headers === null) headers = _msApiGet(_msSheetA1(SOURCE_SHEET_NAME) + '1:1')[0] || [];
+    return headers;
+  }
+  return {
+    headers: hdrs,
+    width: function() { return hdrs().length; },
+    // NOT what getLastRow() answers, and the gap is not a rounding error. getLastRow() counts a
+    // cell with any content at all, and the five (Check) formulas are filled down ~700 rows past
+    // the last submission. Measured 2026-09-11: columns A, C and D all end at 24,613 while
+    // getLastRow() says 25,313. Values.get trims trailing empties, so a column's length IS its
+    // last populated row — which makes those three lengths proof that no row past 24,613 carries
+    // a timestamp, a lot or a part, not merely a sample that found none. The furthest of the
+    // three, not column A alone: a row with a blank timestamp but a lot and a part is still a pick.
+    lastRow: function() {
+      if (last !== null) return last;
+      var idx = _msKeyIdx(hdrs()), ranges = [_msColRangeA1(SOURCE_SHEET_NAME, 1)], i, n;
+      for (i = 0; i < idx.length; i++) ranges.push(_msColRangeA1(SOURCE_SHEET_NAME, idx[i] + 1));
+      var res = Sheets.Spreadsheets.Values.batchGet(SOURCE_SS_ID, {
+        ranges: ranges,
+        valueRenderOption: MS_RENDER.valueRenderOption,
+        dateTimeRenderOption: MS_RENDER.dateTimeRenderOption
+      });
+      var vr = res.valueRanges || [];
+      last = 0;
+      for (i = 0; i < vr.length; i++) { n = (vr[i].values || []).length; if (n > last) last = n; }
+      return last;
+    },
+    values: function(row, col, nr, nc) {
+      return _msApiShape(_msApiGet(_msRangeA1(SOURCE_SHEET_NAME, row, col, nr, nc)),
+                         nr, nc, dateCols, col - 1);
+    }
+  };
+}
+
+// The source, read the fast way where it is configured and the old way where it is not.
+function _msSourceReader(dest) {
+  if (_msRestAvailable()) return _msRestReader(_msDateCols(dest, 200));
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
+  return sheet ? _msSheetReader(sheet) : null;
+}
+
 // ── The sweep ─────────────────────────────────────────────────────────────
 function syncMaterials() {
   var started = Date.now();
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;            // another run holds it; next trigger will do
   try {
-    var source = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
-    if (!source) { console.warn('Source sheet "' + SOURCE_SHEET_NAME + '" not found'); return; }
+    // Destination first, and not only because it is the cheap one: the source reader asks it
+    // which columns hold dates.
     var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
+    var source = _msSourceReader(dest);
+    if (!source) { console.warn('Source sheet "' + SOURCE_SHEET_NAME + '" not found'); return; }
 
-    var srcLastRow = source.getLastRow(), srcLastCol = source.getLastColumn();
+    var srcLastCol = source.width(), srcLastRow = source.lastRow();
     // Always logged, because it is the number that decides whether a run lives or dies and it
     // was previously invisible — a sweep with nothing to copy printed NOTHING, so the only clue
-    // was a gap before the reconcile's first line. Measured on this source: 108s on one run,
-    // 318s on the next, for identical work. Materializing the workbook, not reading it.
-    var bindMs = Date.now() - started;
-    console.log('Source bind: ' + Math.round(bindMs / 1000) + 's (' + srcLastRow + ' rows).');
-    // If the bind alone spent the budget, stop here rather than spending more on the
-    // destination key read — that is ~24k rows x 3 columns and buys nothing we can use, since
-    // the append loop below would break on its first clock check anyway. Returning now leaves
-    // the pointer untouched, so the next trigger resumes exactly where this one would have.
-    if (bindMs > MAX_RUNTIME_MS) {
-      console.log('Bind alone exceeded the ' + (MAX_RUNTIME_MS / 60000)
+    // was a gap before the reconcile's first line. It also names which path ran, which is the
+    // one thing duration cannot tell you: 1.6s over REST and 149s through the bind both look
+    // like "fast" next to a 361s kill.
+    var openMs = Date.now() - started;
+    console.log('Source ready: ' + openMs + ' ms via ' + (_msRestAvailable() ? 'REST' : 'bind')
+      + ' (' + srcLastRow + ' rows).');
+    // Kept for the fallback path, where opening the source can still eat the budget on its own.
+    // Returning now leaves the pointer untouched, so the next trigger resumes exactly where this
+    // one would have.
+    if (openMs > MAX_RUNTIME_MS) {
+      console.log('Opening the source alone exceeded the ' + (MAX_RUNTIME_MS / 60000)
         + ' min budget; skipping this sweep. Nothing lost — the pointer is unchanged.');
       return;
     }
     if (srcLastRow < 2) return;
-    var srcHeaders = source.getRange(1, 1, 1, srcLastCol).getValues()[0];
+    var srcHeaders = source.headers();
     var keyIdx = _msKeyIdx(srcHeaders);
 
     // Headers changed (a column added to the form) — the only case that justifies rewriting
@@ -356,6 +504,13 @@ function syncMaterials() {
     var pointer = _msGetPointer();
     // A pointer past the end means the source shrank (rows deleted, or a different sheet):
     // start over rather than silently syncing nothing for ever.
+    //
+    // The move to REST trips this once, by design. The old read walked to getLastRow(), which
+    // counts the filled-down (Check) formulas, so the pointer has been parked ~700 rows past the
+    // last submission; the reader's end is the real one, so the first run after the switch
+    // re-sweeps from the top. It appends nothing — `seen` is built from the whole destination —
+    // and costs one pass of 500-row reads, resumable like any other. After that the pointer sits
+    // on a real row and stays there.
     if (pointer > srcLastRow) { pointer = 0; }
     var startRow = Math.max(2, pointer + 1);
     if (startRow > srcLastRow) return;          // nothing new
@@ -383,7 +538,7 @@ function syncMaterials() {
     while (row <= srcLastRow) {
       if (Date.now() - started > MAX_RUNTIME_MS) { stoppedEarly = true; break; }
       var count = Math.min(APPEND_CHUNK, srcLastRow - row + 1);
-      var block = source.getRange(row, 1, count, srcLastCol).getValues();
+      var block = source.values(row, 1, count, srcLastCol);
       var toAppend = [];
       for (var b = 0; b < block.length; b++) {
         if (_msIsBlankKey(block[b], keyIdx)) continue;    // spacer row, not a pick
@@ -500,14 +655,14 @@ function _msTs(v) {
 var MS_TAIL_BLOCK = 2000;      // rows per backwards read
 var MS_TAIL_SCAN_MAX = 12000;  // never look further back than this, whatever the dates say
 
-function _msWindowRows(sheet, cutoffMs) {
-  var last = sheet.getLastRow();
+function _msWindowRows(reader, cutoffMs) {
+  var last = reader.lastRow();
   if (last < 2) return [];
   var floorRow = Math.max(2, last - MS_TAIL_SCAN_MAX + 1);
   var out = [], row = last, start, vals, hit, i, t;
   while (row >= floorRow) {
     start = Math.max(floorRow, row - MS_TAIL_BLOCK + 1);
-    vals = sheet.getRange(start, 1, row - start + 1, 1).getValues();
+    vals = reader.values(start, 1, row - start + 1, 1);
     hit = 0;
     for (i = 0; i < vals.length; i++) {
       t = _msTs(vals[i][0]);
@@ -560,13 +715,13 @@ function _msDeleteRanges(rows) {
 }
 
 // Full-width values for a small set of rows, in source order, read per contiguous run.
-function _msFullRows(sheet, items, width) {
+function _msFullRows(reader, items, width) {
   var rows = [], i;
   for (i = 0; i < items.length; i++) rows.push(items[i].row);
   rows.sort(function(a, b) { return a - b; });
   var runs = _msMergeRuns(rows, MS_RUN_GAP), byRow = {}, r, block;
   for (r = 0; r < runs.length; r++) {
-    block = sheet.getRange(runs[r].start, 1, runs[r].count, width).getValues();
+    block = reader.values(runs[r].start, 1, runs[r].count, width);
     for (i = 0; i < block.length; i++) byRow[runs[r].start + i] = block[i];
   }
   var out = [];
@@ -576,11 +731,12 @@ function _msFullRows(sheet, items, width) {
 
 // Shared by the audit and the repair. Returns what differs; writes nothing.
 function _msDiff(days) {
-  var source = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
-  if (!source) throw new Error('Source sheet "' + SOURCE_SHEET_NAME + '" not found');
   var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
-  var width = source.getLastColumn();
-  var srcHeaders = source.getRange(1, 1, 1, width).getValues()[0];
+  var source = _msSourceReader(dest);
+  if (!source) throw new Error('Source sheet "' + SOURCE_SHEET_NAME + '" not found');
+  var destR = _msSheetReader(dest);
+  var width = source.width();
+  var srcHeaders = source.headers();
   if (!_msHeadersMatch(dest, srcHeaders)) throw new Error('Headers differ; run syncMaterials first');
   var keyIdx = _msKeyIdx(srcHeaders);
   var sigCols = _msSigCols(srcHeaders, width);
@@ -593,7 +749,7 @@ function _msDiff(days) {
 
   var t0 = Date.now();
   var srcRows = _msWindowRows(source, cutoffMs);
-  var destRows = _msWindowRows(dest, cutoffMs);
+  var destRows = _msWindowRows(destR, cutoffMs);
   console.log('Window scan: ' + srcRows.length + ' source / ' + destRows.length
     + ' destination row(s) in ' + (Date.now() - t0) + ' ms.');
 
@@ -618,7 +774,7 @@ function _msDiff(days) {
   // the dashboard never parses them, so they are not read either: only the runs of columns a
   // person enters. That is the same reason the sweep above is written in chunks — full-width
   // reads of this source are what put it over six minutes in the first place.
-  function loadWindow(sheet, rows, label) {
+  function loadWindow(reader, rows, label) {
     if (!rows.length) return [];
     var runs = _msMergeRuns(rows, MS_RUN_GAP), want = {}, out = [], i, r, c, block, colRun, rowsRead = 0;
     for (i = 0; i < rows.length; i++) want[rows[i]] = 1;
@@ -631,7 +787,7 @@ function _msDiff(days) {
       for (i = 0; i < runs[r].count; i++) acc.push([]);
       for (c = 0; c < colRuns.length; c++) {
         colRun = colRuns[c];
-        block = sheet.getRange(runs[r].start, colRun.start + 1, runs[r].count, colRun.len).getValues();
+        block = reader.values(runs[r].start, colRun.start + 1, runs[r].count, colRun.len);
         for (i = 0; i < block.length; i++) {
           for (var j = 0; j < colRun.len; j++) acc[i][colRun.start + j] = block[i][j];
         }
@@ -650,7 +806,7 @@ function _msDiff(days) {
   var src = loadWindow(source, srcRows, 'Source');
   console.log('Source load: ' + (Date.now() - t1) + ' ms.');
   var t2 = Date.now();
-  var dst = loadWindow(dest, destRows, 'Destination');
+  var dst = loadWindow(destR, destRows, 'Destination');
   console.log('Destination load: ' + (Date.now() - t2) + ' ms.');
 
   // Multiset compare: a duplicate submission is legitimate (two draws on one slip), so counts
@@ -917,77 +1073,6 @@ function msProbe() {
 // paste the source workbook id into SOURCE_SS_ID at the top of this file.
 var MS_PROBE_ROWS = 500;
 
-function _msColLetter(n) {
-  var s = '', r;
-  while (n > 0) { r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - 1 - r) / 26; }
-  return s;
-}
-function _msRangeA1(sheet, r1, c1, nr, nc) {
-  return "'" + String(sheet).replace(/'/g, "''") + "'!"
-    + _msColLetter(c1) + r1 + ':' + _msColLetter(c1 + nc - 1) + (r1 + nr - 1);
-}
-
-// UNFORMATTED_VALUE keeps numbers as numbers — getValues() gives 350, and FORMATTED_VALUE would
-// give "350.00", which _msNorm cannot reconcile with it. FORMATTED_STRING is then the only date
-// rendering that does not require rebuilding the spreadsheet's timezone and DST by hand:
-// SERIAL_NUMBER cannot be told apart from a quantity, and an offset wrong by an hour breaks the
-// dedupe key, which IS the timestamp.
-function _msApiGet(a1) {
-  var res = Sheets.Spreadsheets.Values.get(SOURCE_SS_ID, a1, {
-    valueRenderOption: 'UNFORMATTED_VALUE',
-    dateTimeRenderOption: 'FORMATTED_STRING'
-  });
-  return res.values || [];
-}
-
-// The string back to the Date that getValues() would have handed us. _msEventStamp is reused
-// rather than copied: it is the submit path's parser and it validates by round-tripping through
-// the script timezone, so a cell the sheet renders unexpectedly returns null instead of a
-// confidently wrong instant.
-function _msApiDate(v) {
-  var d = _msEventStamp(v);
-  if (d) return d;
-  // A date-only column carries no time for that regex to find. Same round-trip, fewer fields.
-  var s = _msTrim(v), m = s && s.match(/^(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})$/);
-  if (!m) return null;
-  var y = +m[3]; if (y < 100) y += 2000;
-  var dd = new Date(y, +m[1] - 1, +m[2]);
-  if (isNaN(dd.getTime())) return null;
-  return Utilities.formatDate(dd, Session.getScriptTimeZone(), 'M/d/yyyy')
-    === (+m[1]) + '/' + (+m[2]) + '/' + y ? dd : null;
-}
-
-// The API omits trailing empty cells and trailing empty rows; getValues() pads them. Every
-// caller here indexes by column, so that padding is not cosmetic.
-function _msApiShape(rows, nr, width, dateCols) {
-  var out = [], i, j, r, v, d;
-  for (i = 0; i < nr; i++) {
-    r = [];
-    for (j = 0; j < width; j++) {
-      v = (rows[i] && rows[i][j] !== undefined && rows[i][j] !== null) ? rows[i][j] : '';
-      if (dateCols[j] && v !== '') { d = _msApiDate(v); if (d) v = d; }
-      r.push(v);
-    }
-    out.push(r);
-  }
-  return out;
-}
-
-// Which columns hold dates is asked of the DESTINATION, not the source: it is the side we have to
-// agree with, it opens in ~200 ms, and it needs no bind. Sampled over many rows rather than one,
-// because a blank date cell in the row you happened to pick would retire the whole column.
-function _msDateColsFromDest(width, sample) {
-  var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
-  var last = dest.getLastRow();
-  if (last < 2) return {};
-  var w = Math.min(width, dest.getLastColumn());
-  var n = Math.min(sample || 200, last - 1);
-  var vals = dest.getRange(last - n + 1, 1, n, w).getValues(), out = {}, i, j;
-  for (i = 0; i < vals.length; i++)
-    for (j = 0; j < w; j++) if (vals[i][j] instanceof Date) out[j] = true;
-  return out;
-}
-
 function msProbeSheetsApi() {
   if (typeof Sheets === 'undefined') {
     console.error('The Sheets advanced service is not enabled: Editor -> Services -> '
@@ -1040,11 +1125,11 @@ function msProbeSheetsApi() {
   console.log('API total: ' + (tHdr + tCol + tTail) + ' ms — against the 149s bind a successful '
     + 'run pays before it reads anything.');
 
-  var dateCols = _msDateColsFromDest(width, 200), dcList = [];
+  var dateCols = _msDateCols(SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0], 200), dcList = [];
   for (c = 0; c < width; c++) if (dateCols[c]) dcList.push(c + ' "' + headers[c] + '"');
   console.log('Date columns, per the destination: ' + (dcList.join(', ') || 'none'));
 
-  var api = _msApiShape(raw, n, width, dateCols);
+  var api = _msApiShape(raw, n, width, dateCols, 0);
 
   // ── The half that actually decides it ──
   // Pay the bind once and read the same rectangle the slow way. A single normalised cell that
@@ -1067,7 +1152,7 @@ function msProbeSheetsApi() {
   if (liveLast > restLast) {
     var gapN = Math.min(liveLast - restLast, 50);
     var gap = _msApiShape(_msApiGet(_msRangeA1(SOURCE_SHEET_NAME, restLast + 1, 1, gapN, width)),
-                          gapN, width, {});
+                          gapN, width, {}, 0);
     var withKey = 0, g;
     for (g = 0; g < gapN; g++) {
       if (_msIsBlankKey(gap[g], keyIdx)) continue;
