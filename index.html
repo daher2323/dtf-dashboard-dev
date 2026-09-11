@@ -16214,6 +16214,69 @@ function recallMetricCell(v, l) {
 // Right-pane result: a single amber bubble (Amber Treatment 1) — dark inset well,
 // 2px amber border + soft glow, centered header (⚠ T# · material (part#)), a
 // hairline, then three metrics with white numbers and amber dividers. Handles the
+// ── Wrong-box guard, shared by both Quality lookups ──────────────────────────
+// The two tools are inverses over the same pick sheet — Recall takes a material lot
+// T#, Blend takes a production Lot # — so typing one into the other is an easy and
+// entirely reasonable mistake, and "No matches" is a dead end that says nothing about
+// why. It reads as "we have no record of this", which for a lot that ran last month is
+// simply false.
+//
+// The check is on the SHAPE of the query, then on whether the other tool would actually
+// resolve it, so the offer is only made when it will land. Material lots are T-prefixed
+// throughout the pick sheet; production lots are 6- or 7-digit (6 = stick/sample line,
+// 7 = standard), which is what makes them tellable apart at a glance.
+function _qLooksLikeTNum(q) { return /^T/i.test(String(q || '').trim()); }
+function _qLooksLikeProdLot(q) { return /^\d{6,7}[A-Z]?$/i.test(String(q || '').trim()); }
+
+// Does the OTHER tool have an answer for this? Cheap — both are single passes over
+// pickRows, already in memory, and this only runs on a failed lookup.
+function _qBlendWouldResolve(q) {
+  if (!pickRows.length) return false;
+  return traceLotComponents(pickRows, q).length > 0;
+}
+function _qRecallWouldResolve(q) {
+  if (!pickRows.length) return false;
+  return traceTNumber(pickRows, q).length > 0;
+}
+
+// Hand-off: switch tabs, carry the query across, run it. The user already typed the
+// number once; making them retype it in the other box is the whole friction this
+// removes.
+function qJumpToBlend(q) {
+  qualitySubTab = 'blend';
+  blendQuery = String(q || '');
+  recallResult = null; recallPending = '';
+  trackEvent('quality_subtab', { subtab: 'blend' });
+  renderSubBar();
+  blendResult = pickRows.length ? buildBlendResult(traceLotComponents(pickRows, normT(blendQuery)), blendQuery.trim()) : null;
+  if (!pickRows.length) { blendPending = normT(blendQuery); fetchMaterialsIfNeeded(); }
+  render();
+}
+function qJumpToRecall(q) {
+  qualitySubTab = 'recall';
+  recallQuery = String(q || '');
+  blendResult = null; blendPending = '';
+  trackEvent('quality_subtab', { subtab: 'recall_tracking' });
+  renderSubBar();
+  if (pickRows.length) {
+    var rr = buildRecallResult(traceTNumber(pickRows, normT(recallQuery)));
+    rr.tNum = normT(recallQuery);
+    recallResult = rr;
+  } else { recallResult = null; recallPending = normT(recallQuery); fetchMaterialsIfNeeded(); }
+  render();
+}
+
+// The body of a "wrong box" bubble. `other` is the tool that would answer it.
+function _qWrongBoxHTML(q, opts) {
+  var btn = opts.jumpFn
+    ? '<button onclick="' + opts.jumpFn + '(' + jsStr(q) + ')" style="margin-top:12px;padding:6px 14px;border-radius:8px;border:0.5px solid ' + opts.btnBorder + ';background:' + opts.btnBg + ';color:' + opts.btnTxt + ';font-size:12px;font-weight:600;cursor:pointer;font-family:system-ui;">'
+      + esc(opts.btnLabel) + '</button>'
+    : '';
+  return '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:4px;">' + esc(opts.title) + '</div>'
+    + '<div style="font-size:12px;color:#888780;line-height:1.5;">' + opts.body + '</div>'
+    + btn;
+}
+
 // zero-lots case inline. Show/hide vs the placeholder is the ternary in
 // renderRecall; this only builds the filled markup.
 function recallSummaryHTML(res) {
@@ -16222,9 +16285,42 @@ function recallSummaryHTML(res) {
   var wellStyle = 'width:100%;max-width:500px;box-sizing:border-box;background:#0e1114;border:2px solid rgba(245,166,35,0.6);border-radius:12px;padding:18px 24px;text-align:center;box-shadow:0 0 26px rgba(245,166,35,0.07);';
 
   if (res.rows.length === 0) {
-    return '<div style="'+wellStyle+'">'
+    var head = '<div style="'+wellStyle+'">'
       + '<div style="display:inline-flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px;">'+triangle
-      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#F5A623;font-weight:700;">'+tNum+'</span></div>'
+      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#F5A623;font-weight:700;">'+tNum+'</span></div>';
+    // A query with no leading T was never going to match — every material lot on the pick
+    // sheet is T-prefixed — so say that instead of "No matches", which reads as "we have no
+    // record of this" and sends someone looking for a data problem that isn't there.
+    if (!_qLooksLikeTNum(res.tNum)) {
+      // Whether it is a REAL lot is answered by the production feed, not by whether the
+      // pick sheet has components for it: 1,408 of 3,219 production lots (44%) carry no
+      // pick records at all, so resolving against the pick sheet alone would tell nearly
+      // half of all lots they merely "look like" a lot number. Those lots still have a
+      // Blend Lookup page worth landing on — it shows what they were packed in.
+      var shaped = _qLooksLikeProdLot(res.tNum);
+      var onProd = shaped && !!lotPackaging(res.tNum);
+      var hasComp = shaped && _qBlendWouldResolve(res.tNum);
+      var known = onProd || hasComp;
+      var body = 'Recall Tracking traces a <b style="color:#c9c7c1;">material lot T#</b> &mdash; the number on a drum, like <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9c7c1;">T33196</span> &mdash; back to the production runs that consumed it. Every material lot starts with <b style="color:#c9c7c1;">T</b>.';
+      if (known) {
+        body += '<br><br>' + esc(String(res.tNum)) + ' is a production Lot #. <b style="color:#c9c7c1;">Blend Lookup</b> goes the other way &mdash; it lists every component that went into a lot.'
+          // Said here rather than discovered after the jump, so the button never lands on
+          // an empty page unannounced.
+          + (hasComp ? '' : ' The pick sheet has no components logged against this one, but its packaging is recorded.');
+      } else if (shaped) {
+        body += '<br><br>This is shaped like a production Lot #, but no production run by that number was found either &mdash; so the number itself may be off.';
+      }
+      return head + _qWrongBoxHTML(res.tNum, {
+        title: known ? 'That\'s a Lot #, not a T#' : 'That doesn\'t look like a T#',
+        body: body,
+        // No button where nothing would answer it. An offer that dead-ends is worse than
+        // no offer.
+        jumpFn: known ? 'qJumpToBlend' : null,
+        btnLabel: 'Look it up in Blend Lookup',
+        btnBorder: 'rgba(53,138,221,0.6)', btnBg: 'rgba(53,138,221,0.15)', btnTxt: '#85B7EB'
+      }) + '</div>';
+    }
+    return head
       + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No matches</div>'
       + '<div style="font-size:12px;color:#888780;">No production runs found for this T#. Check the number and try again.</div>'
       + '</div>';
@@ -16703,9 +16799,26 @@ function blendSummaryHTML(res) {
   var wellStyle = 'width:100%;max-width:500px;box-sizing:border-box;background:#0e1114;border:2px solid rgba(53,138,221,0.55);border-radius:12px;padding:18px 24px;text-align:center;box-shadow:0 0 26px rgba(53,138,221,0.07);';
 
   if (res.rows.length === 0) {
-    return '<div style="'+wellStyle+'">'
+    var bhead = '<div style="'+wellStyle+'">'
       + '<div style="display:inline-flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px;">'+flask
-      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#85B7EB;font-weight:700;">'+lotTxt+'</span></div>'
+      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#85B7EB;font-weight:700;">'+lotTxt+'</span></div>';
+    // The mirror of the guard on Recall Tracking: the two tools are inverses, so the
+    // transposition happens in both directions and the dead end is just as unhelpful
+    // either way.
+    if (_qLooksLikeTNum(res.lot)) {
+      var rResolves = _qRecallWouldResolve(res.lot);
+      return bhead + _qWrongBoxHTML(res.lot, {
+        title: 'That\'s a T#, not a Lot #',
+        body: 'Blend Lookup takes a <b style="color:#c9c7c1;">production Lot #</b> &mdash; 6 or 7 digits, like <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9c7c1;">2609002</span> &mdash; and lists every component that went into it. A <b style="color:#c9c7c1;">T#</b> is a material lot.'
+          + (rResolves
+              ? '<br><br><b style="color:#c9c7c1;">Recall Tracking</b> goes the other way &mdash; it finds every production run that consumed this drum.'
+              : '<br><br><b style="color:#c9c7c1;">Recall Tracking</b> goes the other way, though no production run has consumed this T# on the pick sheet.'),
+        jumpFn: 'qJumpToRecall',
+        btnLabel: 'Trace it in Recall Tracking',
+        btnBorder: 'rgba(245,166,35,0.6)', btnBg: 'rgba(245,166,35,0.15)', btnTxt: '#F5A623'
+      }) + '</div>';
+    }
+    return bhead
       + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No components found</div>'
       + '<div style="font-size:12px;color:#888780;">No pick-sheet records for this Lot #. Check the number and try again.</div>'
       + '</div>';
