@@ -484,22 +484,36 @@ function syncMaterials() {
   var started = Date.now();
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;            // another run holds it; next trigger will do
+  var tLock = Date.now();
   try {
     // Destination first, and not only because it is the cheap one: the source reader asks it
     // which columns hold dates.
     var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
-    var source = _msSourceReader(dest);
+    var tDest = Date.now();
+    var source = _msSourceReader(dest);        // includes _msDateCols, which reads the destination
     if (!source) { console.warn('Source sheet "' + SOURCE_SHEET_NAME + '" not found'); return; }
-
-    var srcLastCol = source.width(), srcLastRow = source.lastRow();
+    var tCols = Date.now();
+    var srcLastCol = source.width();           // one REST call: the header row
+    var tHdr = Date.now();
+    var srcLastRow = source.lastRow();         // one REST batchGet: three whole columns
+    var tLast = Date.now();
     // Always logged, because it is the number that decides whether a run lives or dies and it
     // was previously invisible — a sweep with nothing to copy printed NOTHING, so the only clue
     // was a gap before the reconcile's first line. It also names which path ran, which is the
     // one thing duration cannot tell you: 1.6s over REST and 149s through the bind both look
     // like "fast" next to a 361s kill.
-    var openMs = Date.now() - started;
+    // Broken out per step because the total went 5,046 ms to 168,809 ms between two runs of
+    // IDENTICAL code, and one number cannot say which call moved. Each is a different suspect:
+    // the lock is another execution still holding it, the two destination figures are
+    // SpreadsheetApp, and the last two are REST — headers being the execution's first touch of
+    // the workbook, row count being its largest payload (three whole columns, ~74k cells). If
+    // the cost is in `headers` it is a first-touch wait and REST has only moved the bind; if it
+    // is in `row count` it is volume, and reading only past the pointer fixes it.
+    var openMs = tLast - started;
     console.log('Source ready: ' + openMs + ' ms via ' + (_msRestAvailable() ? 'REST' : 'bind')
-      + ' (' + srcLastRow + ' rows).');
+      + ' (' + srcLastRow + ' rows)  [lock ' + (tLock - started) + ', dest ' + (tDest - tLock)
+      + ', date cols ' + (tCols - tDest) + ', headers ' + (tHdr - tCols)
+      + ', row count ' + (tLast - tHdr) + ' ms]');
     // Kept for the fallback path, where opening the source can still eat the budget on its own.
     // Returning now leaves the pointer untouched, so the next trigger resumes exactly where this
     // one would have.
