@@ -26,9 +26,15 @@
 // interrupted run resumes where it left off instead of starting over.
 
 var DEST_SHEET_ID = '1PouHBkH48hJ6XT8mIQ2djixJ8rxBqtdohVJupy3Hp9Q';
-// The source workbook's own id. Only the REST read path below uses it — everything else reaches
-// the source through getActiveSpreadsheet(), which is the call that costs 149s. Paste it from the
-// workbook's URL: /spreadsheets/d/<THIS>/edit. See msProbeSheetsApi().
+// The source workbook's own id. Only the REST read path uses it — everything else reaches the
+// source through getActiveSpreadsheet(), which is the call that costs 149s.
+//
+// Set it ONCE, here, from the workbook's URL (/spreadsheets/d/<THIS>/edit) and run anything: the
+// first use copies it into script properties, and from then on it is remembered. This file is
+// deployed by pasting it over the editor's copy, which would otherwise blank the constant on
+// every deploy and drop the sync back to the bind with nothing but a log line to notice it by.
+// A value here always wins, so it stays the way to point the sync somewhere else.
+var PROP_SOURCE_ID = 'materialsSync.sourceId';
 var SOURCE_SS_ID = '';
 var SOURCE_SHEET_NAME = 'Materials';
 var KEY_HEADERS = ['Order Lot #', 'Part #'];
@@ -326,7 +332,17 @@ function _msHeadersMatch(dest, srcHeaders) {
 //
 // Falls back to the old SpreadsheetApp read when SOURCE_SS_ID is unset or the advanced service is
 // missing, so pasting this file without doing the two setup steps changes nothing.
-function _msRestAvailable() { return !!SOURCE_SS_ID && typeof Sheets !== 'undefined'; }
+function _msSourceId() {
+  if (SOURCE_SS_ID) {
+    if (_msProps().getProperty(PROP_SOURCE_ID) !== SOURCE_SS_ID) {
+      _msProps().setProperty(PROP_SOURCE_ID, SOURCE_SS_ID);
+      console.log('Source workbook id remembered; it survives the next paste.');
+    }
+    return SOURCE_SS_ID;
+  }
+  return _msProps().getProperty(PROP_SOURCE_ID) || '';
+}
+function _msRestAvailable() { return !!_msSourceId() && typeof Sheets !== 'undefined'; }
 
 function _msColLetter(n) {
   var s = '', r;
@@ -348,7 +364,7 @@ function _msColRangeA1(sheet, c) {
 // dedupe key, which IS the timestamp.
 var MS_RENDER = { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'FORMATTED_STRING' };
 function _msApiGet(a1) {
-  return Sheets.Spreadsheets.Values.get(SOURCE_SS_ID, a1, MS_RENDER).values || [];
+  return Sheets.Spreadsheets.Values.get(_msSourceId(), a1, MS_RENDER).values || [];
 }
 
 // The string back to the Date that getValues() would have handed us. _msEventStamp is reused
@@ -434,7 +450,7 @@ function _msRestReader(dateCols) {
       if (last !== null) return last;
       var idx = _msKeyIdx(hdrs()), ranges = [_msColRangeA1(SOURCE_SHEET_NAME, 1)], i, n;
       for (i = 0; i < idx.length; i++) ranges.push(_msColRangeA1(SOURCE_SHEET_NAME, idx[i] + 1));
-      var res = Sheets.Spreadsheets.Values.batchGet(SOURCE_SS_ID, {
+      var res = Sheets.Spreadsheets.Values.batchGet(_msSourceId(), {
         ranges: ranges,
         valueRenderOption: MS_RENDER.valueRenderOption,
         dateTimeRenderOption: MS_RENDER.dateTimeRenderOption
@@ -1079,9 +1095,10 @@ function msProbeSheetsApi() {
       + 'Google Sheets API. Nothing here can run without it.');
     return;
   }
-  if (!SOURCE_SS_ID) {
-    console.error('SOURCE_SS_ID is empty. Paste the source workbook id from its URL '
-      + '(/spreadsheets/d/<id>/edit) into the constant at the top of this file.');
+  if (!_msSourceId()) {
+    console.error('No source workbook id. Paste it from the workbook URL '
+      + '(/spreadsheets/d/<id>/edit) into SOURCE_SS_ID at the top of this file; it is remembered '
+      + 'after the first run.');
     return;
   }
   // Everything that does not need the workbook materialised runs FIRST and logs as it goes, so
