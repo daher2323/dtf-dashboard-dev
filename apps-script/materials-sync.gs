@@ -1260,6 +1260,85 @@ function msProbeSheetsApi() {
     : 'Shapes agree. The REST read is a drop-in for the source side.');
 }
 
+// ── What the (Check) columns actually cost ────────────────────────────────
+// Everything since 9/10 has been the sync absorbing this workbook's recalculation load: a
+// per-call cost that lands on a different call every run (headers 152s at 12:30, row count 149s,
+// source load 45s at 1:15) on reads whose sizes never change. That shape is recalculation, and
+// the (Check) formulas are the only thing on this tab generating it at scale.
+//
+// Before trimming anything, read them. Two things decide what the fix is, and neither can be
+// guessed: whether a formula reaches ANOTHER workbook (IMPORTRANGE per row is the expensive
+// pattern — the production sheet has the same disease, 1,600+ external nodes), and how far down
+// the column they are filled. Read-only: valueRenderOption FORMULA returns the formula text
+// instead of its result, and nothing here writes.
+function msCheckFormulas() {
+  if (typeof Sheets === 'undefined') { console.error('Enable the Sheets advanced service first.'); return; }
+  if (!_msSourceId()) { console.error('No source workbook id — see SOURCE_SS_ID.'); return; }
+  var SH = _msSheetA1(SOURCE_SHEET_NAME);
+
+  var headers = _msApiGet(SH + '1:1')[0] || [];
+  if (!headers.length) { console.error('No header row came back.'); return; }
+  console.log(headers.length + ' columns: ' + headers.map(function(h, i) {
+    return _msColLetter(i + 1) + '=' + h;
+  }).join('  '));
+
+  // A small full-width sample in FORMULA mode finds EVERY formula column, not just the ones
+  // named (Check) — there may be others nobody has mentioned.
+  var t = Date.now();
+  var sample = Sheets.Spreadsheets.Values.get(_msSourceId(),
+    _msRangeA1(SOURCE_SHEET_NAME, 2, 1, 40, headers.length),
+    { valueRenderOption: 'FORMULA' }).values || [];
+  console.log('Sample of 40 rows read in ' + (Date.now() - t) + ' ms.');
+
+  var fxCols = [], c, r, v;
+  for (c = 0; c < headers.length; c++) {
+    for (r = 0; r < sample.length; r++) {
+      v = (sample[r] || [])[c];
+      if (typeof v === 'string' && v.charAt(0) === '=') { fxCols.push(c); break; }
+    }
+  }
+  if (!fxCols.length) { console.log('No formula columns found in the sample.'); return; }
+  console.log('Formula columns: ' + fxCols.map(function(i) {
+    return _msColLetter(i + 1) + ' "' + headers[i] + '"';
+  }).join(', '));
+
+  // One formula verbatim per column, plus the two facts that decide the fix.
+  var ranges = fxCols.map(function(i) { return _msColRangeA1(SOURCE_SHEET_NAME, i + 1); });
+  t = Date.now();
+  var res = Sheets.Spreadsheets.Values.batchGet(_msSourceId(),
+    { ranges: ranges, valueRenderOption: 'FORMULA' });
+  console.log('Full formula columns read in ' + (Date.now() - t) + ' ms.');
+
+  var vr = res.valueRanges || [], grand = 0, anyImport = false;
+  for (var k = 0; k < fxCols.length; k++) {
+    var col = (vr[k] && vr[k].values) || [], n = 0, lastRow = 0, first = '';
+    for (r = 0; r < col.length; r++) {
+      v = (col[r] || [])[0];
+      if (typeof v === 'string' && v.charAt(0) === '=') {
+        n++; lastRow = r + 1;
+        if (!first) first = v;
+      }
+    }
+    grand += n;
+    var imports = /IMPORTRANGE/i.test(first);
+    if (imports) anyImport = true;
+    console.log('\n' + _msColLetter(fxCols[k] + 1) + ' "' + headers[fxCols[k]] + '": '
+      + n.toLocaleString() + ' formula cell(s), last at row ' + lastRow
+      + (imports ? '   ** reaches another workbook (IMPORTRANGE) **' : ''));
+    console.log('    ' + first);
+  }
+
+  var dataEnd = _msSourceReader(SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0]).lastRow();
+  console.log('\n' + grand.toLocaleString() + ' formula cells in total; data ends at row '
+    + dataEnd + '.');
+  console.log(anyImport
+    ? 'At least one is a PER-ROW IMPORTRANGE. That is the expensive pattern: every row is its own '
+      + 'external fetch, and Google throttles them. Consolidating to one IMPORTRANGE into a helper '
+      + 'tab, then looking up against that, is the fix at source.'
+    : 'No IMPORTRANGE — these resolve inside this workbook, so the cost is volume, not external '
+      + 'fetches, and freezing the historical rows to values is the whole fix.');
+}
+
 // The editor's Run button cannot pass arguments, so the two you click from the dropdown
 // take none and use the default window.
 function auditMaterialsNow() { auditMaterialsSync(MS_RECONCILE_DAYS); }
