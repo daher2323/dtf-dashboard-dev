@@ -371,6 +371,28 @@ var MS_RENDER = { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 
 // read waits on it and the payload barely matters — so the only honest way to budget is to price
 // a call at what a call has actually cost today.
 var _msMaxCallMs = 0;
+
+// ── A 503 is not a failure of this script ─────────────────────────────────
+// Measured 1:30 on 9/11: values.batchGet threw "The service is currently unavailable" after 288s,
+// syncMaterials rethrew it, and the execution failed — a failure notification, and no reconcile,
+// for something that needed nothing from anyone and was gone by the next trigger (the three runs
+// after it took 28s, 33s and 10s). The pointer is untouched by a failed read, so a transient
+// outage costs exactly one deferred cycle.
+//
+// It still has to be possible to find out that the sync is down, so this stays quiet for a blip
+// and gets loud if it persists: the count survives in script properties, and once the source has
+// been unreachable for MS_TRANSIENT_ALERT runs in a row the error is rethrown and the notification
+// fires. An hour of silence is a blip; four hours is something to look at.
+//
+// Matching on the message rather than a status code because that is what Apps Script surfaces. A
+// missing header or a bad workbook id must NOT match — those need a person, and they throw loudly.
+var PROP_TRANSIENT = 'materialsSync.transientRuns';
+var MS_TRANSIENT_ALERT = 4;          // ~1 hour at a 15-minute cadence
+var _msSourceDown = false;           // per-execution: the source could not be read at all
+var _MS_TRANSIENT_RE = /currently unavailable|service unavailable|internal error|backend ?error|rate.?limit|quota exceeded|try again|temporarily|timeout|timed out|\b(?:429|500|502|503|504)\b/i;
+function _msIsTransient(err) {
+  return _MS_TRANSIENT_RE.test(String((err && (err.message || err)) || ''));
+}
 function _msNoteCall(t0) {
   var ms = Date.now() - t0;
   if (ms > _msMaxCallMs) _msMaxCallMs = ms;
@@ -554,6 +576,10 @@ function syncMaterials() {
         + ' min budget; skipping this sweep. Nothing lost — the pointer is unchanged.');
       return;
     }
+    // The source answered, so any run of transient failures is over. Cleared here rather than at
+    // the end of the function because every path below this point has already proved the point.
+    if (_msProps().getProperty(PROP_TRANSIENT)) _msProps().deleteProperty(PROP_TRANSIENT);
+
     if (srcLastRow < 2) return;
     var srcHeaders = source.headers();
     var keyIdx = _msKeyIdx(srcHeaders);
@@ -629,6 +655,23 @@ function syncMaterials() {
         + ' source row(s) still to read — the next trigger resumes from row ' + row + '.');
     }
   } catch (err) {
+    // Google being briefly unavailable is not this script failing. Return cleanly so the trigger
+    // does not report a failure and the reconcile is skipped rather than sent at a source that
+    // just refused to answer — unless it has been happening for long enough to be real.
+    if (_msIsTransient(err)) {
+      _msSourceDown = true;
+      var n = (parseInt(_msProps().getProperty(PROP_TRANSIENT), 10) || 0) + 1;
+      _msProps().setProperty(PROP_TRANSIENT, String(n));
+      var msg = String((err && err.message) || err);
+      console.warn('Source read failed transiently: ' + msg + '  (run ' + n + ' in a row). '
+        + 'Nothing lost — the pointer is unchanged and the next trigger picks up where this left off.');
+      if (n >= MS_TRANSIENT_ALERT) {
+        console.error('That is ' + n + ' consecutive runs unable to read the source. Raising it so '
+          + 'the trigger reports a failure — this is no longer a blip.');
+        throw err;
+      }
+      return;
+    }
     console.error('syncMaterials failed: ' + (err && err.stack || err));
     throw err;
   } finally {
@@ -1367,6 +1410,12 @@ function syncMaterialsAndReconcile() {
   // there is more than the safety margin left to do it in. At the old flat 240000 a sweep could
   // finish at 239s and hand the reconcile 76s of real headroom, which is not enough for a diff
   // plus a delete loop — that is the 6 min 1 s kill.
+  // The sweep could not read the source at all. A reconcile would ask the same API the same
+  // question and get the same answer, slowly.
+  if (_msSourceDown) {
+    console.log('Source unreadable this run; reconcile skipped too.');
+    return;
+  }
   var elapsed = Date.now() - t0;
   var deadline = t0 + MS_WALL_MS - MS_SAFETY_MS;
   // What a reconcile actually costs, priced in calls rather than guessed in minutes. _msDiff is
