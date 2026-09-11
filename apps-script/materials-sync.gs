@@ -427,6 +427,7 @@ function _msSheetReader(sheet) {
     width: function() { return sheet.getLastColumn(); },
     headers: function() { return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]; },
     values: function(row, col, nr, nc) { return sheet.getRange(row, col, nr, nc).getValues(); }
+    // `raw` is ignored here: a Sheet hands back Date objects and there is nothing to convert.
   };
 }
 
@@ -460,9 +461,13 @@ function _msRestReader(dateCols) {
       for (i = 0; i < vr.length; i++) { n = (vr[i].values || []).length; if (n > last) last = n; }
       return last;
     },
-    values: function(row, col, nr, nc) {
+    // `raw` skips the string-to-Date conversion. Each one round-trips through Utilities.
+    // formatDate to validate, which is a service call, and the window scan does 2,000 of them per
+    // block for a number it only compares against a cutoff — _msTs parses the string directly.
+    // Measured before this: a 515-row window cost 14.8s to scan.
+    values: function(row, col, nr, nc, raw) {
       return _msApiShape(_msApiGet(_msRangeA1(SOURCE_SHEET_NAME, row, col, nr, nc)),
-                         nr, nc, dateCols, col - 1);
+                         nr, nc, raw ? {} : dateCols, col - 1);
     }
   };
 }
@@ -678,7 +683,7 @@ function _msWindowRows(reader, cutoffMs) {
   var out = [], row = last, start, vals, hit, i, t;
   while (row >= floorRow) {
     start = Math.max(floorRow, row - MS_TAIL_BLOCK + 1);
-    vals = reader.values(start, 1, row - start + 1, 1);
+    vals = reader.values(start, 1, row - start + 1, 1, true);   // timestamps unconverted: _msTs takes either
     hit = 0;
     for (i = 0; i < vals.length; i++) {
       t = _msTs(vals[i][0]);
