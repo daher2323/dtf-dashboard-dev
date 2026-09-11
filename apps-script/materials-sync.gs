@@ -26,6 +26,10 @@
 // interrupted run resumes where it left off instead of starting over.
 
 var DEST_SHEET_ID = '1PouHBkH48hJ6XT8mIQ2djixJ8rxBqtdohVJupy3Hp9Q';
+// The source workbook's own id. Only the REST read path below uses it — everything else reaches
+// the source through getActiveSpreadsheet(), which is the call that costs 149s. Paste it from the
+// workbook's URL: /spreadsheets/d/<THIS>/edit. See msProbeSheetsApi().
+var SOURCE_SS_ID = '';
 var SOURCE_SHEET_NAME = 'Materials';
 var KEY_HEADERS = ['Order Lot #', 'Part #'];
 
@@ -873,6 +877,182 @@ function msProbe() {
   timeRead(dest, 'destination tail col A', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), 1);
   timeRead(dest, 'destination tail full width', Math.max(2, lr - 999), 1, Math.min(1000, lr - 1), dest.getLastColumn());
   console.log('Probe complete.');
+}
+
+// ── Can the source be read without materialising the workbook? ────────────
+// The bind is the whole problem. A run that SUCCEEDED on 9/10 logged "Source bind: 149s (25231
+// rows)" and finished in 176s — 85% of the execution spent before a single row was read. The five
+// that died the same morning logged NOTHING AT ALL, not even that line, which is the first
+// statement after getSheetByName returns: they were killed inside the bind. No budget check can
+// help there, because the clock cannot be read inside a blocking call. The guards above are
+// correct and they were never reached.
+//
+// Sheets.Spreadsheets.Values.get reads the same cells over REST. It returns what the sheet last
+// computed and never asks SpreadsheetApp to materialise the workbook, so it does not pay for the
+// ~126,000 (Check) formulas (25,231 rows x 5) resolving T#s against inventory, which is the most
+// likely thing the 149s is buying.
+//
+// SPEED IS THE EASY HALF. The values have to match cell for cell first. The reconcile compares a
+// source signature against a destination signature; if the API renders one cell differently from
+// getValues() — a timestamp as text, a quantity as "350.00" — every row in the window reads as
+// drift. Deletes are capped at MS_MAX_DELETE, but APPENDS ARE NOT, so a shape mismatch would
+// re-append the entire window as duplicates and the next run would refuse to clean them up.
+// This probe measures the speed AND the agreement, writes nothing, and is what has to pass
+// before any read path changes.
+//
+// Setup, both one-time: Editor -> Services -> add "Google Sheets API" (identifier `Sheets`), and
+// paste the source workbook id into SOURCE_SS_ID at the top of this file.
+var MS_PROBE_ROWS = 500;
+
+function _msColLetter(n) {
+  var s = '', r;
+  while (n > 0) { r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = (n - 1 - r) / 26; }
+  return s;
+}
+function _msRangeA1(sheet, r1, c1, nr, nc) {
+  return "'" + String(sheet).replace(/'/g, "''") + "'!"
+    + _msColLetter(c1) + r1 + ':' + _msColLetter(c1 + nc - 1) + (r1 + nr - 1);
+}
+
+// UNFORMATTED_VALUE keeps numbers as numbers — getValues() gives 350, and FORMATTED_VALUE would
+// give "350.00", which _msNorm cannot reconcile with it. FORMATTED_STRING is then the only date
+// rendering that does not require rebuilding the spreadsheet's timezone and DST by hand:
+// SERIAL_NUMBER cannot be told apart from a quantity, and an offset wrong by an hour breaks the
+// dedupe key, which IS the timestamp.
+function _msApiGet(a1) {
+  var res = Sheets.Spreadsheets.Values.get(SOURCE_SS_ID, a1, {
+    valueRenderOption: 'UNFORMATTED_VALUE',
+    dateTimeRenderOption: 'FORMATTED_STRING'
+  });
+  return res.values || [];
+}
+
+// The string back to the Date that getValues() would have handed us. _msEventStamp is reused
+// rather than copied: it is the submit path's parser and it validates by round-tripping through
+// the script timezone, so a cell the sheet renders unexpectedly returns null instead of a
+// confidently wrong instant.
+function _msApiDate(v) {
+  var d = _msEventStamp(v);
+  if (d) return d;
+  // A date-only column carries no time for that regex to find. Same round-trip, fewer fields.
+  var s = _msTrim(v), m = s && s.match(/^(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})$/);
+  if (!m) return null;
+  var y = +m[3]; if (y < 100) y += 2000;
+  var dd = new Date(y, +m[1] - 1, +m[2]);
+  if (isNaN(dd.getTime())) return null;
+  return Utilities.formatDate(dd, Session.getScriptTimeZone(), 'M/d/yyyy')
+    === (+m[1]) + '/' + (+m[2]) + '/' + y ? dd : null;
+}
+
+// The API omits trailing empty cells and trailing empty rows; getValues() pads them. Every
+// caller here indexes by column, so that padding is not cosmetic.
+function _msApiShape(rows, nr, width, dateCols) {
+  var out = [], i, j, r, v, d;
+  for (i = 0; i < nr; i++) {
+    r = [];
+    for (j = 0; j < width; j++) {
+      v = (rows[i] && rows[i][j] !== undefined && rows[i][j] !== null) ? rows[i][j] : '';
+      if (dateCols[j] && v !== '') { d = _msApiDate(v); if (d) v = d; }
+      r.push(v);
+    }
+    out.push(r);
+  }
+  return out;
+}
+
+// Which columns hold dates is asked of the DESTINATION, not the source: it is the side we have to
+// agree with, it opens in ~200 ms, and it needs no bind. Sampled over many rows rather than one,
+// because a blank date cell in the row you happened to pick would retire the whole column.
+function _msDateColsFromDest(width, sample) {
+  var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
+  var last = dest.getLastRow();
+  if (last < 2) return {};
+  var w = Math.min(width, dest.getLastColumn());
+  var n = Math.min(sample || 200, last - 1);
+  var vals = dest.getRange(last - n + 1, 1, n, w).getValues(), out = {}, i, j;
+  for (i = 0; i < vals.length; i++)
+    for (j = 0; j < w; j++) if (vals[i][j] instanceof Date) out[j] = true;
+  return out;
+}
+
+function msProbeSheetsApi() {
+  if (typeof Sheets === 'undefined') {
+    console.error('The Sheets advanced service is not enabled: Editor -> Services -> '
+      + 'Google Sheets API. Nothing here can run without it.');
+    return;
+  }
+  if (!SOURCE_SS_ID) {
+    console.error('SOURCE_SS_ID is empty. Paste the source workbook id from its URL '
+      + '(/spreadsheets/d/<id>/edit) into the constant at the top of this file.');
+    return;
+  }
+  // Everything that does not need the workbook materialised runs FIRST and logs as it goes, so
+  // that if the bind further down eats the execution, the numbers we came for are already in the
+  // log. That is the failure mode this whole exercise is about.
+  var t, headers, width, colA, lastRow, raw, tHdr, tCol, tTail, i, j, c;
+
+  t = Date.now();
+  headers = _msApiGet("'" + SOURCE_SHEET_NAME + "'!1:1")[0] || [];
+  tHdr = Date.now() - t;
+  width = headers.length;
+  console.log('API headers: ' + width + ' column(s) in ' + tHdr + ' ms.');
+  if (!width) { console.error('No header row came back — check the sheet name and the id.'); return; }
+
+  t = Date.now();
+  colA = _msApiGet("'" + SOURCE_SHEET_NAME + "'!A:A");
+  tCol = Date.now() - t;
+  lastRow = colA.length;
+  console.log('API column A: last row ' + lastRow + ' in ' + tCol + ' ms.');
+
+  var start = Math.max(2, lastRow - MS_PROBE_ROWS + 1), n = lastRow - start + 1;
+  t = Date.now();
+  raw = _msApiGet(_msRangeA1(SOURCE_SHEET_NAME, start, 1, n, width));
+  tTail = Date.now() - t;
+  console.log('API tail (' + n + ' x ' + width + ' from row ' + start + '): ' + tTail + ' ms.');
+  console.log('API total: ' + (tHdr + tCol + tTail) + ' ms — against the 149s bind a successful '
+    + 'run pays before it reads anything.');
+
+  var dateCols = _msDateColsFromDest(width, 200), dcList = [];
+  for (c = 0; c < width; c++) if (dateCols[c]) dcList.push(c + ' "' + headers[c] + '"');
+  console.log('Date columns, per the destination: ' + (dcList.join(', ') || 'none'));
+
+  var api = _msApiShape(raw, n, width, dateCols);
+
+  // ── The half that actually decides it ──
+  // Pay the bind once and read the same rectangle the slow way. A single normalised cell that
+  // differs is a row the reconcile would read as drift.
+  t = Date.now();
+  var src = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET_NAME);
+  console.log('SpreadsheetApp bind: ' + Math.round((Date.now() - t) / 1000) + 's.');
+  if (!src) { console.error('Source sheet "' + SOURCE_SHEET_NAME + '" not found.'); return; }
+  t = Date.now();
+  var live = src.getRange(start, 1, n, Math.min(width, src.getLastColumn())).getValues();
+  console.log('getValues() on the same rectangle: ' + (Date.now() - t) + ' ms.');
+
+  var keyIdx = _msKeyIdx(headers), sigCols = _msSigCols(headers, width);
+  var keyBad = 0, rowBad = 0, cellBad = 0, a, b;
+  for (i = 0; i < n; i++) {
+    if (_msKeyOf(api[i], keyIdx) !== _msKeyOf(live[i], keyIdx)) {
+      keyBad++;
+      if (keyBad <= 5) console.warn('row ' + (start + i) + ' KEY differs\n  api  '
+        + _msKeyOf(api[i], keyIdx) + '\n  live ' + _msKeyOf(live[i], keyIdx));
+    }
+    if (_msSig(api[i], sigCols) === _msSig(live[i], sigCols)) continue;
+    rowBad++;
+    for (j = 0; j < sigCols.length; j++) {
+      a = _msNorm(api[i][sigCols[j]]); b = _msNorm(live[i][sigCols[j]]);
+      if (a === b) continue;
+      cellBad++;
+      if (cellBad <= 15) console.warn('row ' + (start + i) + ' col ' + sigCols[j] + ' "'
+        + headers[sigCols[j]] + '": api ' + JSON.stringify(a) + '  vs live ' + JSON.stringify(b));
+    }
+  }
+  console.log(n + ' row(s) compared: ' + (n - keyBad) + ' key(s) agree, ' + rowBad
+    + ' row(s) differ on ' + cellBad + ' cell(s).');
+  console.log((keyBad || cellBad)
+    ? 'DO NOT change the read path until both are nil. A signature mismatch re-appends the whole '
+      + 'window as duplicates, and appends have no ceiling the way deletes have MS_MAX_DELETE.'
+    : 'Shapes agree. The REST read is a drop-in for the source side.');
 }
 
 // The editor's Run button cannot pass arguments, so the two you click from the dropdown
