@@ -1715,7 +1715,7 @@ function exportDetailExcel() {
     var cust = (l.product||'').split('-')[0].trim();
     var prod = (l.product||'').split('-').slice(1).join('-').trim() || l.product;
     return [l.date, l.lot, cust, prod, l.line||'', l.bottleSize||'', l.jarSize||'',
-      _specClean(l.scoop) || ((l.scoop||'').trim() ? 'None' : ''),
+      _specClean(l.scoop),
       l.projected||'', (l.dayUnits!=null?l.dayUnits:'')||'', l.finalUnits||'', dev!==null?parseFloat(dev.toFixed(2)):'', l.status||''];
   }));
   var ws = XLSX.utils.aoa_to_sheet(data);
@@ -7950,14 +7950,20 @@ function renderToday() {
 // cards, which each built it inline and had already drifted apart on the N/A
 // pattern (Daily spelled out the doubled-up forms, Weekly did not).
 //
-// Scoop is the newest of the three and the reason a blank and an explicit "None"
-// must not render the same. The column only started being logged 2026-09-02 and
-// is blank on ~96% of rows, so a blank means nobody recorded it and prints
-// nothing — a card is the wrong place to assert a spec that isn't there. An
-// explicit None/N/A is a fact about the product, that it ships without a scoop,
-// and prints as "no scoop" in a recessive grey. Jar and lid are filled on
-// effectively every lot (0 N/A on containers, 38 rows on lids), so they only go
-// missing for real and need no such treatment.
+// Scoop is the newest of the three: it only started being logged 2026-09-02 and
+// is blank on ~96% of rows, so a blank prints nothing — a card is the wrong
+// place to assert a spec nobody recorded.
+//
+// An explicit N/A prints nothing either, which is the one place scoop does NOT
+// follow the blank-vs-None distinction the rest of this file keeps. N/A is
+// written only on capsule lots — all 8 that carry it are Line #2 — and a capsule
+// card already says Capsules in the header above it, so "no scoop" would be
+// restating the line, not adding a fact. Blank still carries no claim: 4 of the
+// blank lots on days when scoop WAS being logged are powder (Line #1/#4), i.e.
+// lots that do take a scoop and simply went unfilled.
+//
+// Jar and lid are filled on effectively every lot (0 N/A on containers, 38 rows
+// on lids), so they only go missing for real and need no such treatment.
 //
 // Values come off the lot's first row that carries them (buildLotMap), not the
 // full multi-row reconciliation lotPackaging() does — a card shows the spec, the
@@ -7973,7 +7979,6 @@ function lotSpecHTML(l) {
   var parts = [l.bottleSize||l.jarSize, lid].filter(Boolean).map(esc);
   var scoop = _specClean(l.scoop);
   if (scoop) parts.push(esc(scoop));
-  else if ((l.scoop||'').trim()) parts.push('<span style="color:#444441;">no scoop</span>');
   if (!parts.length) return '';
   return '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'
     + parts.join(' / ') + '</div>';
@@ -8799,17 +8804,6 @@ function fmtStartTime(t){
   var h12=h%12; if(h12===0)h12=12;
   return h12+':'+(mn<10?'0':'')+mn+' '+ap;
 }
-// Table counterpart to lotSpecHTML's scoop handling: a value, an explicit
-// "None" the sheet recorded, or an em dash for never-logged. Same three states,
-// spelled out here because a table column has the room a card subline does not.
-function _specCellHTML(v) {
-  var c = _specClean(v);
-  if (c) return esc(c);
-  return (v||'').trim()
-    ? '<span style="color:#5f5e5a;">None</span>'
-    : '\u2014';
-}
-
 function lotSortKey(l){ var mins=parseStartMinutes(l.startTime); return mins!=null?mins:10000+(l.rowIdx||0); }
 
 function updateOpsTable() {
@@ -8846,7 +8840,7 @@ function updateOpsTable() {
   var om=document.getElementById('ops-metrics');
   if(om) om.innerHTML='<div class="metric info"><div class="label">Lots shown</div><div class="value">'+total.toLocaleString()+'</div></div><div class="metric"><div class="label">Units produced</div><div class="value">'+tF.toLocaleString()+'</div><div class="sub">vs '+tP.toLocaleString()+' projected</div></div><div class="metric"><div class="label">Avg deviation</div><div class="value" style="color:'+dc+'">'+(aD>0?'+':'')+aD.toFixed(1)+'%</div><div class="sub">lot by lot</div></div><div class="metric good"><div class="label">Complete lots</div><div class="value">'+comp+'</div><div class="sub">of '+total+' shown</div></div>';
   var body=document.getElementById('ops-body'); if(!body) return;
-  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; var isHi=_recallJumpHighlight&&l.lot===_recallJumpHighlight; return '<tr'+(isHi?' id="ops-hi-row" style="background:rgba(245,166,35,0.10);box-shadow:inset 3px 0 0 #F5A623;"':'')+'><td>'+esc(l.date)+'</td><td style="color:#a8b0b8;white-space:nowrap;">'+fmtStartTime(l.startTime)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td>'+_specCellHTML(l.scoop)+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
+  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; var isHi=_recallJumpHighlight&&l.lot===_recallJumpHighlight; return '<tr'+(isHi?' id="ops-hi-row" style="background:rgba(245,166,35,0.10);box-shadow:inset 3px 0 0 #F5A623;"':'')+'><td>'+esc(l.date)+'</td><td style="color:#a8b0b8;white-space:nowrap;">'+fmtStartTime(l.startTime)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td>'+esc(_specClean(l.scoop)||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
   var pi=document.getElementById('pageInfo'),pb=document.getElementById('prevBtn'),nb=document.getElementById('nextBtn'),rc=document.getElementById('rowCount');
   if(pi) pi.textContent='Page '+page+' of '+totalPages;
   if(pb) pb.disabled=page<=1;
