@@ -1709,16 +1709,17 @@ function clearFilters() {
 function exportDetailExcel() {
   var lots = getFilteredLots().slice().sort(function(a,b){ return new Date(b.date)-new Date(a.date); });
   var scopeLabel = window._detailScopeLabel || 'Period Units';
-  var headers = ['Date','Lot #','Customer','Product','Line','Bottle Size','Jar Size','Projected',scopeLabel,'Final Units','Deviation %','Status'];
+  var headers = ['Date','Lot #','Customer','Product','Line','Bottle Size','Jar Size','Scoop','Projected',scopeLabel,'Final Units','Deviation %','Status'];
   var data = [headers].concat(lots.map(function(l){
     var dev = lotDev(l);
     var cust = (l.product||'').split('-')[0].trim();
     var prod = (l.product||'').split('-').slice(1).join('-').trim() || l.product;
     return [l.date, l.lot, cust, prod, l.line||'', l.bottleSize||'', l.jarSize||'',
+      _specClean(l.scoop) || ((l.scoop||'').trim() ? 'None' : ''),
       l.projected||'', (l.dayUnits!=null?l.dayUnits:'')||'', l.finalUnits||'', dev!==null?parseFloat(dev.toFixed(2)):'', l.status||''];
   }));
   var ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:12},{wch:22},{wch:34},{wch:10},{wch:14},{wch:14},{wch:12},{wch:12},{wch:12},{wch:13},{wch:12}];
+  ws['!cols'] = [{wch:12},{wch:12},{wch:22},{wch:34},{wch:10},{wch:14},{wch:14},{wch:13},{wch:12},{wch:12},{wch:12},{wch:13},{wch:12}];
   var range = selectedDetailRange ? selectedDetailRange.label : 'All';
   var summary = [
     ['DTF Production Export'],
@@ -2055,12 +2056,17 @@ function buildLotMap(rows) {
   rows.forEach(function(r, idx) {
     if (!r||typeof r!=='object') return;
     var lot = (r['Lot Number']||'').trim(); if (!lot) return;
-    if (!m[lot]) m[lot] = { lot:lot, date:r['Date']||'', product:r['Product']||'', bottleSize:r['Bottle Size']||'', jarSize:r['Jar Size']||'', lidSize:r['Lid Size']||'', lidColor:r['Lid Color']||'', lidProfile:r['Lid Profile']||'', projected:num(r['Projected Units']), finalUnits:0, status:r['Complete or Partial']||'', week:r['WEEK NUMBER']||'', line:r['Line']||'', startTime:r['Start Time']||'', rowIdx:idx };
+    if (!m[lot]) m[lot] = { lot:lot, date:r['Date']||'', product:r['Product']||'', bottleSize:r['Bottle Size']||'', jarSize:r['Jar Size']||'', lidSize:r['Lid Size']||'', lidColor:r['Lid Color']||'', lidProfile:r['Lid Profile']||'', scoop:r['Scoop']||'', projected:num(r['Projected Units']), finalUnits:0, status:r['Complete or Partial']||'', week:r['WEEK NUMBER']||'', line:r['Line']||'', startTime:r['Start Time']||'', rowIdx:idx };
     m[lot].finalUnits += num(r['Final Units']);
     if (r['Complete or Partial']) m[lot].status = r['Complete or Partial'];
     if (!m[lot].line && r['Line']) m[lot].line = r['Line'];
     if (!m[lot].date && r['Date']) m[lot].date = r['Date'];
     if (!m[lot].startTime && r['Start Time']) m[lot].startTime = r['Start Time'];
+    // Scoop, unlike Jar/Lid, is often blank on a lot's first row and filled on a
+    // later one (2 of the 54 lots that carry it) — it only started being logged
+    // 2026-09-02, mid-run. First non-blank wins; no lot in the feed records two
+    // different scoops, so there is nothing to choose between.
+    if (!m[lot].scoop && r['Scoop']) m[lot].scoop = r['Scoop'];
   });
   return m;
 }
@@ -7776,7 +7782,7 @@ function renderToday() {
     var st=todayStatus.toLowerCase();
     if(st.includes('complete')||st.includes('partial')){
       var todayRowIdx=todayRowIdxByLot[lot]!==undefined?todayRowIdxByLot[lot]:(lotData?lotData.rowIdx:0);
-      completedToday.push({lot:lot,product:product,projected:projected,finalUnits:runningTotal,todayUnits:todayUnits,status:todayStatus,line:line,rowIdx:todayRowIdx,bottleSize:lotData?lotData.bottleSize:'',jarSize:lotData?lotData.jarSize:'',lidSize:lotData?lotData.lidSize:'',lidColor:lotData?lotData.lidColor:'',lidProfile:lotData?lotData.lidProfile:''});
+      completedToday.push({lot:lot,product:product,projected:projected,finalUnits:runningTotal,todayUnits:todayUnits,status:todayStatus,line:line,rowIdx:todayRowIdx,bottleSize:lotData?lotData.bottleSize:'',jarSize:lotData?lotData.jarSize:'',lidSize:lotData?lotData.lidSize:'',lidColor:lotData?lotData.lidColor:'',lidProfile:lotData?lotData.lidProfile:'',scoop:lotData?lotData.scoop:''});
     } else {
       // Running lots with an unrecognized line would be silently dropped by the render loop;
       // record so __dtfSkipped() can surface it in the console.
@@ -7938,6 +7944,41 @@ function renderToday() {
   setTimeout(function(){ applyHitStates(gaugeData,todayTotal,totalGoal,statusLabel,statusColor,dayComplete,bannerGoalNoun); animateGauges(gaugeData,todayTotal,totalGoal,barColor,dayComplete,bannerGoalNoun); }, 0);
 }
 
+// ── Lot spec line ───────────────────────────────────────────────────────────
+// The one-line packaging strip under a lot card's product name: container / lid
+// / scoop. Shared by the Daily "Completed today" and Weekly "Lots this week"
+// cards, which each built it inline and had already drifted apart on the N/A
+// pattern (Daily spelled out the doubled-up forms, Weekly did not).
+//
+// Scoop is the newest of the three and the reason a blank and an explicit "None"
+// must not render the same. The column only started being logged 2026-09-02 and
+// is blank on ~96% of rows, so a blank means nobody recorded it and prints
+// nothing — a card is the wrong place to assert a spec that isn't there. An
+// explicit None/N/A is a fact about the product, that it ships without a scoop,
+// and prints as "no scoop" in a recessive grey. Jar and lid are filled on
+// effectively every lot (0 N/A on containers, 38 rows on lids), so they only go
+// missing for real and need no such treatment.
+//
+// Values come off the lot's first row that carries them (buildLotMap), not the
+// full multi-row reconciliation lotPackaging() does — a card shows the spec, the
+// Quality → Blend packaging panel is where a two-variant run is spelled out.
+function _specClean(v) {
+  v = (v||'').trim();
+  return v && !/^(n\/a|none)(\s+(n\/a|none))*$/i.test(v) ? v : '';
+}
+function lotSpecHTML(l) {
+  var lid = normMatName([l.lidSize,l.lidColor,l.lidProfile].map(_specClean).filter(Boolean).join(' '));
+  // Container is deliberately not run through _specClean: Jar/Bottle Size never
+  // carries an N/A sentinel, and a blank there already falls out via filter().
+  var parts = [l.bottleSize||l.jarSize, lid].filter(Boolean).map(esc);
+  var scoop = _specClean(l.scoop);
+  if (scoop) parts.push(esc(scoop));
+  else if ((l.scoop||'').trim()) parts.push('<span style="color:#444441;">no scoop</span>');
+  if (!parts.length) return '';
+  return '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'
+    + parts.join(' / ') + '</div>';
+}
+
 // Builds the Daily "Completed today" 3-column (per-line) grid from a list of
 // completed lots. Extracted from renderToday so the customer filter can rebuild
 // just the grid. Orphan-line diagnostics are recorded once in renderToday, so
@@ -7969,15 +8010,12 @@ function buildDailyCompletedGrid(completedToday, isLive) {
           var devS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'';
           var devBg=dev===null?'':Math.abs(dev)<=2?'#2c2c2a':dev<0?'#791F1F':'#085041';
           var devTxt=dev===null?'':Math.abs(dev)<=2?'#888780':dev<0?'#F09595':'#9FE1CB';
-          function cleanLid(v){ return v&&!/^(n\/a|none|n\/a n\/a|n\/a n\/a n\/a)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; }
-          var lidStr=normMatName([l.lidSize,l.lidColor,l.lidProfile].map(cleanLid).filter(Boolean).join(' '));
-          var containerStr=[l.bottleSize||l.jarSize,lidStr].filter(Boolean).join(' / ');
           var tileContent='<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;">'
             +'<div>'
             +(l.lot?'<div style="font-size:11px;font-weight:500;color:#5f5e5a;font-family:system-ui;margin-bottom:2px;">#'+esc(l.lot)+'</div>':'')
             +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+esc(brand)+'</div>'
             +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+esc(product)+'</div>'
-            +(containerStr?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+esc(containerStr)+'</div>':'')
+            +lotSpecHTML(l)
             +'</div>'
             +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
             +'</div>'
@@ -8052,7 +8090,7 @@ function buildWeekLotsGrid(lots) {
           +'</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;margin-bottom:1px;">'+esc(brand)+'</div>'
           +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+esc(product)+'</div>'
-          +(function(){ function cL(v){ return v&&!/^(n\/a|none)$/i.test(v.trim())&&v.trim()!==''?v.trim():''; } var ls=normMatName([l.lidSize,l.lidColor,l.lidProfile].map(cL).filter(Boolean).join(' ')); var cs=[l.bottleSize||l.jarSize,ls].filter(Boolean).join(' / '); return cs?'<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:2px;">'+esc(cs)+'</div>':''; })()
+          +lotSpecHTML(l)
           +'</div>'
           +'<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;background:'+sBg+';color:'+sTxt+';font-family:system-ui;flex-shrink:0;margin-left:8px;">'+sLabel+'</span>'
           +'</div>'
@@ -8280,7 +8318,7 @@ function renderWeekly() {
     if(!isNaN(dt) && (!weekLotLastDate[lot] || dt>weekLotLastDate[lot])) weekLotLastDate[lot]=dt;
   });
   var weekLotsSeen=new Set(), weekLots=[];
-  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; var weekUnitsForLot=weekLotUnits[lot]||0; var lastDate=weekLotLastDate[lot]; var dateStr=lastDate?lastDate.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'}):(ld?ld.date:(r['Date']||'')); var lineUnits=weekLotLineUnits[lot]||{}; var dominantLine=Object.keys(lineUnits).reduce(function(a,b){return (lineUnits[a]||0)>=(lineUnits[b]||0)?a:b;},(r['Line']||'').trim()); weekLots.push({lot:lot,product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:weekUnitsForLot,fullUnits:ld?ld.finalUnits:weekUnitsForLot,status:ld?ld.status:(r['Complete or Partial']||''),line:dominantLine,date:dateStr,bottleSize:ld?ld.bottleSize:'',jarSize:ld?ld.jarSize:'',lidSize:ld?ld.lidSize:'',lidColor:ld?ld.lidColor:'',lidProfile:ld?ld.lidProfile:''}); });
+  weekRows.forEach(function(r){ var lot=(r['Lot Number']||'').trim(); if(!lot||weekLotsSeen.has(lot)) return; weekLotsSeen.add(lot); var ld=lotMap[lot]; var weekUnitsForLot=weekLotUnits[lot]||0; var lastDate=weekLotLastDate[lot]; var dateStr=lastDate?lastDate.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'}):(ld?ld.date:(r['Date']||'')); var lineUnits=weekLotLineUnits[lot]||{}; var dominantLine=Object.keys(lineUnits).reduce(function(a,b){return (lineUnits[a]||0)>=(lineUnits[b]||0)?a:b;},(r['Line']||'').trim()); weekLots.push({lot:lot,product:ld?ld.product:(r['Product']||''),projected:ld?ld.projected:num(r['Projected Units']),finalUnits:weekUnitsForLot,fullUnits:ld?ld.finalUnits:weekUnitsForLot,status:ld?ld.status:(r['Complete or Partial']||''),line:dominantLine,date:dateStr,bottleSize:ld?ld.bottleSize:'',jarSize:ld?ld.jarSize:'',lidSize:ld?ld.lidSize:'',lidColor:ld?ld.lidColor:'',lidProfile:ld?ld.lidProfile:'',scoop:ld?ld.scoop:''}); });
   weekLots = weekLots.filter(function(l){ return l.finalUnits > 0; });
   var completeLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('complete');}).length;
   var partialLots=weekLots.filter(function(l){return l.status.toLowerCase().includes('partial');}).length;
@@ -8722,7 +8760,7 @@ function renderDetail() {
     +'</div>'
     +'<div id="ops-metrics" class="metrics" style="margin-bottom:1rem"></div>'
     +'<div class="full-card"><div class="tbl-wrap"><table style="min-width:600px"><thead><tr>'
-    +'<th onclick="sortBy(\'date\')" style="cursor:pointer">Date &#x21d5;</th><th onclick="sortBy(\'time\')" style="cursor:pointer">Start time &#x21d5;</th><th onclick="sortBy(\'lot\')" style="cursor:pointer">Lot # &#x21d5;</th><th onclick="sortBy(\'product\')" style="cursor:pointer">Product &#x21d5;</th><th onclick="sortBy(\'line\')" style="cursor:pointer">Line &#x21d5;</th><th onclick="sortBy(\'bottleSize\')" style="cursor:pointer">Bottle &#x21d5;</th><th onclick="sortBy(\'jarSize\')" style="cursor:pointer">Jar &#x21d5;</th><th onclick="sortBy(\'projected\')" style="cursor:pointer">Projected &#x21d5;</th><th onclick="sortBy(\'dayUnits\')" style="cursor:pointer">'+esc(scopeUnitsLabel)+' &#x21d5;</th><th onclick="sortBy(\'finalUnits\')" style="cursor:pointer">Final units &#x21d5;</th><th onclick="sortBy(\'dev\')" style="cursor:pointer">Dev % &#x21d5;</th><th onclick="sortBy(\'status\')" style="cursor:pointer">Status &#x21d5;</th>'
+    +'<th onclick="sortBy(\'date\')" style="cursor:pointer">Date &#x21d5;</th><th onclick="sortBy(\'time\')" style="cursor:pointer">Start time &#x21d5;</th><th onclick="sortBy(\'lot\')" style="cursor:pointer">Lot # &#x21d5;</th><th onclick="sortBy(\'product\')" style="cursor:pointer">Product &#x21d5;</th><th onclick="sortBy(\'line\')" style="cursor:pointer">Line &#x21d5;</th><th onclick="sortBy(\'bottleSize\')" style="cursor:pointer">Bottle &#x21d5;</th><th onclick="sortBy(\'jarSize\')" style="cursor:pointer">Jar &#x21d5;</th><th onclick="sortBy(\'scoop\')" style="cursor:pointer">Scoop &#x21d5;</th><th onclick="sortBy(\'projected\')" style="cursor:pointer">Projected &#x21d5;</th><th onclick="sortBy(\'dayUnits\')" style="cursor:pointer">'+esc(scopeUnitsLabel)+' &#x21d5;</th><th onclick="sortBy(\'finalUnits\')" style="cursor:pointer">Final units &#x21d5;</th><th onclick="sortBy(\'dev\')" style="cursor:pointer">Dev % &#x21d5;</th><th onclick="sortBy(\'status\')" style="cursor:pointer">Status &#x21d5;</th>'
     +'</tr></thead><tbody id="ops-body"></tbody></table></div>'
     +'<div class="pagination"><button id="prevBtn" onclick="changePage(-1)">\u2190 Prev</button><span id="pageInfo"></span><button id="nextBtn" onclick="changePage(1)">Next \u2192</button><span id="rowCount" style="margin-left:auto"></span></div></div>';
 
@@ -8761,6 +8799,17 @@ function fmtStartTime(t){
   var h12=h%12; if(h12===0)h12=12;
   return h12+':'+(mn<10?'0':'')+mn+' '+ap;
 }
+// Table counterpart to lotSpecHTML's scoop handling: a value, an explicit
+// "None" the sheet recorded, or an em dash for never-logged. Same three states,
+// spelled out here because a table column has the room a card subline does not.
+function _specCellHTML(v) {
+  var c = _specClean(v);
+  if (c) return esc(c);
+  return (v||'').trim()
+    ? '<span style="color:#5f5e5a;">None</span>'
+    : '\u2014';
+}
+
 function lotSortKey(l){ var mins=parseStartMinutes(l.startTime); return mins!=null?mins:10000+(l.rowIdx||0); }
 
 function updateOpsTable() {
@@ -8772,7 +8821,11 @@ function updateOpsTable() {
       if(sortCol==='dev'){ av=lotDev(a)!=null?lotDev(a):-999; bv=lotDev(b)!=null?lotDev(b):-999; }
       if(sortCol==='date'){ var dd=(new Date(av)-new Date(bv))*sortDir; if(dd!==0) return dd; var sw=statusSortWeight(a)-statusSortWeight(b); return sw!==0?sw:lotSortKey(b)-lotSortKey(a); }
       if(sortCol==='status'){ var sw=(statusSortWeight(a)-statusSortWeight(b))*sortDir; return sw!==0?sw:lotSortKey(b)-lotSortKey(a); }
-      if(typeof av==='number'||!isNaN(parseFloat(av))) return (parseFloat(av)-parseFloat(bv))*sortDir;
+      // Both sides must parse, not just the left one: a column that is part number
+      // and part blank ('80cc Long' vs '') otherwise returns NaN from every
+      // comparison and leaves the sort order undefined. Scoop is 96% blank and
+      // parses as a number, so it hits this squarely; Jar/Bottle always could.
+      if(typeof av==='number'||(!isNaN(parseFloat(av))&&!isNaN(parseFloat(bv)))) return (parseFloat(av)-parseFloat(bv))*sortDir;
       return String(av).localeCompare(String(bv))*sortDir;
     });
   } else {
@@ -8793,7 +8846,7 @@ function updateOpsTable() {
   var om=document.getElementById('ops-metrics');
   if(om) om.innerHTML='<div class="metric info"><div class="label">Lots shown</div><div class="value">'+total.toLocaleString()+'</div></div><div class="metric"><div class="label">Units produced</div><div class="value">'+tF.toLocaleString()+'</div><div class="sub">vs '+tP.toLocaleString()+' projected</div></div><div class="metric"><div class="label">Avg deviation</div><div class="value" style="color:'+dc+'">'+(aD>0?'+':'')+aD.toFixed(1)+'%</div><div class="sub">lot by lot</div></div><div class="metric good"><div class="label">Complete lots</div><div class="value">'+comp+'</div><div class="sub">of '+total+' shown</div></div>';
   var body=document.getElementById('ops-body'); if(!body) return;
-  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; var isHi=_recallJumpHighlight&&l.lot===_recallJumpHighlight; return '<tr'+(isHi?' id="ops-hi-row" style="background:rgba(245,166,35,0.10);box-shadow:inset 3px 0 0 #F5A623;"':'')+'><td>'+esc(l.date)+'</td><td style="color:#a8b0b8;white-space:nowrap;">'+fmtStartTime(l.startTime)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
+  body.innerHTML=slice.map(function(l){ var dev=lotDev(l),dS=dev!==null?(dev>0?'+':'')+dev.toFixed(1)+'%':'\u2014',dC=dev!==null&&Math.abs(dev)>=5?(dev<0?'neg-dev':'pos-dev'):'',st=l.status.toLowerCase(),bC=st.includes('complete')?'complete':st.includes('partial')?'partial':''; var isHi=_recallJumpHighlight&&l.lot===_recallJumpHighlight; return '<tr'+(isHi?' id="ops-hi-row" style="background:rgba(245,166,35,0.10);box-shadow:inset 3px 0 0 #F5A623;"':'')+'><td>'+esc(l.date)+'</td><td style="color:#a8b0b8;white-space:nowrap;">'+fmtStartTime(l.startTime)+'</td><td style="font-weight:500">'+esc(l.lot)+'</td><td>'+esc(l.product)+'</td><td>'+esc(l.line||'\u2014')+'</td><td>'+esc(l.bottleSize||'\u2014')+'</td><td>'+esc(l.jarSize||'\u2014')+'</td><td>'+_specCellHTML(l.scoop)+'</td><td style="text-align:right">'+(l.projected?l.projected.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.dayUnits?l.dayUnits.toLocaleString():'\u2014')+'</td><td style="text-align:right">'+(l.finalUnits?l.finalUnits.toLocaleString():'\u2014')+'</td><td>'+(dev!==null?'<span class="badge '+dC+'">'+dS+'</span>':'\u2014')+'</td><td><span class="badge '+bC+'">'+esc(l.status||'\u2014')+'</span></td></tr>'; }).join('');
   var pi=document.getElementById('pageInfo'),pb=document.getElementById('prevBtn'),nb=document.getElementById('nextBtn'),rc=document.getElementById('rowCount');
   if(pi) pi.textContent='Page '+page+' of '+totalPages;
   if(pb) pb.disabled=page<=1;
