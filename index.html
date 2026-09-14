@@ -7891,7 +7891,19 @@ function renderToday() {
       +(!isLive?'<button onclick="navToToday()" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #1D9E75;background:transparent;cursor:pointer;color:#1D9E75;font-size:11px;font-weight:500;font-family:system-ui;flex-shrink:0;">Jump to today</button>':'')
       +'</div>'
     +'</div>'
-    +'<div id="today-banner" style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:1rem 1.25rem;position:relative;">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Currently running</div>'
+    +(isLive?ALL_LINES.map(function(line){
+      var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',items=runningByLine[line]||[];
+      if(!items.length) return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap;background:'+bg+';color:'+txt+'">'+line+'</span><span style="color:#5f5e5a;font-style:italic">No active lots at this time</span></div>';
+      return items.map(function(r){
+        var tp=r.startTime?'Start: '+r.startTime+' \u00a0|\u00a0 ':'';
+        return '<div class="run-lot" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap;background:'+bg+';color:'+txt+'">'+line+'</span><span style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.product+'</span><span style="color:#888780;white-space:nowrap;font-size:11px">'+tp+(r.projected?r.projected.toLocaleString()+' units projected':'')+'</span></div>';
+      }).join('');
+    }).join(''):'<div style="padding:8px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px;color:#5f5e5a;font-style:italic">Live data not available for past days</div>')
+    +'<div style="border-top:0.5px solid #2c2c2a;margin-top:.75rem;padding-top:.75rem">'
+    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Production by line</div>'
+    +'<div class="daily-gauges" style="display:flex;gap:12px;margin-bottom:10px">'+gaugesHTML+'</div>'
+    +'<div id="today-banner" style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;position:relative;">'
     +'<div id="banner-check" style="display:none;position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:#1D9E75;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'
     +'<div class="today-kpi-strip" style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;">'
     +'<div style="flex:1;text-align:center"><div id="banner-lbl-total" style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">'+(isLive?'Total units today':'Total units')+'</div><div style="display:flex;align-items:center;justify-content:center;gap:6px;"><span id="banner-total" style="font-size:26px;font-weight:500;color:#e8e6e0;line-height:1">0</span><span id="banner-bullseye" style="display:none;font-size:22px;line-height:1">&#127919;</span>'+(recTotalRank===0?'<span style="font-size:10px;font-weight:500;padding:2px 8px;border-radius:7px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;">\uD83C\uDFC6 Record</span>':'')+'</div></div>'
@@ -7914,28 +7926,13 @@ function renderToday() {
       +'<div id="banner-leg-line#4" style="display:none;font-size:10px;font-weight:500;color:'+LINE_COLOR['line#4']+';font-family:system-ui;white-space:nowrap;">Line #4 — 0</div>'
     +'</div>'
     +'</div>'
-    +'<div style="border-top:0.5px solid #2c2c2a;margin-top:1rem;padding-top:.75rem">'
-    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Currently running</div>'
-    +(isLive?ALL_LINES.map(function(line){
-      var k2=lk(line),bg=LINE_BG[k2]||'#2c2c2a',txt=LINE_TXT[k2]||'#e8e6e0',items=runningByLine[line]||[];
-      if(!items.length) return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap;background:'+bg+';color:'+txt+'">'+line+'</span><span style="color:#5f5e5a;font-style:italic">No active lots at this time</span></div>';
-      return items.map(function(r){
-        var tp=r.startTime?'Start: '+r.startTime+' \u00a0|\u00a0 ':'';
-        return '<div class="run-lot" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px"><span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:6px;white-space:nowrap;background:'+bg+';color:'+txt+'">'+line+'</span><span style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+r.product+'</span><span style="color:#888780;white-space:nowrap;font-size:11px">'+tp+(r.projected?r.projected.toLocaleString()+' units projected':'')+'</span></div>';
-      }).join('');
-    }).join(''):'<div style="padding:8px 0;border-bottom:0.5px solid #2c2c2a;font-size:12px;color:#5f5e5a;font-style:italic">Live data not available for past days</div>')
-    +'</div>'
-    +'<div style="border-top:0.5px solid #2c2c2a;margin-top:.75rem;padding-top:.75rem">'
-    +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem">Production by line</div>'
-    +'<div class="daily-gauges" style="display:flex;gap:12px">'+gaugesHTML+'</div>'
-    +'</div>'
-    +'<div style="border-top:0.5px solid #2c2c2a;margin-top:.75rem;padding-top:.75rem;">'
+    +'<div style="border-top:0.5px solid #2c2c2a;padding-top:.75rem;">'
     +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:.75rem;flex-wrap:wrap;">'
     +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">'+(isLive?'Completed today':'Completed')+'</div>'
     +'<select id="dailyCustFilter" aria-label="Filter by customer" onchange="filterDailyLots()" style="padding:5px 10px;border:0.5px solid #444441;border-radius:8px;background:#1e2124;color:#e8e6e0;font-size:12px;font-family:system-ui;"><option value="all">All customers</option>'+dailyCustomers.map(function(c){return '<option value="'+esc(c)+'"'+(c===dailyCustomerFilter?' selected':'')+'>'+esc(c)+'</option>';}).join('')+'</select>'
     +'<span id="dailyLotCount" style="font-size:11px;color:#5f5e5a;font-family:system-ui;">'+_dailyShown.length+' lot'+(_dailyShown.length!==1?'s':'')+'</span>'
     +'</div>'
-    +'<div id="dailyCompletedGrid">'+completedHTML+'</div></div></div>';
+    +'<div id="dailyCompletedGrid">'+completedHTML+'</div></div></div></div>';
 
   var gaugeData=ALL_LINES.map(function(line,i){ var k2=lk(line), goal=lineGoal(line); return {idx:i,line:line,color:LINE_COLOR[k2]||'#888780',track:LINE_TRACK[k2]||'#2c2c2a',units:todayByLine[line]||0,avg:goal.value,isTarget:goal.isTarget,sfx:goal.lineDown?'% of Target (down)':goal.isTarget?'% of Target':'% of Avg',lineDown:goal.lineDown}; });
   setTimeout(function(){ applyHitStates(gaugeData,todayTotal,totalGoal,statusLabel,statusColor,dayComplete,bannerGoalNoun); animateGauges(gaugeData,todayTotal,totalGoal,barColor,dayComplete,bannerGoalNoun); }, 0);
