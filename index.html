@@ -2763,6 +2763,99 @@ function _loadStockCleanSeen() {
   } catch(e) {}
 }
 
+// ── Confirm before alarming ────────────────────────────────────────────────
+// Measured 2026-09-16 at 14:05, hours after inventory corrected the sheet: six fetches of
+// the inventory CSV, each cache-busted, returned the corrected file three times and a file
+// BYTE-IDENTICAL to that morning's pre-correction snapshot three times. So the odds of a
+// cold load drawing a stale generation are about even, and the clean-hold cannot help — it
+// only arms once the session has seen a clean snapshot, and a fresh page load has seen
+// nothing. Alex hit exactly this in a browser that had never loaded the page that day.
+//
+// So: never raise this alarm on a single read. When the audit finds overages, re-read the
+// feed and see whether the same lots come back clean. This is the same move the reject-retry
+// below already makes for a *broken* snapshot, applied to a *complete but stale* one, and it
+// rests on the same asymmetry as the hold — clean is newer than over, so one clean reading
+// settles it while more over readings only restate what we have.
+//
+// Cost is paid only when there is something to alarm about: zero overages, zero extra
+// fetches. Two tries take an even chance of a false alarm to about one in eight, and a
+// reading already confirmed is not re-confirmed (_stockConfirmSig), so a genuine standing
+// problem costs the extra reads once, not on every five-minute poll.
+//
+// The lots are hidden, not shown, while the check runs. An alarm that appears a second late
+// is ordinary loading; one that appears and then vanishes is the flapping this exists to
+// stop.
+var STOCK_CONFIRM_TRIES = 2;
+var _stockConfirming = false;
+var _stockConfirmSig = null;
+
+function _writeInventoryCache() {
+  try {
+    sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({
+      byPart: inventoryByPart, lotIndex: inventoryLotIndex, archiveLots: _archiveLots,
+      audit: inventoryStockAudit, ts: Date.now()
+    }));
+  } catch(e) {}
+}
+
+function _confirmOverages() {
+  var a = inventoryStockAudit;
+  if (!a || !a.over.length || _stockConfirming) return false;
+  var sig = a.over.map(function(o){ return (o.lot || '').toUpperCase() + ':' + _stockSig(o); }).sort().join(',');
+  if (sig === _stockConfirmSig) return false;
+  _stockConfirming = true;
+  a.pending = a.over;
+  a.over = [];
+  var tries = 0;
+
+  function finish() {
+    _stockConfirming = false;
+    _stockConfirmSig = sig;
+    var a2 = inventoryStockAudit;
+    // A normal refresh may have replaced the audit underneath us; its own partition is
+    // newer than anything this confirmation could say about the old one.
+    if (!a2 || !a2.pending) return;
+    var heldBefore = a2.held || [];
+    a2.over = a2.pending;
+    delete a2.pending;
+    applyStockCleanHold(a2);
+    // applyStockCleanHold only partitions what it was given, so the lots held before the
+    // confirmation started have to be carried across or they silently disappear.
+    a2.held = heldBefore.concat(a2.held || []);
+    _writeInventoryCache();
+    if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+  }
+
+  function attempt() {
+    tries++;
+    fetchInventoryCSV(true).then(function(t2){
+      // parseInventory writes inventoryLotIndex and inventoryStockAudit as side effects, and
+      // this read is only ever a second opinion — it must not become the page's data.
+      var keepIdx = inventoryLotIndex, keepAudit = inventoryStockAudit;
+      var parsed2 = parseInventory(t2);
+      var audit2 = inventoryStockAudit;
+      inventoryLotIndex = keepIdx; inventoryStockAudit = keepAudit;
+      var cleared = false;
+      // Only an acceptable payload gets a vote, the same rule the hold follows: a gutted
+      // snapshot names no lots at all, and silence must not read as "clean".
+      if (_inventoryLooksComplete(parsed2, inventoryByPart) && keepAudit && keepAudit.pending) {
+        var now = Date.now(), cl = audit2.cleanLots || [], i, pend = {};
+        for (i = 0; i < keepAudit.pending.length; i++) pend[(keepAudit.pending[i].lot || '').toUpperCase()] = 1;
+        for (i = 0; i < cl.length; i++) {
+          if (!pend[cl[i]]) continue;
+          cleared = true;
+          if (!_stockCleanSeen[cl[i]]) _stockCleanSeen[cl[i]] = { t: now, first: now, sig: null };
+        }
+      }
+      if (cleared || tries >= STOCK_CONFIRM_TRIES) { finish(); return; }
+      attempt();
+    }).catch(function(){ finish(); });
+  }
+
+  attempt();
+  return true;
+}
+
 function fetchInventoryIfNeeded(force) {
   if (inventoryLoaded && !force) return;
   if (_invFetching) return;   // a cold inventory read can take ~60s; never stack them
@@ -2798,7 +2891,10 @@ function fetchInventoryIfNeeded(force) {
       // returned nothing) while _archiveLots reverted to null, so the "archived lots not
       // loaded" warning stayed hidden — the coverage drop then read as fewer mispicks,
       // which is the exact misreading that warning exists to prevent.
-      try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, archiveLots: _archiveLots, audit: inventoryStockAudit, ts: Date.now() })); } catch(e) {}
+      // Before the cache write, so a payload hidden pending confirmation is not cached as
+      // something to alarm about; finish() rewrites the cache when it resolves.
+      _confirmOverages();
+      _writeInventoryCache();
       _invRejects = 0;
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     } else {

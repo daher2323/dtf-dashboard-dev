@@ -162,7 +162,17 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
   has not seen before lets the clock run. `STOCK_CLEAN_HOLD_MAX_MS` (24 h, measured from the
   last clean sighting) is the backstop, and the prune keys on that, not on the re-armed
   clock. The held note therefore shows no countdown — it would reset every poll and promise a
-  deadline the mechanism does not have.
+  deadline the mechanism does not have. **The hold cannot help a cold load**, though — it only
+  arms once a session has seen a clean snapshot — so the audit also **confirms before
+  alarming** (`_confirmOverages`, `STOCK_CONFIRM_TRIES` 2). Measured 2026-09-16 at 14:05,
+  hours after the sheet was corrected: six cache-busted fetches returned the corrected file
+  three times and a file byte-identical to that morning's pre-correction snapshot three
+  times, so a fresh load is a coin flip. Overages are therefore hidden while the feed is
+  re-read; one clean reading of those lots settles it (same asymmetry as the hold), two
+  stale ones let the alarm through. Extra fetches are paid only when there is something to
+  alarm about, and `_stockConfirmSig` stops a standing problem re-confirming every poll.
+  This is the same move the reject-retry beside it already makes for a *broken* snapshot,
+  applied to a *complete but stale* one.
   **The pick sheet needs a monotonic guard, not a proportional one** (`_materialsLooksComplete`,
   `MATERIALS_MAX_HOLDS` 3). Measured 2026-09-16: a FEFO opportunity on run 2609086 / part
   10-388 read "all 1 corrected" at 12:19 and "1 open" at 12:20. `fixedAt` is a *later* pick
