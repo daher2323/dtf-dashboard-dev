@@ -1058,12 +1058,12 @@ var materialsData = [];
 var pickRows = [];           // [{ date, orderLot, part, material, slots:[{t, qty}] }]
 var inventoryByPart = {};    // DTF Part # -> { partNum, stock, material, lots, lotRows[] } — summed on-hand plus the per-lot detail
 var inventoryLotIndex = {};  // T# (upper) -> { part, qty, exp, received } for EVERY lot incl. depleted — FEFO needs the picked lot's expiry
-// Impossible-stock audit, rebuilt by parseInventory: { over:[], blind:0, checked:0 }.
+// Impossible-stock audit, rebuilt by parseInventory: { over:[], blindLots:[], blind:0, checked:0 }.
 // `over` holds lots recorded as holding more than was ever received — see the note on
 // parseInventory. Cached alongside inventoryByPart, because parseInventory does not
 // re-run on a cache hit and an alarm that goes quiet for the cache TTL is worse than
 // no alarm at all.
-var inventoryStockAudit = { over: [], blind: 0, checked: 0 };
+var inventoryStockAudit = { over: [], blindLots: [], blind: 0, checked: 0 };
 // Float noise only. NOT a materiality floor: the rule is the one the sheet states —
 // stock above the received quantity is impossible at any size. Today's four findings
 // are 9.8-15.2 kg over (1.2x to 2.2x), so nothing sits near this line; if re-weighed
@@ -1071,6 +1071,7 @@ var inventoryStockAudit = { over: [], blind: 0, checked: 0 };
 // real floor here rather than a reason to guess at one now.
 var STOCK_OVERAGE_EPS = 0.01;
 var _stockOveragesOpen = false;
+var _stockBlindOpen = false;   // the lots with no usable Original Qty Received, under the "cannot be checked" text
 var inventoryLoaded = false; // true once a successful inventory fetch has populated inventoryByPart
 var demandByPart = {};       // DTF Part # -> forthcoming demand in KG, summed across the demand sheet
 var demandLoaded = false;    // true once a successful demand fetch has populated demandByPart
@@ -1078,7 +1079,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v8';  // v8: carries the impossible-stock audit, which parseInventory does not re-run to rebuild on a cache hit; v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v9';  // v9: the audit carries blindLots, not just a count — a v8 payload would open an empty list; v8: carries the impossible-stock audit, which parseInventory does not re-run to rebuild on a cache hit; v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -2407,7 +2408,7 @@ function parseInventory(text) {
     var rows = parseCSVMultiline(text);
     var byPart = {};
     var _catTally = {};
-    var _audit = { over: [], blind: 0, checked: 0 };
+    var _audit = { over: [], blindLots: [], checked: 0 };
     inventoryLotIndex = {};
     rows.forEach(function(r){
       var part = (r['DTF Part #'] || '').trim();
@@ -2448,7 +2449,23 @@ function parseInventory(text) {
             });
           }
         } else if (peak > 0) {
-          _audit.blind++;
+          // Collected, not just counted. "1 lot cannot be checked" against 1,000+ rows of
+          // inventory is a fact with no route to it — finding the blank meant scrolling the
+          // sheet. The verbatim cell rides along because the four ways a lot lands here need
+          // four different actions, and only the cell distinguishes them: an empty cell is a
+          // number to enter, a sentinel is Google still recalculating (it fixes itself, so
+          // nobody should be sent to the sheet for it), text is a typo to correct, and a
+          // literal 0 is a placeholder someone meant to come back to.
+          _audit.blindLots.push({
+            part: part, material: (r['Material Name'] || '').trim(), lot: lotNo,
+            cur: qty, start: sdQty, held: peak, raw: origRaw,
+            reason: origRaw === '' ? 'empty'
+                  : _sentinelRe.test(origRaw) ? 'sentinel'
+                  : origQty == null ? 'unreadable'
+                  : origQty < 0 ? 'negative' : 'zero',
+            loc: (r['Locations'] || '').trim(), received: (r['Receiving Date'] || '').trim(),
+            supplier: (r['Supplier/MFG'] || '').trim(), batch: (r['Lot / Batch'] || '').trim()
+          });
         }
       }
       // Every lot, depleted included: FEFO detection has to know the expiry of the
@@ -2495,6 +2512,11 @@ function parseInventory(text) {
     });
     // Worst overage first — the size of the gap is the size of the problem.
     _audit.over.sort(function(a, b){ return b.over - a.over; });
+    // Unverifiable lots by the quantity standing behind them: the kg is what is actually
+    // at stake in not knowing, and a sentinel row sorts in with the rest rather than to
+    // the top, because it needs no action at all.
+    _audit.blindLots.sort(function(a, b){ return b.held - a.held; });
+    _audit.blind = _audit.blindLots.length;
     inventoryStockAudit = _audit;
     return byPart;
   } catch (e) { return {}; }
@@ -4310,7 +4332,7 @@ function _loadStockCaches() {
     var ri = sessionStorage.getItem(INVENTORY_CACHE_KEY);
     // Same size test on the way in: a cache is only as trustworthy as the fetch that
     // wrote it, and a gutted payload must not be able to survive a reload.
-    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryStockAudit = ci.audit || { over: [], blind: 0, checked: 0 }; inventoryLoaded = true; _stockHydratedFromCache = true; if (typeof ci.archiveLots === 'number') _archiveLots = ci.archiveLots; } }
+    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryStockAudit = ci.audit || { over: [], blindLots: [], blind: 0, checked: 0 }; inventoryLoaded = true; _stockHydratedFromCache = true; if (typeof ci.archiveLots === 'number') _archiveLots = ci.archiveLots; } }
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
@@ -13136,7 +13158,7 @@ function setMatInlineTab(v) {
 // The count opens the list, for the same reason the expiry line does: naming a defect
 // without a route to it just moves the hunt onto the reader.
 function stockOverageAlertHTML() {
-  var a = inventoryStockAudit || { over: [], blind: 0, checked: 0 };
+  var a = inventoryStockAudit || { over: [], blindLots: [], blind: 0, checked: 0 };
   var n = a.over.length;
   if (!n) return '';
   var kg = a.over.reduce(function(s2, o){ return s2 + o.over; }, 0);
@@ -13154,10 +13176,7 @@ function stockOverageAlertHTML() {
         + '<span style="color:#cfcdc7;font-weight:500;">' + fmtStockQty(kg) + '</span> on hand that was never received. '
         + 'On hand, Available, Cover, the expiry projection and the FEFO walk are all wrong on '
         + (n===1?'this lot':'these lots') + ' until the inventory sheet is corrected.'
-        + (a.blind > 0
-            ? ' <span title="These lots hold stock but carry no usable Original Qty Received, so they cannot be checked either way. Fill that column in the RMI sheet to bring them into the check." style="color:#888780;border-bottom:1px dotted #444441;cursor:help;">'
-              + a.blind + ' more lot' + (a.blind===1?'':'s') + ' cannot be checked</span>.'
-            : '')
+        + (_blindCount() > 0 ? ' ' + blindLinkHTML('more') + '.' : '')
       + '</div>'
     + '</div>'
     + '<button onclick="toggleStockOverages()" style="flex-shrink:0;padding:4px 11px;border-radius:6px;border:0.5px solid #6b2020;'
@@ -13209,6 +13228,104 @@ function stockOveragePanelHTML() {
 
 function toggleStockOverages() {
   _stockOveragesOpen = !_stockOveragesOpen;
+  renderMaterials();
+}
+
+// ── Lots that cannot be checked ─────────────────────────────────────────────
+// The blind count used to be a tooltip. A tooltip that says "1 lot cannot be checked"
+// over a sheet of 1,000+ rows tells you a defect exists and then makes you find it by
+// hand — the same failure the expiry line's clickable counts exist to avoid. It reads
+// as a link and opens the list.
+//
+// Stated in two places and both are load-bearing: appended to the impossible-stock
+// alert when that alert is up, and standing on its own when it is not. Nested only in
+// the alert, the coverage gap would vanish the moment the last overage was corrected —
+// the check would go quiet exactly when someone started trusting it.
+function _blindCount() {
+  var a = inventoryStockAudit || {};
+  // blind survives from an older cached payload that had the count but not the rows;
+  // the list is what is actually clickable, so prefer it when it is there.
+  return (a.blindLots && a.blindLots.length) || a.blind || 0;
+}
+
+function blindLinkHTML(word) {
+  var n = _blindCount();
+  if (!n) return '';
+  var clickable = !!(inventoryStockAudit && inventoryStockAudit.blindLots && inventoryStockAudit.blindLots.length);
+  var label = n + (word ? ' ' + word : '') + ' lot' + (n===1?'':'s') + ' cannot be checked';
+  if (!clickable) {
+    return '<span title="These lots hold stock but carry no usable Original Qty Received, so they cannot be checked either way."'
+      + ' style="color:#888780;border-bottom:1px dotted #444441;cursor:help;">' + label + '</span>';
+  }
+  return '<span onclick="toggleStockBlind()"'
+    + ' title="These lots hold stock but carry no usable Original Qty Received, so they cannot be checked either way. Click to list them."'
+    + ' style="color:#888780;border-bottom:1px dotted #444441;cursor:pointer;">'
+    + label + (_stockBlindOpen ? ' \u25b4' : ' \u25be') + '</span>';
+}
+
+// Amber, not red, and a row here is not an error. It is stock the check cannot see
+// past, so it gets the colour of an open question rather than the colour of a wrong
+// number — the panel above it is the one saying something is broken.
+function stockBlindPanelHTML() {
+  var a = inventoryStockAudit || {};
+  var out = a.blindLots || [];
+  if (!out.length) return '';
+  var kg = out.reduce(function(s2, o){ return s2 + (o.held || 0); }, 0);
+  var sentinels = out.filter(function(o){ return o.reason === 'sentinel'; }).length;
+  var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+  var thR = th.replace('text-align:left', 'text-align:right');
+  var rows = out.map(function(o){
+    var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
+    // Each reason names the fix, because they are four different jobs. The sentinel row
+    // says so explicitly: sending someone to edit a cell Google is still computing would
+    // have them "fix" a value that is about to arrive on its own.
+    var cell = o.reason === 'empty'
+        ? '<span style="color:#5f5e5a;">(empty)</span> <span style="font-size:9px;color:#5f5e5a;">not recorded</span>'
+      : o.reason === 'sentinel'
+        ? '<span style="color:#888780;">' + esc(o.raw) + '</span> <span style="font-size:9px;color:#5f5e5a;">sheet still calculating</span>'
+      : o.reason === 'zero'
+        ? '<span style="color:#FAC775;font-weight:500;">' + esc(o.raw) + '</span> <span style="font-size:9px;color:#5f5e5a;">received nothing</span>'
+      : o.reason === 'negative'
+        ? '<span style="color:#FAC775;font-weight:500;">' + esc(o.raw) + '</span> <span style="font-size:9px;color:#5f5e5a;">not a quantity</span>'
+        : '<span style="color:#FAC775;font-weight:500;">' + esc(o.raw) + '</span> <span style="font-size:9px;color:#5f5e5a;">unreadable</span>';
+    return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<td style="' + td + 'color:#e8e6e0;max-width:280px;overflow:hidden;text-overflow:ellipsis;">' + esc(o.material || '\u2014') + '</td>'
+      + '<td style="' + td + 'color:#888780;">' + esc(o.part) + '</td>'
+      + '<td style="' + td + '">' + _blendCopyCell(o.lot) + '</td>'
+      + '<td style="' + td + '">' + cell + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (o.start == null ? '\u2014' : fmtStockQty(o.start)) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc) + '</td>'
+      + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (o.received ? esc(o.received) : '\u2014') + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<div style="background:#191714;border:0.5px solid #3d3524;border-left:3px solid #FAC775;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
+    + '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#211d16;">'
+      + '<span style="font-size:11px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;">Cannot be checked</span>'
+      + '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + out.length + ' lot' + (out.length===1?'':'s')
+        + ' holding <span style="color:#cfcdc7;">' + fmtStockQty(kg) + '</span>'
+        + ' &middot; fill Original Qty Received in the Raw Material Inventory sheet to bring '
+        + (out.length===1?'it':'them') + ' into the check'
+        + (sentinels > 0
+            ? ' <span style="color:#5f5e5a;">(' + sentinels + ' of ' + (sentinels===1?'these is':'these are')
+              + ' the sheet mid-recalculation and will clear on ' + (sentinels===1?'its':'their') + ' own)</span>'
+            : '')
+      + '</span>'
+      + '<button onclick="toggleStockBlind()" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #3d3524;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;">Hide</button>'
+    + '</div>'
+    + '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#16150f;">'
+    + '<thead><tr style="border-bottom:0.5px solid #3d3524;">'
+      + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
+      + '<th style="' + th + '">Original Qty Received cell</th>'
+      + '<th style="' + thR + '">Start of day</th><th style="' + thR + '">Current</th>'
+      + '<th style="' + th + '">Location</th>'
+      + '<th style="' + thR + 'padding-right:14px;">Received on</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+    + '</div>';
+}
+
+function toggleStockBlind() {
+  _stockBlindOpen = !_stockBlindOpen;
   renderMaterials();
 }
 
@@ -14194,7 +14311,18 @@ function renderMaterials() {
   // the end is safe with no table in the DOM — it guards every row lookup — and still
   // fills the segment counts and paints the active segment.
   // Above the expiry line, which is the quieter problem of the two.
-  var _overHTML = stockOverageAlertHTML() + (_stockOveragesOpen ? stockOveragePanelHTML() : '');
+  var _overAlert = stockOverageAlertHTML();
+  // When the alert is up the blind count rides inside it; when it is not, it needs a line
+  // of its own, or clearing the last overage would take the coverage gap off the page with
+  // it. Same shape as the Expiry data line, and it disappears when the column is complete.
+  var _blindLine = (!_overAlert && _blindCount() > 0)
+    ? '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:11px;color:#888780;font-family:system-ui;">'
+      + '<span style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Stock check</span>'
+      + '<span>' + blindLinkHTML('') + ' against the quantity received</span>'
+      + '</div>'
+    : '';
+  var _overHTML = _overAlert + (_stockOveragesOpen ? stockOveragePanelHTML() : '')
+    + _blindLine + (_stockBlindOpen ? stockBlindPanelHTML() : '');
   if (matView === 'lothealth' && materialsFefoOnly) {
     content.innerHTML = pickerHTML + _overHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
       + _fefoOpsPanelHTML();
