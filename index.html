@@ -11572,7 +11572,7 @@ function generateProcSynopsis(sid) {
 // Neckbands panel. Mirrors matToggleLot: flip the block, rotate the chevron, and record
 // the state so a re-render (a refresh landing, the By quarter/By customer toggle) leaves
 // open rows open. Keyed on sid + row index, so two SKUs expanded at once keep their own.
-function toggleProcCust(rowId) {
+function toggleProcCust(rowId, sid) {
   if (!window._procCustOpen) window._procCustOpen = {};
   var block = document.getElementById('pcp-' + rowId);
   if (!block) return;
@@ -11582,6 +11582,71 @@ function toggleProcCust(rowId) {
   if (chev) chev.style.transform = willOpen ? 'rotate(90deg)' : 'rotate(0deg)';
   if (willOpen) window._procCustOpen[rowId] = true;
   else delete window._procCustOpen[rowId];
+  // sid is passed rather than parsed back out of rowId. It could be parsed — rowId is
+  // sid + '-c' + index and safeid() maps every non-alphanumeric to '_', so no sid holds
+  // a hyphen to confuse the split — but that is a property of safeid, not of this
+  // function, and it would break silently and remotely if safeid ever loosened.
+  if (sid) _syncProcExpandBtn(sid);
+}
+
+// ── Expand all / Collapse all, By customer ──────────────────────────────────
+// One SKU's customer rows are accordions and reading the whole product list meant
+// opening each one. These three drive a bulk toggle in the panel's tab bar.
+//
+// Truth lives in the DOM, not in a per-panel "expanded" flag. The product blocks
+// are rendered hidden and toggled by display (toggleProcCust), individual rows can
+// be opened and closed underneath the button, and a re-render replays _procCustOpen
+// — a separate flag would drift out of step with all three. Counting what is
+// actually open costs one querySelectorAll on a bounded, already-rendered panel.
+//
+// Only customers WITH products get a .proc-cust-prods block, so `total` is the
+// number of rows that can open, not the number of rows on screen. A SKU whose
+// customers all have empty product lists has nothing to expand and the button
+// hides itself rather than sitting there inert.
+function _procCustCounts(sid) {
+  var host = document.getElementById('pcust-' + sid);
+  if (!host) return null;
+  var blocks = host.querySelectorAll('.proc-cust-prods');
+  var open = 0, i;
+  for (i = 0; i < blocks.length; i++) { if (blocks[i].style.display !== 'none') open++; }
+  return { total: blocks.length, open: open, blocks: blocks };
+}
+
+function _procExpandBtnHTML(allOpen) {
+  return '<svg width="9" height="9" viewBox="0 0 10 10" fill="none" style="flex-shrink:0;transition:transform .15s;transform:rotate(' + (allOpen ? 90 : 0) + 'deg);">'
+    + '<polyline points="3,1.5 7,5 3,8.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    + (allOpen ? 'Collapse all' : 'Expand all');
+}
+
+// Label follows the rows: all open reads Collapse all, anything else reads Expand
+// all, so the button always offers the move that changes something. Also hides
+// itself under By quarter, which has no accordions at all.
+function _syncProcExpandBtn(sid) {
+  var btn = document.getElementById('pcx-' + sid);
+  if (!btn) return;
+  var c = _procCustCounts(sid);
+  var onCust = (_procTab[sid] || 'qtr') === 'cust';
+  if (!onCust || !c || !c.total) { btn.style.display = 'none'; return; }
+  btn.style.display = 'inline-flex';
+  btn.innerHTML = _procExpandBtnHTML(c.open === c.total);
+}
+
+function toggleProcAllCust(sid) {
+  var c = _procCustCounts(sid);
+  if (!c || !c.total) return;
+  if (!window._procCustOpen) window._procCustOpen = {};
+  var willOpen = c.open !== c.total;
+  var i, rowId, chev;
+  for (i = 0; i < c.blocks.length; i++) {
+    rowId = c.blocks[i].id.slice(4); // strip the 'pcp-' prefix this id was built with
+    c.blocks[i].style.display = willOpen ? 'block' : 'none';
+    chev = document.getElementById('pcv-' + rowId);
+    if (chev) chev.style.transform = willOpen ? 'rotate(90deg)' : 'rotate(0deg)';
+    if (willOpen) window._procCustOpen[rowId] = true;
+    else delete window._procCustOpen[rowId];
+  }
+  trackEvent('proc_cust_expand_all', { sid: sid, action: willOpen ? 'expand' : 'collapse', rows: c.total });
+  _syncProcExpandBtn(sid);
 }
 
 function switchProcTab(sid, tab) {
@@ -11597,6 +11662,7 @@ function switchProcTab(sid, tab) {
   var navOff = 'padding:4px 12px;border-radius:6px;border:1.5px solid transparent;background:transparent;color:#888780;font-weight:400;font-size:12px;cursor:pointer;font-family:system-ui;';
   if (btnC) btnC.style.cssText = onC  ? navOn : navOff;
   if (btnQ) btnQ.style.cssText = !onC ? navOn : navOff;
+  _syncProcExpandBtn(sid);
 }
 
 function toggleProc(sid, skuName) {
@@ -15899,6 +15965,9 @@ function renderProcurement() {
     // the markup is bounded, and a pure display toggle keeps the open/closed state out of
     // the render path.
     var unitsHdr = isDes ? 'Desiccants' : isNeck ? 'Neckbands' : isScoop ? 'Scoops' : 'Units';
+    // Counted here rather than re-derived later: a refresh replays _procCustOpen, so the
+    // bulk button has to render already saying Collapse all if every row came back open.
+    var custExpandable = 0, custOpen = 0;
     var custRows = cd.custBreakdown.map(function(c, ci) {
       var barW = Math.round((c.units / maxCustUnits) * 100);
       var pct = ((c.units / totalCustUnits) * 100).toFixed(1);
@@ -15945,8 +16014,9 @@ function renderProcurement() {
 
       var chev = '<span id="pcv-' + rowId + '" style="display:inline-block;color:#5f5e5a;font-size:9px;transition:transform .15s;transform:rotate(' + (open ? 90 : 0) + 'deg);margin-right:5px;">&#9654;</span>';
       var canOpen = c.products.length > 0;
+      if (canOpen) { custExpandable++; if (open) custOpen++; }
       return '<div style="padding:8px 14px;border-bottom:0.5px solid #2c2c2a;">'
-        + '<div class="proc-cust-row"' + (canOpen ? ' onclick="toggleProcCust(' + jsStr(rowId) + ')"' : '')
+        + '<div class="proc-cust-row"' + (canOpen ? ' onclick="toggleProcCust(' + jsStr(rowId) + ',' + jsStr(sid) + ')"' : '')
           + ' style="display:flex;align-items:center;gap:10px;' + (canOpen ? 'cursor:pointer;' : '') + '">'
           // 200px, not 140: the longest customer name in the feed is 24 characters
           // ("Underground Formulations", ~150px at this size) plus the chevron, and at 140
@@ -16064,11 +16134,20 @@ function renderProcurement() {
       +'<script type="application/json" id="pdata-'+sid+'">'+JSON.stringify(procDataObj)+'<\/script>'
       +'<div id="psynopsis-'+sid+'" style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;background:#141618;min-height:44px;"></div>'
       +rateStrip
-      +'<div style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-bottom:0.5px solid #2c2c2a;background:#1a1d20;">'
+      // flex-wrap so the bulk button drops to its own line on a phone rather than
+      // squeezing the segmented control; margin-left:auto pins it right on desktop.
+      +'<div style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-bottom:0.5px solid #2c2c2a;background:#1a1d20;flex-wrap:wrap;">'
         +'<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
           +'<button id="ptab-qtr-'+sid+'"  onclick="switchProcTab(\''+sid+'\',\'qtr\')"  style="'+navS(activeTab==='qtr')+'">By quarter</button>'
           +'<button id="ptab-cust-'+sid+'" onclick="switchProcTab(\''+sid+'\',\'cust\')" style="'+navS(activeTab==='cust')+'">By customer</button>'
         +'</div>'
+        +'<button id="pcx-'+sid+'" onclick="toggleProcAllCust('+jsStr(sid)+')"'
+          +' title="Open or close every customer\'s product list in this panel"'
+          +' style="margin-left:auto;display:'+(activeTab==='cust'&&custExpandable?'inline-flex':'none')+';align-items:center;gap:5px;font-size:11px;padding:4px 10px;border:0.5px solid #444441;border-radius:7px;background:transparent;color:#888780;cursor:pointer;font-family:system-ui;white-space:nowrap;"'
+          +' onmouseover="this.style.background=\'#252829\';this.style.color=\'#e8e6e0\'"'
+          +' onmouseout="this.style.background=\'transparent\';this.style.color=\'#888780\'">'
+          +_procExpandBtnHTML(custExpandable>0&&custOpen===custExpandable)
+        +'</button>'
       +'</div>'
       +'<div id="pcust-'+sid+'" style="display:'+(activeTab==='cust'?'block':'none')+';">'+ custSection +'</div>'
       +'<div id="pqtr-'+sid+'" style="display:'+(activeTab==='qtr'?'block':'none')+';">'+ qtrSection +'</div>'
