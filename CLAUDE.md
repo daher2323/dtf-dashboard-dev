@@ -172,7 +172,18 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
   stale ones let the alarm through. Extra fetches are paid only when there is something to
   alarm about, and `_stockConfirmSig` stops a standing problem re-confirming every poll.
   This is the same move the reject-retry beside it already makes for a *broken* snapshot,
-  applied to a *complete but stale* one.
+  applied to a *complete but stale* one. **A confirming read that comes back clean is ADOPTED,
+  not merely counted as a vote** — the first version only took its vote, which silenced the
+  alert while the page carried on rendering the stale snapshot beneath it: On hand, Available,
+  Cover, the lot table and the FEFO walk all still showed the old figures, so the one signal
+  saying "these numbers are wrong" had been removed and the wrong numbers left in place. That
+  is strictly worse than not holding at all. `mergeInventoryArchive` and `_fefoInvalidate`
+  re-run on adoption, in the accept branch's order.
+  **None of this detects a stale snapshot that happens to contain no overages**, and it cannot:
+  the feed carries no version stamp, so staleness is only ever inferred from a lot that
+  contradicts itself. A page can still be served hours-old stock with nothing on it saying so.
+  The only real cure is to stop reading the publish cache — see the note on switching the
+  inventory feed to a live export endpoint.
   **The pick sheet needs a monotonic guard, not a proportional one** (`_materialsLooksComplete`,
   `MATERIALS_MAX_HOLDS` 3). Measured 2026-09-16: a FEFO opportunity on run 2609086 / part
   10-388 read "all 1 corrected" at 12:19 and "1 open" at 12:20. `fixedAt` is a *later* pick

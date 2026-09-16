@@ -2798,7 +2798,7 @@ function _writeInventoryCache() {
   } catch(e) {}
 }
 
-function _confirmOverages() {
+function _confirmOverages(archiveText) {
   var a = inventoryStockAudit;
   if (!a || !a.over.length || _stockConfirming) return false;
   var sig = a.over.map(function(o){ return (o.lot || '').toUpperCase() + ':' + _stockSig(o); }).sort().join(',');
@@ -2829,16 +2829,17 @@ function _confirmOverages() {
   function attempt() {
     tries++;
     fetchInventoryCSV(true).then(function(t2){
-      // parseInventory writes inventoryLotIndex and inventoryStockAudit as side effects, and
-      // this read is only ever a second opinion — it must not become the page's data.
+      // parseInventory writes inventoryLotIndex and inventoryStockAudit as side effects, so
+      // both are parked until we know whether this read is the one to keep.
       var keepIdx = inventoryLotIndex, keepAudit = inventoryStockAudit;
       var parsed2 = parseInventory(t2);
-      var audit2 = inventoryStockAudit;
+      var audit2 = inventoryStockAudit, idx2 = inventoryLotIndex;
       inventoryLotIndex = keepIdx; inventoryStockAudit = keepAudit;
       var cleared = false;
       // Only an acceptable payload gets a vote, the same rule the hold follows: a gutted
       // snapshot names no lots at all, and silence must not read as "clean".
-      if (_inventoryLooksComplete(parsed2, inventoryByPart) && keepAudit && keepAudit.pending) {
+      var ok = _inventoryLooksComplete(parsed2, inventoryByPart);
+      if (ok && keepAudit && keepAudit.pending) {
         var now = Date.now(), cl = audit2.cleanLots || [], i, pend = {};
         for (i = 0; i < keepAudit.pending.length; i++) pend[(keepAudit.pending[i].lot || '').toUpperCase()] = 1;
         for (i = 0; i < cl.length; i++) {
@@ -2847,7 +2848,29 @@ function _confirmOverages() {
           if (!_stockCleanSeen[cl[i]]) _stockCleanSeen[cl[i]] = { t: now, first: now, sig: null };
         }
       }
-      if (cleared || tries >= STOCK_CONFIRM_TRIES) { finish(); return; }
+      if (ok && cleared) {
+        // ADOPT IT — do not merely take its vote. This was the first version's mistake and
+        // it made things worse rather than better: the confirming read was used to silence
+        // the alert while the page went on rendering the stale snapshot underneath it. On
+        // hand, Available, Cover, the lot table and the FEFO walk all still read the old
+        // figures, so the one signal saying "these numbers are wrong" had been removed and
+        // the wrong numbers left in place. A read that shows the flagged lots clean is
+        // newer by the same rule the whole hold rests on, so it becomes the page's data.
+        inventoryByPart = parsed2;
+        inventoryLotIndex = idx2;
+        inventoryStockAudit = audit2;
+        // The archive merge lives on the index this read just rebuilt, so it has to run
+        // again — same ordering as the accept branch.
+        mergeInventoryArchive(archiveText || '');
+        _fefoInvalidate();
+        applyStockCleanHold(inventoryStockAudit);
+        _stockConfirming = false;
+        _stockConfirmSig = sig;
+        _writeInventoryCache();
+        if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+        return;
+      }
+      if (tries >= STOCK_CONFIRM_TRIES) { finish(); return; }
       attempt();
     }).catch(function(){ finish(); });
   }
@@ -2893,7 +2916,7 @@ function fetchInventoryIfNeeded(force) {
       // which is the exact misreading that warning exists to prevent.
       // Before the cache write, so a payload hidden pending confirmation is not cached as
       // something to alarm about; finish() rewrites the cache when it resolves.
-      _confirmOverages();
+      _confirmOverages(archiveText);
       _writeInventoryCache();
       _invRejects = 0;
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
