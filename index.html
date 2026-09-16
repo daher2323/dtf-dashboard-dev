@@ -13157,11 +13157,30 @@ function setMatInlineTab(v) {
 //
 // The count opens the list, for the same reason the expiry line does: naming a defect
 // without a route to it just moves the hunt onto the reader.
+// Quantities on these rows are per-material: kilograms for almost everything, softgel
+// counts for softgel SKUs (matUnit). Adding the two into one figure would produce a
+// number in no unit at all, so the totals are kept per unit and printed separately. In
+// practice today's list is all kg and this reads exactly as a plain sum would.
+function _auditQtyTotal(rows, key) {
+  var by = {}, order = [];
+  rows.forEach(function(o){
+    var u = matUnit(o.material);
+    if (by[u] == null) { by[u] = 0; order.push(u); }
+    by[u] += (o[key] || 0);
+  });
+  return order.map(function(u){ return fmtStockQty(by[u]) + ' ' + u; })
+              .join(' <span style="color:#3a3a38;">&middot;</span> ');
+}
+
+// The full word, not the table's "sg" shorthand: these panels are auto-layout with an
+// overflow-x wrapper, so there is room to spell it, and they follow the expanded lot
+// table (matLotTableHTML) rather than the fixed-width Materials grid. Each row is its
+// own material, so the unit is read per row.
 function stockOverageAlertHTML() {
   var a = inventoryStockAudit || { over: [], blindLots: [], blind: 0, checked: 0 };
   var n = a.over.length;
   if (!n) return '';
-  var kg = a.over.reduce(function(s2, o){ return s2 + o.over; }, 0);
+  var kgTxt = _auditQtyTotal(a.over, 'over');
   var warn = '<svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;">'
     + '<path d="M10 2.6 18.4 17H1.6L10 2.6Z" fill="#791F1F" stroke="#F09595" stroke-width="1.3" stroke-linejoin="round"/>'
     + '<line x1="10" y1="7.6" x2="10" y2="11.6" stroke="#F09595" stroke-width="1.5" stroke-linecap="round"/>'
@@ -13173,7 +13192,7 @@ function stockOverageAlertHTML() {
       + '<div style="font-size:12px;font-weight:600;color:#F09595;letter-spacing:.01em;">'
         + 'Stock exceeds the quantity received &mdash; ' + n + ' lot' + (n===1?'':'s') + '</div>'
       + '<div style="font-size:11px;color:#a89490;margin-top:3px;line-height:1.45;">'
-        + '<span style="color:#cfcdc7;font-weight:500;">' + fmtStockQty(kg) + '</span> on hand that was never received. '
+        + '<span style="color:#cfcdc7;font-weight:500;">' + kgTxt + '</span> on hand that was never received. '
         + 'On hand, Available, Cover, the expiry projection and the FEFO walk are all wrong on '
         + (n===1?'this lot':'these lots') + ' until the inventory sheet is corrected.'
         + (_blindCount() > 0 ? ' ' + blindLinkHTML('more') + '.' : '')
@@ -13195,14 +13214,15 @@ function stockOveragePanelHTML() {
     // The ratio is what makes the size of the error legible at a glance: 2.2x reads as
     // a different kind of mistake from 1.05x even when the kg happen to be similar.
     var mult = o.orig > 0 ? (Math.max(o.cur, o.start == null ? 0 : o.start) / o.orig) : null;
+    var u = matUnit(o.material);
     return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<td style="' + td + 'color:#e8e6e0;max-width:280px;overflow:hidden;text-overflow:ellipsis;">' + esc(o.material || '—') + '</td>'
       + '<td style="' + td + 'color:#888780;">' + esc(o.part) + '</td>'
       + '<td style="' + td + '">' + _blendCopyCell(o.lot) + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + fmtStockQty(o.orig) + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#888780;">' + (o.start == null ? '—' : fmtStockQty(o.start)) + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#F09595;font-weight:500;">+' + fmtStockQty(o.over)
+      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + fmtStockQty(o.orig) + ' ' + u + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (o.start == null ? '—' : fmtStockQty(o.start) + ' ' + u) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + ' ' + u + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#F09595;font-weight:500;">+' + fmtStockQty(o.over) + ' ' + u
         + (mult ? ' <span style="font-size:9px;color:#a06060;font-weight:400;">' + mult.toFixed(2) + '×</span>' : '') + '</td>'
       + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc) + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (o.received ? esc(o.received) : '—') + '</td>'
@@ -13270,7 +13290,7 @@ function stockBlindPanelHTML() {
   var a = inventoryStockAudit || {};
   var out = a.blindLots || [];
   if (!out.length) return '';
-  var kg = out.reduce(function(s2, o){ return s2 + (o.held || 0); }, 0);
+  var kgTxt = _auditQtyTotal(out, 'held');
   var sentinels = out.filter(function(o){ return o.reason === 'sentinel'; }).length;
   var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var thR = th.replace('text-align:left', 'text-align:right');
@@ -13279,6 +13299,7 @@ function stockBlindPanelHTML() {
     // Each reason names the fix, because they are four different jobs. The sentinel row
     // says so explicitly: sending someone to edit a cell Google is still computing would
     // have them "fix" a value that is about to arrive on its own.
+    var u = matUnit(o.material);
     var cell = o.reason === 'empty'
         ? '<span style="color:#5f5e5a;">(empty)</span> <span style="font-size:9px;color:#5f5e5a;">not recorded</span>'
       : o.reason === 'sentinel'
@@ -13293,8 +13314,8 @@ function stockBlindPanelHTML() {
       + '<td style="' + td + 'color:#888780;">' + esc(o.part) + '</td>'
       + '<td style="' + td + '">' + _blendCopyCell(o.lot) + '</td>'
       + '<td style="' + td + '">' + cell + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#888780;">' + (o.start == null ? '\u2014' : fmtStockQty(o.start)) + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (o.start == null ? '\u2014' : fmtStockQty(o.start) + ' ' + u) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + ' ' + u + '</td>'
       + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc) + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (o.received ? esc(o.received) : '\u2014') + '</td>'
       + '</tr>';
@@ -13303,7 +13324,7 @@ function stockBlindPanelHTML() {
     + '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#211d16;">'
       + '<span style="font-size:11px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;">Cannot be checked</span>'
       + '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + out.length + ' lot' + (out.length===1?'':'s')
-        + ' holding <span style="color:#cfcdc7;">' + fmtStockQty(kg) + '</span>'
+        + ' holding <span style="color:#cfcdc7;">' + kgTxt + '</span>'
         + ' &middot; fill Original Qty Received in the Raw Material Inventory sheet to bring '
         + (out.length===1?'it':'them') + ' into the check'
         + (sentinels > 0
