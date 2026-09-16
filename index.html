@@ -1089,8 +1089,20 @@ var STOCK_OVERAGE_EPS = 0.01;
 // window IS the cap, in the spirit of REFRESH_MAX_HOLDS. Held lots are counted and named on
 // screen rather than dropped quietly — a hold that nobody can see is indistinguishable from
 // a bug that eats findings.
+// The window is NOT wall-clock. It measures time spent seeing *new* contradicting evidence.
+// Shipped as a plain 30-minute wall clock and that was wrong: measured 2026-09-16, the
+// rotation on this feed was still serving three generations at 11:30 and had not converged
+// until some time before 13:50, so the clock ran out while the feed was handing back the
+// same stale file, and four lots inventory had already corrected reappeared. Elapsed time
+// was never the right measure — an old snapshot arriving again teaches nothing, so it
+// re-arms the hold instead of ageing it (see the sig test in applyStockCleanHold).
 var STOCK_CLEAN_HOLD_MS = 30 * 60 * 1000;
-var STOCK_CLEAN_KEY = 'dtf_stock_clean_v1';
+// The backstop, so re-arming cannot hide a lot forever. Reaching it means the same reading
+// has persisted a full day, which is no longer a publish artefact — at that point the sheet
+// really does say what it says, and the alert is right to come back.
+var STOCK_CLEAN_HOLD_MAX_MS = 24 * 60 * 60 * 1000;
+// v2: entries are {t, first, sig} rather than a bare timestamp.
+var STOCK_CLEAN_KEY = 'dtf_stock_clean_v2';
 // T# (upper) -> ms when it was last seen checkable AND not over. Persisted on its own key
 // rather than inside the inventory cache: that payload expires on STOCK_CACHE_TTL (10 min),
 // and a reload landing on a stale snapshot after the cache lapsed is exactly the case this
@@ -2697,23 +2709,43 @@ var INVENTORY_MAX_REJECT_RETRIES = 4;
 // show and the ones to hold. Called ONLY on an accepted parse — a rejected snapshot is a
 // gutted one, and letting it record clean sightings would let a truncated file silence real
 // findings, which is the same class of error the acceptance guard exists to stop.
+// The three figures the audit actually reads. Two over-readings with the same signature are
+// the same generation of the sheet restated — not a second, independent observation — and a
+// hold must not age on a file it has already seen.
+function _stockSig(o) {
+  return [o.orig, o.start == null ? '' : o.start, o.cur].join('|');
+}
+
 function applyStockCleanHold(audit) {
   if (!audit) return audit;
   var now = Date.now(), i, k;
   var clean = audit.cleanLots || [];
-  for (i = 0; i < clean.length; i++) _stockCleanSeen[clean[i]] = now;
+  // A clean sighting restarts everything, including the backstop: it is the freshest
+  // possible evidence that this lot's row is right.
+  for (i = 0; i < clean.length; i++) _stockCleanSeen[clean[i]] = { t: now, first: now, sig: null };
   var shown = [], held = [];
   for (i = 0; i < (audit.over || []).length; i++) {
-    var o = audit.over[i], t = _stockCleanSeen[(o.lot || '').toUpperCase()];
-    if (t != null && (now - t) < STOCK_CLEAN_HOLD_MS) { o.cleanAt = t; held.push(o); }
-    else shown.push(o);
+    var o = audit.over[i], rec = _stockCleanSeen[(o.lot || '').toUpperCase()];
+    if (!rec) { shown.push(o); continue; }
+    if ((now - rec.first) >= STOCK_CLEAN_HOLD_MAX_MS) { shown.push(o); continue; }
+    var sig = _stockSig(o);
+    if (rec.sig === sig) {
+      // Same file again. No new information, so the clock does not run.
+      rec.t = now;
+    } else if ((now - rec.t) < STOCK_CLEAN_HOLD_MS) {
+      // A reading we have not seen before: let the window age from here.
+      rec.sig = sig;
+    } else { shown.push(o); continue; }
+    o.cleanAt = rec.first;
+    held.push(o);
   }
   audit.over = shown;
   audit.held = held;
   // Pruned here as well as on load, so a long-lived session cannot grow the map without
-  // bound: an entry past the window can never hold anything again.
+  // bound. Keyed on `first` — the backstop — because `t` is re-armed and would keep a dead
+  // entry alive; an entry past the backstop can never hold anything again.
   for (k in _stockCleanSeen) {
-    if (_stockCleanSeen.hasOwnProperty(k) && (now - _stockCleanSeen[k]) >= STOCK_CLEAN_HOLD_MS) delete _stockCleanSeen[k];
+    if (_stockCleanSeen.hasOwnProperty(k) && (now - _stockCleanSeen[k].first) >= STOCK_CLEAN_HOLD_MAX_MS) delete _stockCleanSeen[k];
   }
   try { sessionStorage.setItem(STOCK_CLEAN_KEY, JSON.stringify(_stockCleanSeen)); } catch(e) {}
   return audit;
@@ -2725,7 +2757,8 @@ function _loadStockCleanSeen() {
     if (!raw) return;
     var o = JSON.parse(raw) || {}, now = Date.now(), k;
     for (k in o) {
-      if (o.hasOwnProperty(k) && typeof o[k] === 'number' && (now - o[k]) < STOCK_CLEAN_HOLD_MS) _stockCleanSeen[k] = o[k];
+      if (o.hasOwnProperty(k) && o[k] && typeof o[k].first === 'number'
+          && (now - o[k].first) < STOCK_CLEAN_HOLD_MAX_MS) _stockCleanSeen[k] = o[k];
     }
   } catch(e) {}
 }
@@ -13421,18 +13454,16 @@ function stockHeldNoteHTML() {
   var a = inventoryStockAudit || {};
   var h = a.held || [];
   if (!h.length) return '';
-  var now = Date.now(), mins = 0, i;
-  for (i = 0; i < h.length; i++) {
-    var left = Math.ceil((STOCK_CLEAN_HOLD_MS - (now - (h[i].cleanAt || now))) / 60000);
-    if (left > mins) mins = left;
-  }
+  // No countdown any more. The hold re-arms on every repeat of a reading it has already
+  // seen, so "24 min left" would be a number that keeps resetting — it promised a deadline
+  // the mechanism does not have. What the reader needs is that these are held and why.
   var lots = h.map(function(o){ return o.lot; }).join(', ');
   return '<span title="' + esc(lots) + ' read as corrected on a more recent snapshot of the published sheet, '
-    + 'but the feed serves several generations at once and is still handing back the old one. '
-    + 'They are held rather than dropped: if any is still over when the hold lapses, it reappears."'
+    + 'but the feed serves several generations at once and keeps handing back the old one. '
+    + 'They are held rather than dropped: a reading the dashboard has not seen before releases '
+    + 'them within the half hour, and any lot still over a day later comes back regardless."'
     + ' style="color:#888780;border-bottom:1px dotted #444441;cursor:help;">'
-    + h.length + ' recently corrected lot' + (h.length===1?'':'s') + ' held'
-    + (mins > 0 ? ' (' + mins + ' min)' : '') + '</span>';
+    + h.length + ' recently corrected lot' + (h.length===1?'':'s') + ' held</span>';
 }
 
 // Amber, not red, and a row here is not an error. It is stock the check cannot see

@@ -152,7 +152,17 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
   (`stockHeldNoteHTML`) — a delay nobody can see is indistinguishable from a bug that eats
   findings. The map persists separately from `INVENTORY_CACHE_KEY` because that payload
   expires on `STOCK_CACHE_TTL` (10 min) and a reload after it lapses is the exact case this
-  exists for. ~2,600 lots, ~59 KB.
+  exists for. ~2,600 lots, ~59 KB. **The window is not wall-clock, and that was the first
+  version's bug**: shipped as a plain 30 minutes, it expired while the rotation was *still*
+  serving the pre-correction file — measured the same day, the feed was three-way split at
+  11:30 and had not converged until some time before 13:50 — so four already-corrected lots
+  came back. Elapsed time was never the right measure. An over-reading carrying the same
+  `orig|start|cur` signature (`_stockSig`) is the same generation restated, not a second
+  observation, so it **re-arms** the hold instead of ageing it; only a reading the dashboard
+  has not seen before lets the clock run. `STOCK_CLEAN_HOLD_MAX_MS` (24 h, measured from the
+  last clean sighting) is the backstop, and the prune keys on that, not on the re-armed
+  clock. The held note therefore shows no countdown — it would reset every poll and promise a
+  deadline the mechanism does not have.
   **The pick sheet needs a monotonic guard, not a proportional one** (`_materialsLooksComplete`,
   `MATERIALS_MAX_HOLDS` 3). Measured 2026-09-16: a FEFO opportunity on run 2609086 / part
   10-388 read "all 1 corrected" at 12:19 and "1 open" at 12:20. `fixedAt` is a *later* pick
