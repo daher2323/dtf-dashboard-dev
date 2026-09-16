@@ -1058,6 +1058,19 @@ var materialsData = [];
 var pickRows = [];           // [{ date, orderLot, part, material, slots:[{t, qty}] }]
 var inventoryByPart = {};    // DTF Part # -> { partNum, stock, material, lots, lotRows[] } — summed on-hand plus the per-lot detail
 var inventoryLotIndex = {};  // T# (upper) -> { part, qty, exp, received } for EVERY lot incl. depleted — FEFO needs the picked lot's expiry
+// Impossible-stock audit, rebuilt by parseInventory: { over:[], blind:0, checked:0 }.
+// `over` holds lots recorded as holding more than was ever received — see the note on
+// parseInventory. Cached alongside inventoryByPart, because parseInventory does not
+// re-run on a cache hit and an alarm that goes quiet for the cache TTL is worse than
+// no alarm at all.
+var inventoryStockAudit = { over: [], blind: 0, checked: 0 };
+// Float noise only. NOT a materiality floor: the rule is the one the sheet states —
+// stock above the received quantity is impossible at any size. Today's four findings
+// are 9.8-15.2 kg over (1.2x to 2.2x), so nothing sits near this line; if re-weighed
+// drums ever start landing a hair above nominal, that is the evidence for adding a
+// real floor here rather than a reason to guess at one now.
+var STOCK_OVERAGE_EPS = 0.01;
+var _stockOveragesOpen = false;
 var inventoryLoaded = false; // true once a successful inventory fetch has populated inventoryByPart
 var demandByPart = {};       // DTF Part # -> forthcoming demand in KG, summed across the demand sheet
 var demandLoaded = false;    // true once a successful demand fetch has populated demandByPart
@@ -1065,7 +1078,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v7';  // v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v8';  // v8: carries the impossible-stock audit, which parseInventory does not re-run to rebuild on a cache hit; v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -2368,12 +2381,33 @@ function parseInvDate(v) {
 //     so the old "Ready To Archive" check here never fired. Dropped rather than left
 //     as a comforting no-op; if that filter is ever removed from the sheet, this needs
 //     to come back for real.
+//
+// It also runs the IMPOSSIBLE-STOCK audit, because this is the only pass that sees
+// every row. "Original Qty Received" is what came in the door, and stock only ever
+// falls from there, so a lot recorded as holding MORE than it was received with is not
+// a slow-moving lot — it is a broken number. A pick logged against the wrong T#, a
+// receiving entry short of the real delivery, a formula off by a row. Everything built
+// on that lot is wrong with it: on hand, Available, Cover, the FEFO walk, the expiry
+// exposure. Three points that decide what gets flagged:
+//   • Checked against the HIGHER of Start Day Stock and Current Stock. Either one above
+//     the received quantity is impossible, and a lot can be drawn to zero by the
+//     afternoon — checking current stock alone would let a lot that began the day
+//     impossible clear itself simply by being consumed.
+//   • A blank or sentinel original is NOT checkable and is never flagged. The feed
+//     serves #N/A and #VALUE! while the tab recalculates, and num() turns both into 0,
+//     which would read as "received nothing" and put a code red on every lot in the
+//     building. A cell with no digit in it stays null. Same rule as startQty below.
+//   • An original of 0 is counted blind too. A genuine zero receipt holding stock is
+//     the same defect, but here it is indistinguishable from a placeholder, and a false
+//     alarm costs more than a missed one on a board nobody has learned to trust yet.
+//     Blind lots are counted and stated, not silently dropped.
 function parseInventory(text) {
   if (!text) return {};
   try {
     var rows = parseCSVMultiline(text);
     var byPart = {};
     var _catTally = {};
+    var _audit = { over: [], blind: 0, checked: 0 };
     inventoryLotIndex = {};
     rows.forEach(function(r){
       var part = (r['DTF Part #'] || '').trim();
@@ -2395,6 +2429,28 @@ function parseInventory(text) {
       p.stock += qty;
       var lotNo = (r['DTF Lot #'] || '').trim();
       if (lotNo) p.lots += 1;
+      // Hoisted out of the lot-index block below: the audit needs the same raw cell, and
+      // parsing it twice invites the two readings drifting apart.
+      var sdRaw = (r['Start Day Stock'] == null ? '' : String(r['Start Day Stock'])).trim();
+      var sdQty = /[0-9]/.test(sdRaw) ? num(sdRaw) : null;
+      if (lotNo) {
+        var origRaw = (r['Original Qty Received'] == null ? '' : String(r['Original Qty Received'])).trim();
+        var origQty = /[0-9]/.test(origRaw) ? num(origRaw) : null;
+        var peak = Math.max(qty, sdQty == null ? 0 : sdQty);
+        if (origQty != null && origQty > 0) {
+          _audit.checked++;
+          if (peak - origQty > STOCK_OVERAGE_EPS) {
+            _audit.over.push({
+              part: part, material: (r['Material Name'] || '').trim(), lot: lotNo,
+              cur: qty, start: sdQty, orig: origQty, over: peak - origQty,
+              loc: (r['Locations'] || '').trim(), received: (r['Receiving Date'] || '').trim(),
+              supplier: (r['Supplier/MFG'] || '').trim(), batch: (r['Lot / Batch'] || '').trim()
+            });
+          }
+        } else if (peak > 0) {
+          _audit.blind++;
+        }
+      }
       // Every lot, depleted included: FEFO detection has to know the expiry of the
       // lot that was actually picked, and that one is usually spent by now.
       if (lotNo) {
@@ -2405,11 +2461,10 @@ function parseInventory(text) {
         // #VALUE! while the tab recalculates, and num() turns both into 0, which would read
         // as "this lot was empty all morning" and silently suppress real findings. A cell
         // with no digit in it stays null, and null means "fall back to current stock".
-        var sdRaw = (r['Start Day Stock'] == null ? '' : String(r['Start Day Stock'])).trim();
         inventoryLotIndex[lotNo.toUpperCase()] = {
           part: part, qty: qty, exp: xd ? xd.getTime() : null,
           received: (r['Receiving Date'] || '').trim(),
-          startQty: /[0-9]/.test(sdRaw) ? num(sdRaw) : null
+          startQty: sdQty
         };
       }
       if (!p.material && r['Material Name']) p.material = (r['Material Name'] || '').trim();
@@ -2438,6 +2493,9 @@ function parseInventory(text) {
       var t = _catTally[pk];
       byPart[pk].category = (t['2'] >= t['1']) ? '2' : '1';
     });
+    // Worst overage first — the size of the gap is the size of the problem.
+    _audit.over.sort(function(a, b){ return b.over - a.over; });
+    inventoryStockAudit = _audit;
     return byPart;
   } catch (e) { return {}; }
 }
@@ -2551,7 +2609,7 @@ function fetchInventoryIfNeeded(force) {
     _invFetching = false;
     // parseInventory rebuilds inventoryLotIndex as a side effect, so a rejected parse
     // must not leave its scraps behind for the FEFO detector.
-    var keepIndex = inventoryLotIndex;
+    var keepIndex = inventoryLotIndex, keepAudit = inventoryStockAudit;
     var parsed = parseInventory(t);
     if (_inventoryLooksComplete(parsed, inventoryByPart)) {
       inventoryByPart = parsed;
@@ -2569,11 +2627,12 @@ function fetchInventoryIfNeeded(force) {
       // returned nothing) while _archiveLots reverted to null, so the "archived lots not
       // loaded" warning stayed hidden — the coverage drop then read as fewer mispicks,
       // which is the exact misreading that warning exists to prevent.
-      try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, archiveLots: _archiveLots, ts: Date.now() })); } catch(e) {}
+      try { sessionStorage.setItem(INVENTORY_CACHE_KEY, JSON.stringify({ byPart: parsed, lotIndex: inventoryLotIndex, archiveLots: _archiveLots, audit: inventoryStockAudit, ts: Date.now() })); } catch(e) {}
       _invRejects = 0;
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     } else {
       inventoryLotIndex = keepIndex;
+      inventoryStockAudit = keepAudit;
       _fefoInvalidate();
       console.warn('Inventory fetch rejected: ' + Object.keys(parsed || {}).length
         + ' parts parsed (need at least ' + INVENTORY_MIN_PARTS + ' and 80% of the '
@@ -4251,7 +4310,7 @@ function _loadStockCaches() {
     var ri = sessionStorage.getItem(INVENTORY_CACHE_KEY);
     // Same size test on the way in: a cache is only as trustworthy as the fetch that
     // wrote it, and a gutted payload must not be able to survive a reload.
-    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryLoaded = true; _stockHydratedFromCache = true; if (typeof ci.archiveLots === 'number') _archiveLots = ci.archiveLots; } }
+    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryStockAudit = ci.audit || { over: [], blind: 0, checked: 0 }; inventoryLoaded = true; _stockHydratedFromCache = true; if (typeof ci.archiveLots === 'number') _archiveLots = ci.archiveLots; } }
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
@@ -13001,6 +13060,92 @@ function setMatInlineTab(v) {
 // verbatim so it can be found and corrected in the inventory sheet. Two problems
 // live here because they are fixed in the same place but need different actions:
 // "Unreadable" is a typo to correct, "Not recorded" is a date to enter.
+// ── Impossible stock: the alert, and the list behind it ─────────────────────
+// Deliberately louder than the Expiry-data line beside it, and unconditional. An
+// unreadable expiry date is a data-entry chore; a lot holding more than was ever
+// received means a number somewhere is wrong RIGHT NOW and every figure resting on
+// that lot is wrong with it. It cannot be dismissed, only fixed — the strip is
+// self-extinguishing, so correcting the sheet is what makes it go away.
+//
+// The count opens the list, for the same reason the expiry line does: naming a defect
+// without a route to it just moves the hunt onto the reader.
+function stockOverageAlertHTML() {
+  var a = inventoryStockAudit || { over: [], blind: 0, checked: 0 };
+  var n = a.over.length;
+  if (!n) return '';
+  var kg = a.over.reduce(function(s2, o){ return s2 + o.over; }, 0);
+  var warn = '<svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;">'
+    + '<path d="M10 2.6 18.4 17H1.6L10 2.6Z" fill="#791F1F" stroke="#F09595" stroke-width="1.3" stroke-linejoin="round"/>'
+    + '<line x1="10" y1="7.6" x2="10" y2="11.6" stroke="#F09595" stroke-width="1.5" stroke-linecap="round"/>'
+    + '<circle cx="10" cy="14.2" r=".85" fill="#F09595"/></svg>';
+  return '<div style="display:flex;align-items:center;gap:11px;padding:11px 14px;margin:-4px 0 12px;'
+      + 'background:#241717;border:0.5px solid #4a2020;border-left:3px solid #F09595;border-radius:0 10px 10px 0;">'
+    + warn
+    + '<div style="flex:1;min-width:0;font-family:system-ui;">'
+      + '<div style="font-size:12px;font-weight:600;color:#F09595;letter-spacing:.01em;">'
+        + 'Stock exceeds the quantity received &mdash; ' + n + ' lot' + (n===1?'':'s') + '</div>'
+      + '<div style="font-size:11px;color:#a89490;margin-top:3px;line-height:1.45;">'
+        + '<span style="color:#cfcdc7;font-weight:500;">' + fmtStockQty(kg) + '</span> on hand that was never received. '
+        + 'On hand, Available, Cover, the expiry projection and the FEFO walk are all wrong on '
+        + (n===1?'this lot':'these lots') + ' until the inventory sheet is corrected.'
+        + (a.blind > 0
+            ? ' <span title="These lots hold stock but carry no usable Original Qty Received, so they cannot be checked either way. Fill that column in the RMI sheet to bring them into the check." style="color:#888780;border-bottom:1px dotted #444441;cursor:help;">'
+              + a.blind + ' more lot' + (a.blind===1?'':'s') + ' cannot be checked</span>.'
+            : '')
+      + '</div>'
+    + '</div>'
+    + '<button onclick="toggleStockOverages()" style="flex-shrink:0;padding:4px 11px;border-radius:6px;border:0.5px solid #6b2020;'
+      + 'background:#331A1A;color:#F09595;font-size:11px;font-weight:500;cursor:pointer;font-family:system-ui;white-space:nowrap;">'
+      + (_stockOveragesOpen ? 'Hide lots &#9652;' : 'Show lots &#9662;') + '</button>'
+  + '</div>';
+}
+
+function stockOveragePanelHTML() {
+  var a = inventoryStockAudit || { over: [] };
+  if (!a.over.length) return '';
+  var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+  var thR = th.replace('text-align:left', 'text-align:right');
+  var rows = a.over.map(function(o){
+    var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
+    // The ratio is what makes the size of the error legible at a glance: 2.2x reads as
+    // a different kind of mistake from 1.05x even when the kg happen to be similar.
+    var mult = o.orig > 0 ? (Math.max(o.cur, o.start == null ? 0 : o.start) / o.orig) : null;
+    return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<td style="' + td + 'color:#e8e6e0;max-width:280px;overflow:hidden;text-overflow:ellipsis;">' + esc(o.material || '—') + '</td>'
+      + '<td style="' + td + 'color:#888780;">' + esc(o.part) + '</td>'
+      + '<td style="' + td + '">' + _blendCopyCell(o.lot) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + fmtStockQty(o.orig) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (o.start == null ? '—' : fmtStockQty(o.start)) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#F09595;font-weight:500;">+' + fmtStockQty(o.over)
+        + (mult ? ' <span style="font-size:9px;color:#a06060;font-weight:400;">' + mult.toFixed(2) + '×</span>' : '') + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc) + '</td>'
+      + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (o.received ? esc(o.received) : '—') + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<div style="background:#1e1414;border:0.5px solid #4a2020;border-left:3px solid #F09595;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
+    + '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#241717;">'
+      + '<span style="font-size:11px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Impossible stock</span>'
+      + '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + a.over.length + ' lot' + (a.over.length===1?'':'s')
+        + ' &middot; reconcile the lot against its receiving record in the Raw Material Inventory sheet; the dashboard picks up the correction on the next refresh</span>'
+      + '<button onclick="toggleStockOverages()" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;">Hide</button>'
+    + '</div>'
+    + '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#1a1416;">'
+    + '<thead><tr style="border-bottom:0.5px solid #4a2020;">'
+      + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
+      + '<th style="' + thR + '">Received</th><th style="' + thR + '">Start of day</th><th style="' + thR + '">Current</th>'
+      + '<th style="' + thR + '">Over by</th>'
+      + '<th style="' + th + '">Location</th>'
+      + '<th style="' + thR + 'padding-right:14px;">Received on</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+    + '</div>';
+}
+
+function toggleStockOverages() {
+  _stockOveragesOpen = !_stockOveragesOpen;
+  renderMaterials();
+}
+
 function expiryIssuesPanelHTML() {
   var out = [], pn, i;
   for (pn in inventoryByPart) {
@@ -13982,13 +14127,15 @@ function renderMaterials() {
   // above it is unchanged, so the toggle back is always in reach. filterMaterials() at
   // the end is safe with no table in the DOM — it guards every row lookup — and still
   // fills the segment counts and paints the active segment.
+  // Above the expiry line, which is the quieter problem of the two.
+  var _overHTML = stockOverageAlertHTML() + (_stockOveragesOpen ? stockOveragePanelHTML() : '');
   if (matView === 'lothealth' && materialsFefoOnly) {
-    content.innerHTML = pickerHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
+    content.innerHTML = pickerHTML + _overHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
       + _fefoOpsPanelHTML();
     filterMaterials();
     return;
   }
-  content.innerHTML = pickerHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
+  content.innerHTML = pickerHTML + _overHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     +'<div style="overflow-x:auto;"><table class="mat-table" style="width:100%;font-family:system-ui;table-layout:fixed;">'
     +'<colgroup>'
