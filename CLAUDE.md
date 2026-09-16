@@ -153,6 +153,21 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
   findings. The map persists separately from `INVENTORY_CACHE_KEY` because that payload
   expires on `STOCK_CACHE_TTL` (10 min) and a reload after it lapses is the exact case this
   exists for. ~2,600 lots, ~59 KB.
+  **The pick sheet needs a monotonic guard, not a proportional one** (`_materialsLooksComplete`,
+  `MATERIALS_MAX_HOLDS` 3). Measured 2026-09-16: a FEFO opportunity on run 2609086 / part
+  10-388 read "all 1 corrected" at 12:19 and "1 open" at 12:20. `fixedAt` is a *later* pick
+  slip naming the lot that should have been pulled — here 9/16 10:44:57, T35083 — so a
+  generation published before the sync appended that row simply lacks it. Deleting exactly
+  that one line from the 25,224-line file reproduces the flip with `shouldLot` unchanged.
+  `fetchMaterialsIfNeeded` accepted on `parsed.length > 0` alone, and the inventory guard's
+  80% floor could never have caught it: 22,912 of 22,913 is 99.996%. **A one-row regression
+  is only visible to a monotonic test** — the production feed's `kept < curToday` shape. It is
+  capped rather than absolute because corrections to the source routinely delete and re-key
+  rows (31 in one audited 21-day window), so a genuinely smaller sheet lands after 3 holds,
+  ~15 min at the 5-minute stock cadence. Both counts are tested: one fetch feeds
+  `materialsData` (Materials) and `pickRows` (Recall, Blend, every FEFO view). A cold start
+  has nothing to compare against and can still paint one stale generation; the next poll
+  corrects it.
 - **A procurement column younger than the comparison window is a fact about the feed, not the SKU** (`procColumnCoverage`). The trajectory tag was `ytd25Units > 0 ? up/down/flat : 'new'`, so Scoops — first recorded 2026-09-02, 4 production days of data — tagged all 9 sizes **New**, which is true of the tracking and false of ten-year-old scoop sizes. The same root cause drew 7 empty sparkline quarters, headlined "Q1 2025 → present" over 4 days, and had the drilldown synopsis open "We started using 80cc Long in Q3 2026". One coverage read (first date carrying a value, distinct days that carry it, and whether a prior-year comparison is possible) now feeds all of them: a fourth tag state `nobase` → a neutral grey **No baseline** chip, `displayQtrs` clamped to the first covered quarter, a header stating the real start date, and a synopsis branch that reports what was measured without claiming a trend. `hasBaseline` compares **quarters** against the **start** of the comparison window — against the start because a column that joined halfway through under-counts the prior-year figure and every SKU then reads "Up"; by quarter because the columns that *do* have full history begin on the year's first production day (Jan 6 2025, not Jan 1) and a day-exact test would fail jars/bottles/lids/desiccants/neckbands too. Verified against both production CSVs: only Scoops changes; the other five keep 7 bars, the Q1 2025 header and their existing tags. It heals itself in Jan 2028, the first year whose prior-year window Scoops fully covers — no code change needed. `dayCount` counts distinct days with data, not the calendar span (4, not 8), because the span reads as more evidence than there is. `exportProcurement` duplicates the compute and carries the caveat on the sheet's own face, since nobody opening the workbook can see the header.
 - **Product field convention**: the `Product` string is `"<Customer> - <Product Name>"`. Customer is extracted as `product.split('-')[0].trim()` throughout the code.
 - **Jar size normalization** (`jarSizeKey`): fuzzy-parses strings like "1 gal", "32 oz", "500ml" to a canonical key.

@@ -2330,6 +2330,41 @@ function fetchData(fresh, onRetry, deferPrior) {
   ]);
 }
 
+// Consecutive held materials payloads. Same shape as REFRESH_MAX_HOLDS on the production
+// feed and _invRejects on inventory: the hold buys time for the publish rotation to settle
+// without being able to wedge the feed shut. At the 5-minute stock cadence three holds is
+// about 15 minutes, after which a genuinely smaller sheet is accepted.
+var _matHolds = 0;
+var MATERIALS_MAX_HOLDS = 3;
+
+// The pick sheet is append-mostly, so a snapshot carrying FEWER rows than the one already
+// held is the publish rotation handing back a pre-write generation, not a deletion.
+//
+// Measured 2026-09-16: a FEFO opportunity on run 2609086 / part 10-388 showed "all 1
+// corrected" at 12:19 and "1 open" at 12:20. The correction — a second slip at 9/16 10:44:57
+// naming T35083, the lot that should have been pulled — is what computeFefoOps reads as
+// fixedAt, and a generation published before the sync appended it simply does not have that
+// row. Deleting exactly that one line from the 25,224-line file reproduces the flip, with
+// `shouldLot` unchanged, which is what the two screenshots showed.
+//
+// Until now the whole acceptance test here was `parsed.length > 0`, so a stale generation
+// was taken unconditionally and _fefoInvalidate() then recomputed the board from it. The
+// inventory guard's 80% floor would not have helped: 22,912 of 22,913 rows is 99.996%. A
+// one-row regression needs a monotonic test, which is the production feed's shape
+// (`kept < curToday`), not inventory's proportional one.
+//
+// Not a hard "never shrink": corrections to the source sheet routinely delete and re-key
+// rows (31 in one audited 21-day window), so the hold is capped and a real deletion lands a
+// few cycles later. Both counts are tested because they come from one fetch but feed
+// different screens — materialsData drives Materials, pickRows drives Recall, Blend and
+// every FEFO view.
+function _materialsLooksComplete(parsed, picks) {
+  if (!parsed.length) return false;
+  if (materialsData.length && parsed.length < materialsData.length) return false;
+  if (pickRows.length && picks.length < pickRows.length) return false;
+  return true;
+}
+
 function fetchMaterialsIfNeeded(force) {
   if (materialsData.length > 0 && !force) return;
   // Without this guard the pre-existing latch ("materialsData is still empty")
@@ -2341,10 +2376,21 @@ function fetchMaterialsIfNeeded(force) {
   fetchMaterialsCSV(!!force).then(function(t){
     _matFetching = false;
     var parsed = parseMaterials(t);
+    // Parsed before the guard runs, because the pick count is half of what it tests.
+    var parsedPicks = parsePickRows(t);
+    if (!_materialsLooksComplete(parsed, parsedPicks) && _matHolds < MATERIALS_MAX_HOLDS) {
+      _matHolds++;
+      console.warn('Materials fetch held (' + _matHolds + '/' + MATERIALS_MAX_HOLDS + '): '
+        + parsed.length + ' usage rows and ' + parsedPicks.length + ' pick rows, against '
+        + materialsData.length + ' and ' + pickRows.length + ' already held. Keeping the '
+        + 'current data — see the multi-snapshot note on the published feeds.');
+      return;
+    }
     if (parsed.length > 0) {
+      _matHolds = 0;
       materialsData = parsed;
       // Same raw text, parsed positionally for Recall Tracking (see parsePickRows).
-      pickRows = parsePickRows(t);
+      pickRows = parsedPicks;
       _fefoInvalidate();   // pick rows are half the FEFO input
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
       // Route through render() (not renderRecall directly) so the wrapper preserves
