@@ -3821,7 +3821,7 @@ function _fefoOpsPanelHTML() {
               + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; '
               + (g.rows.length === 1 ? 'corrected' : 'all ' + g.rows.length + ' corrected') + '</span>'
             : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;flex-shrink:0;">' + g.openN + ' open</span>'
-              + (g.fixed ? '<span title="Corrected by a later pick entry naming the right lot." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; ' + g.fixed + '</span>' : ''))
+              + (g.fixed ? '<span title="Corrected by a later pick entry naming the right lot." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; ' + g.fixed + ' fixed</span>' : ''))
         + (g.expired ? '<span title="' + esc(_FEFO_OUTCOME.expired.tip) + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;flex-shrink:0;">' + g.expired + ' expired</span>' : '')
         + '<span style="font-size:10px;color:#888780;font-family:system-ui;flex-shrink:0;width:92px;text-align:right;">worst ' + worstMo + ' mo apart</span>'
         + '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;transition:transform .15s;transform:' + (open?'rotate(180deg)':'') + '"><polyline points="2,4 6,8 10,4" stroke="#5f5e5a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
