@@ -3812,8 +3812,14 @@ function _fefoOpsPanelHTML() {
         + '</div>'
         // Fully corrected reads green and states it outright, so a glance down the list
         // separates "handled" from "go and look at this" without opening anything.
+        // "all 1 corrected" counts a set of one. The count earns its place from two upward
+        // — it says the whole group is clear — so a single row just reads "corrected".
         + (g.openN === 0
-            ? '<span title="Every flagged pick on this material was followed by a later entry naming the correct lot." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; all ' + g.rows.length + ' corrected</span>'
+            ? '<span title="' + (g.rows.length === 1
+                  ? 'The flagged pick on this material was followed by a later entry naming the correct lot.'
+                  : 'Every flagged pick on this material was followed by a later entry naming the correct lot.')
+              + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; '
+              + (g.rows.length === 1 ? 'corrected' : 'all ' + g.rows.length + ' corrected') + '</span>'
             : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2D1F00;border:0.5px solid #B8860B;color:#FFD700;flex-shrink:0;">' + g.openN + ' open</span>'
               + (g.fixed ? '<span title="Corrected by a later pick entry naming the right lot." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;flex-shrink:0;">&#10003; ' + g.fixed + '</span>' : ''))
         + (g.expired ? '<span title="' + esc(_FEFO_OUTCOME.expired.tip) + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;flex-shrink:0;">' + g.expired + ' expired</span>' : '')
