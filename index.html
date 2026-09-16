@@ -13157,6 +13157,12 @@ function setMatInlineTab(v) {
 //
 // The count opens the list, for the same reason the expiry line does: naming a defect
 // without a route to it just moves the hunt onto the reader.
+//
+// None of the three panels here carries its own Hide button. Each one had a second
+// control that called the same toggle as the thing that opened it, sitting about 40px
+// below it — two buttons, one action, and the reader has to work out whether they
+// differ. The control that opens a panel is the control that closes it, and it is
+// always directly above, so it is always in reach.
 // Quantities on these rows are per-material: kilograms for almost everything, softgel
 // counts for softgel SKUs (matUnit). Adding the two into one figure would produce a
 // number in no unit at all, so the totals are kept per unit and printed separately. In
@@ -13233,7 +13239,6 @@ function stockOveragePanelHTML() {
       + '<span style="font-size:11px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Impossible stock</span>'
       + '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + a.over.length + ' lot' + (a.over.length===1?'':'s')
         + ' &middot; reconcile the lot against its receiving record in the Raw Material Inventory sheet; the dashboard picks up the correction on the next refresh</span>'
-      + '<button onclick="toggleStockOverages()" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;">Hide</button>'
     + '</div>'
     + '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#1a1416;">'
     + '<thead><tr style="border-bottom:0.5px solid #4a2020;">'
@@ -13332,7 +13337,6 @@ function stockBlindPanelHTML() {
               + ' the sheet mid-recalculation and will clear on ' + (sentinels===1?'its':'their') + ' own)</span>'
             : '')
       + '</span>'
-      + '<button onclick="toggleStockBlind()" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #3d3524;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;">Hide</button>'
     + '</div>'
     + '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#16150f;">'
     + '<thead><tr style="border-bottom:0.5px solid #3d3524;">'
@@ -13388,7 +13392,6 @@ function expiryIssuesPanelHTML() {
       + '<span style="font-size:11px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Expiry dates to fix</span>'
       + '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + out.length + ' lot' + (out.length===1?'':'s')
         + ' &middot; edit EXP. Date in the Raw Material Inventory sheet; the dashboard picks it up on the next refresh</span>'
-      + '<button onclick="toggleExpiryIssues()" style="margin-left:auto;padding:3px 10px;border-radius:5px;border:0.5px solid #4a2020;background:transparent;color:#888780;font-size:11px;cursor:pointer;font-family:system-ui;">Hide</button>'
     + '</div>'
     + '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#1a1416;">'
     + '<thead><tr style="border-bottom:0.5px solid #4a2020;">'
