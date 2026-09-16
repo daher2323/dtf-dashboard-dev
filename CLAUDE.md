@@ -136,6 +136,23 @@ Pop-ups (multi-select filter panels, date/week pickers, export popovers, role me
   rather than replacing it, and a figure can correct itself, revert, and correct again over successive
   polls for several minutes. The two years publish independently (separate gids), so one tab reflecting an
   edit while the other does not is caching, not a missed edit.
+  **The impossible-stock audit holds a corrected lot rather than re-flagging it**
+  (`applyStockCleanHold`, `STOCK_CLEAN_HOLD_MS` 30 min, `_stockCleanSeen` on its own
+  sessionStorage key). Measured 2026-09-16 while inventory was correcting the sheet: ten
+  fetches inside one minute returned three distinct files — 5 carrying four overages, 4
+  carrying one, 1 carrying none — all 1,082 parts, so `_inventoryLooksComplete` accepts every
+  one of them and the alert flapped 4 → 1 → 4. The rule rests on an asymmetry, and it is the
+  only thing making it sound: **"clean" is strictly newer information than "over"**, because
+  `Original Qty Received` is a human edit and nobody un-edits it back to a wrong number, so a
+  snapshot showing a lot clean must postdate the correction — while an "over" reading may be
+  of any age. So a lot seen clean is held, never the reverse. Four properties to keep: only
+  **checkable** lots record a clean sighting (a blind lot is not evidence); only an **accepted**
+  parse records them, or a gutted snapshot could silence real findings; the window is the cap,
+  so a lot still over comes back on its own; and the hold is **stated on screen**
+  (`stockHeldNoteHTML`) — a delay nobody can see is indistinguishable from a bug that eats
+  findings. The map persists separately from `INVENTORY_CACHE_KEY` because that payload
+  expires on `STOCK_CACHE_TTL` (10 min) and a reload after it lapses is the exact case this
+  exists for. ~2,600 lots, ~59 KB.
 - **A procurement column younger than the comparison window is a fact about the feed, not the SKU** (`procColumnCoverage`). The trajectory tag was `ytd25Units > 0 ? up/down/flat : 'new'`, so Scoops — first recorded 2026-09-02, 4 production days of data — tagged all 9 sizes **New**, which is true of the tracking and false of ten-year-old scoop sizes. The same root cause drew 7 empty sparkline quarters, headlined "Q1 2025 → present" over 4 days, and had the drilldown synopsis open "We started using 80cc Long in Q3 2026". One coverage read (first date carrying a value, distinct days that carry it, and whether a prior-year comparison is possible) now feeds all of them: a fourth tag state `nobase` → a neutral grey **No baseline** chip, `displayQtrs` clamped to the first covered quarter, a header stating the real start date, and a synopsis branch that reports what was measured without claiming a trend. `hasBaseline` compares **quarters** against the **start** of the comparison window — against the start because a column that joined halfway through under-counts the prior-year figure and every SKU then reads "Up"; by quarter because the columns that *do* have full history begin on the year's first production day (Jan 6 2025, not Jan 1) and a day-exact test would fail jars/bottles/lids/desiccants/neckbands too. Verified against both production CSVs: only Scoops changes; the other five keep 7 bars, the Q1 2025 header and their existing tags. It heals itself in Jan 2028, the first year whose prior-year window Scoops fully covers — no code change needed. `dayCount` counts distinct days with data, not the calendar span (4, not 8), because the span reads as more evidence than there is. `exportProcurement` duplicates the compute and carries the caveat on the sheet's own face, since nobody opening the workbook can see the header.
 - **Product field convention**: the `Product` string is `"<Customer> - <Product Name>"`. Customer is extracted as `product.split('-')[0].trim()` throughout the code.
 - **Jar size normalization** (`jarSizeKey`): fuzzy-parses strings like "1 gal", "32 oz", "500ml" to a canonical key.

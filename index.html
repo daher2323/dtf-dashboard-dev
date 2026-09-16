@@ -1058,18 +1058,44 @@ var materialsData = [];
 var pickRows = [];           // [{ date, orderLot, part, material, slots:[{t, qty}] }]
 var inventoryByPart = {};    // DTF Part # -> { partNum, stock, material, lots, lotRows[] } — summed on-hand plus the per-lot detail
 var inventoryLotIndex = {};  // T# (upper) -> { part, qty, exp, received } for EVERY lot incl. depleted — FEFO needs the picked lot's expiry
-// Impossible-stock audit, rebuilt by parseInventory: { over:[], blindLots:[], blind:0, checked:0 }.
+// Impossible-stock audit, rebuilt by parseInventory: { over:[], held:[], blindLots:[], blind:0, checked:0 }.
 // `over` holds lots recorded as holding more than was ever received — see the note on
 // parseInventory. Cached alongside inventoryByPart, because parseInventory does not
 // re-run on a cache hit and an alarm that goes quiet for the cache TTL is worse than
 // no alarm at all.
-var inventoryStockAudit = { over: [], blindLots: [], blind: 0, checked: 0 };
+var inventoryStockAudit = { over: [], held: [], blindLots: [], blind: 0, checked: 0 };
 // Float noise only. NOT a materiality floor: the rule is the one the sheet states —
 // stock above the received quantity is impossible at any size. Today's four findings
 // are 9.8-15.2 kg over (1.2x to 2.2x), so nothing sits near this line; if re-weighed
 // drums ever start landing a hair above nominal, that is the evidence for adding a
 // real floor here rather than a reason to guess at one now.
 var STOCK_OVERAGE_EPS = 0.01;
+// The published CSV serves several generations of the sheet at once (see the multi-snapshot
+// note in CLAUDE.md), so a lot corrected minutes ago comes back as broken on a large share of
+// fetches. Measured 2026-09-16, ten fetches of the inventory feed inside one minute, each with
+// a unique cache-busting param: three distinct files — 5 carrying four overages, 4 carrying
+// one, 1 carrying none — all with 1,082 parts. The size guard cannot tell them apart and the
+// feed has no version or timestamp to order them by, so the alert flapped between 4 and 1 as
+// inventory was correcting the sheet.
+//
+// The asymmetry that makes a hold sound: "clean" is strictly newer information than "over".
+// Original Qty Received is a human edit and nobody un-edits it back to a wrong number, so a
+// snapshot showing the lot clean can only have been published after the correction. The
+// converse does not hold — an "over" reading may be of any age. A lot seen clean is therefore
+// held for STOCK_CLEAN_HOLD_MS, long enough for the rotation to converge.
+//
+// It is a delay, not a suppression, and that distinction is the whole safety argument: the
+// window expires on its own and a lot that is genuinely still over comes straight back. The
+// window IS the cap, in the spirit of REFRESH_MAX_HOLDS. Held lots are counted and named on
+// screen rather than dropped quietly — a hold that nobody can see is indistinguishable from
+// a bug that eats findings.
+var STOCK_CLEAN_HOLD_MS = 30 * 60 * 1000;
+var STOCK_CLEAN_KEY = 'dtf_stock_clean_v1';
+// T# (upper) -> ms when it was last seen checkable AND not over. Persisted on its own key
+// rather than inside the inventory cache: that payload expires on STOCK_CACHE_TTL (10 min),
+// and a reload landing on a stale snapshot after the cache lapsed is exactly the case this
+// exists for — it was how the flap was first reported.
+var _stockCleanSeen = {};
 var _stockOveragesOpen = false;
 var _stockBlindOpen = false;   // the lots with no usable Original Qty Received, under the "cannot be checked" text
 var inventoryLoaded = false; // true once a successful inventory fetch has populated inventoryByPart
@@ -2408,7 +2434,7 @@ function parseInventory(text) {
     var rows = parseCSVMultiline(text);
     var byPart = {};
     var _catTally = {};
-    var _audit = { over: [], blindLots: [], checked: 0 };
+    var _audit = { over: [], held: [], cleanLots: [], blindLots: [], checked: 0 };
     inventoryLotIndex = {};
     rows.forEach(function(r){
       var part = (r['DTF Part #'] || '').trim();
@@ -2440,6 +2466,10 @@ function parseInventory(text) {
         var peak = Math.max(qty, sdQty == null ? 0 : sdQty);
         if (origQty != null && origQty > 0) {
           _audit.checked++;
+          // Checkable and within its receipt: evidence that this lot's row is correct in
+          // whatever generation of the sheet this snapshot came from. Only checkable lots
+          // qualify — a blind lot tells us nothing either way and must not clear a hold.
+          if (peak - origQty <= STOCK_OVERAGE_EPS) _audit.cleanLots.push(lotNo.toUpperCase());
           if (peak - origQty > STOCK_OVERAGE_EPS) {
             _audit.over.push({
               part: part, material: (r['Material Name'] || '').trim(), lot: lotNo,
@@ -2617,6 +2647,43 @@ function _inventoryLooksComplete(parsed, current) {
 var _invRejects = 0;
 var INVENTORY_MAX_REJECT_RETRIES = 4;
 
+// Commits this snapshot's clean sightings, then partitions the overages into the ones to
+// show and the ones to hold. Called ONLY on an accepted parse — a rejected snapshot is a
+// gutted one, and letting it record clean sightings would let a truncated file silence real
+// findings, which is the same class of error the acceptance guard exists to stop.
+function applyStockCleanHold(audit) {
+  if (!audit) return audit;
+  var now = Date.now(), i, k;
+  var clean = audit.cleanLots || [];
+  for (i = 0; i < clean.length; i++) _stockCleanSeen[clean[i]] = now;
+  var shown = [], held = [];
+  for (i = 0; i < (audit.over || []).length; i++) {
+    var o = audit.over[i], t = _stockCleanSeen[(o.lot || '').toUpperCase()];
+    if (t != null && (now - t) < STOCK_CLEAN_HOLD_MS) { o.cleanAt = t; held.push(o); }
+    else shown.push(o);
+  }
+  audit.over = shown;
+  audit.held = held;
+  // Pruned here as well as on load, so a long-lived session cannot grow the map without
+  // bound: an entry past the window can never hold anything again.
+  for (k in _stockCleanSeen) {
+    if (_stockCleanSeen.hasOwnProperty(k) && (now - _stockCleanSeen[k]) >= STOCK_CLEAN_HOLD_MS) delete _stockCleanSeen[k];
+  }
+  try { sessionStorage.setItem(STOCK_CLEAN_KEY, JSON.stringify(_stockCleanSeen)); } catch(e) {}
+  return audit;
+}
+
+function _loadStockCleanSeen() {
+  try {
+    var raw = sessionStorage.getItem(STOCK_CLEAN_KEY);
+    if (!raw) return;
+    var o = JSON.parse(raw) || {}, now = Date.now(), k;
+    for (k in o) {
+      if (o.hasOwnProperty(k) && typeof o[k] === 'number' && (now - o[k]) < STOCK_CLEAN_HOLD_MS) _stockCleanSeen[k] = o[k];
+    }
+  } catch(e) {}
+}
+
 function fetchInventoryIfNeeded(force) {
   if (inventoryLoaded && !force) return;
   if (_invFetching) return;   // a cold inventory read can take ~60s; never stack them
@@ -2644,6 +2711,9 @@ function fetchInventoryIfNeeded(force) {
       // leaves untouched — so replacing the data has to drop them explicitly or the
       // stale computation outlives the stale input.
       _fefoInvalidate();
+      // Before the cache write, so the payload carries the partitioned audit and a hydrate
+      // does not have to redo it.
+      applyStockCleanHold(inventoryStockAudit);
       // archiveLots rides along because it is derived at merge time and read much later.
       // Left out, a cache-hydrated load restored the DEGRADED lotIndex (archive feed
       // returned nothing) while _archiveLots reverted to null, so the "archived lots not
@@ -4328,11 +4398,13 @@ function fetchDemandIfNeeded(force) {
 // verify against the origin.
 var _stockHydratedFromCache = false;
 function _loadStockCaches() {
+  // Ahead of the inventory cache read: the hold map outlives that payload's TTL on purpose.
+  _loadStockCleanSeen();
   try {
     var ri = sessionStorage.getItem(INVENTORY_CACHE_KEY);
     // Same size test on the way in: a cache is only as trustworthy as the fetch that
     // wrote it, and a gutted payload must not be able to survive a reload.
-    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryStockAudit = ci.audit || { over: [], blindLots: [], blind: 0, checked: 0 }; inventoryLoaded = true; _stockHydratedFromCache = true; if (typeof ci.archiveLots === 'number') _archiveLots = ci.archiveLots; } }
+    if (ri) { var ci = JSON.parse(ri); if (ci && ci.byPart && (Date.now() - (ci.ts || 0)) < STOCK_CACHE_TTL && _inventoryLooksComplete(ci.byPart, null)) { inventoryByPart = ci.byPart; inventoryLotIndex = ci.lotIndex || {}; inventoryStockAudit = ci.audit || { over: [], held: [], blindLots: [], blind: 0, checked: 0 }; if (!inventoryStockAudit.held) inventoryStockAudit.held = []; inventoryLoaded = true; _stockHydratedFromCache = true; if (typeof ci.archiveLots === 'number') _archiveLots = ci.archiveLots; } }
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
@@ -13183,7 +13255,7 @@ function _auditQtyTotal(rows, key) {
 // table (matLotTableHTML) rather than the fixed-width Materials grid. Each row is its
 // own material, so the unit is read per row.
 function stockOverageAlertHTML() {
-  var a = inventoryStockAudit || { over: [], blindLots: [], blind: 0, checked: 0 };
+  var a = inventoryStockAudit || { over: [], held: [], blindLots: [], blind: 0, checked: 0 };
   var n = a.over.length;
   if (!n) return '';
   var kgTxt = _auditQtyTotal(a.over, 'over');
@@ -13202,6 +13274,7 @@ function stockOverageAlertHTML() {
         + 'On hand, Available, Cover, the expiry projection and the FEFO walk are all wrong on '
         + (n===1?'this lot':'these lots') + ' until the inventory sheet is corrected.'
         + (_blindCount() > 0 ? ' ' + blindLinkHTML('more') + '.' : '')
+        + ((a.held && a.held.length) ? ' ' + stockHeldNoteHTML() + '.' : '')
       + '</div>'
     + '</div>'
     + '<button onclick="toggleStockOverages()" style="flex-shrink:0;padding:4px 11px;border-radius:6px;border:0.5px solid #6b2020;'
@@ -13286,6 +13359,28 @@ function blindLinkHTML(word) {
     + ' title="These lots hold stock but carry no usable Original Qty Received, so they cannot be checked either way. Click to list them."'
     + ' style="color:#888780;border-bottom:1px dotted #444441;cursor:pointer;">'
     + label + (_stockBlindOpen ? ' \u25b4' : ' \u25be') + '</span>';
+}
+
+// Names the hold wherever it is in effect. A delay the reader cannot see is the same thing
+// as a finding quietly eaten, so this appears in the alert when the alert is up and on the
+// quiet Stock check line when it is not. The lot numbers go in the tooltip so the sentence
+// stays one line; the minutes remaining say when the answer becomes final.
+function stockHeldNoteHTML() {
+  var a = inventoryStockAudit || {};
+  var h = a.held || [];
+  if (!h.length) return '';
+  var now = Date.now(), mins = 0, i;
+  for (i = 0; i < h.length; i++) {
+    var left = Math.ceil((STOCK_CLEAN_HOLD_MS - (now - (h[i].cleanAt || now))) / 60000);
+    if (left > mins) mins = left;
+  }
+  var lots = h.map(function(o){ return o.lot; }).join(', ');
+  return '<span title="' + esc(lots) + ' read as corrected on a more recent snapshot of the published sheet, '
+    + 'but the feed serves several generations at once and is still handing back the old one. '
+    + 'They are held rather than dropped: if any is still over when the hold lapses, it reappears."'
+    + ' style="color:#888780;border-bottom:1px dotted #444441;cursor:help;">'
+    + h.length + ' recently corrected lot' + (h.length===1?'':'s') + ' held'
+    + (mins > 0 ? ' (' + mins + ' min)' : '') + '</span>';
 }
 
 // Amber, not red, and a row here is not an error. It is stock the check cannot see
@@ -14336,13 +14431,19 @@ function renderMaterials() {
   // fills the segment counts and paints the active segment.
   // Above the expiry line, which is the quieter problem of the two.
   var _overAlert = stockOverageAlertHTML();
-  // When the alert is up the blind count rides inside it; when it is not, it needs a line
-  // of its own, or clearing the last overage would take the coverage gap off the page with
-  // it. Same shape as the Expiry data line, and it disappears when the column is complete.
-  var _blindLine = (!_overAlert && _blindCount() > 0)
+  // When the alert is up these ride inside it; when it is not, they need a line of their
+  // own, or clearing the last overage would take the coverage gap and the hold off the page
+  // with it — a hold is least visible exactly when it is holding everything. Same shape and
+  // separator as the Expiry data line, and it disappears when there is nothing to say.
+  var _scBits = [];
+  if (!_overAlert) {
+    if (_blindCount() > 0) _scBits.push(blindLinkHTML('') + ' against the quantity received');
+    if ((inventoryStockAudit.held || []).length) _scBits.push(stockHeldNoteHTML());
+  }
+  var _blindLine = _scBits.length
     ? '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:11px;color:#888780;font-family:system-ui;">'
       + '<span style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Stock check</span>'
-      + '<span>' + blindLinkHTML('') + ' against the quantity received</span>'
+      + '<span>' + _scBits.join(' <span style="color:#3a3a38;">&middot;</span> ') + '</span>'
       + '</div>'
     : '';
   var _overHTML = _overAlert + (_stockOveragesOpen ? stockOveragePanelHTML() : '')
