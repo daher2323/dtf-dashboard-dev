@@ -3138,6 +3138,14 @@ var FEFO_MIN_KG = 1;                 // a sibling must have held at least this m
 var FEFO_REVIEW_MIN_KG = 25;         // review list floor — keeps flavour dust out
 var FEFO_REVIEW_HORIZON_DAYS = 90;   // expired, or expiring inside this window
 var FEFO_EVENT_CAP = 25;             // per-lot evidence rows kept for the drill-down
+// The inventory sheet is deducted on a LAG, so a lot pulled a day or two ago can still read as
+// full stock — and "it was on the shelf" is then a statement about the sheet, not the floor.
+// Measured 2026-09-17 against the pick sheet: of the whole-lot pulls logged that day, 27 of 35
+// still showed stock exactly equal to the quantity picked; yesterday 15 of 18; two days back
+// only 2 of 20, and 0-3 a day before that. So the figure reflects picks up to roughly two days
+// ago and nothing since. Inside that window the pick sheet is the better record of what left
+// the shelf, and `emptiedBefore` reads it.
+var PICK_DEDUCTION_LAG_DAYS = 2;
 var _fefoOpenLot = null;             // T# whose skip detail is expanded, or null
 var _expiryIssuesOpen = false;       // the unreadable/missing-date list under the coverage line
 // Which section of an expanded material is showing. Sticky across materials on
@@ -3263,7 +3271,7 @@ function computeFefoOps() {
         var rd = parseInvDate(sib.received);
         if (rd && rd.getTime() > when) continue;       // not received yet
         // On the floor, and holding enough to have been worth taking for THIS run.
-        if (!couldContribute(sn, when, mine[i].needed || 0)) continue;
+        if (!couldContribute(sn, when, mine[i].needed || 0, mine[i].tf)) continue;
         if (expiredAtPick) {
           if (bestPast === null || sib.exp < bestPastExp) { bestPast = sn; bestPastExp = sib.exp; }
         } else {
@@ -4335,6 +4343,44 @@ function _fefoIndex() {
     return { qty: now, exact: !touched, present: now > 0 || touched };
   }
 
+  // Was this lot already emptied before the pick being judged?
+  //
+  // stockAt rests on "current stock reflects every pick before t", which the deduction lag
+  // breaks: inventory is written down a day or two after the slip, so a lot pulled yesterday
+  // still reads full today and gets offered as the lot that should have been taken. Reported
+  // by inventory 2026-09-17 on part 20-497: run 2609107 (9/17 10:04) was told to pull T28630,
+  // whose entire 29.88 kg had gone to run 2609089 at 9/16 10:29 — the sheet still showed
+  // 29.88 kg on both Start Day Stock and Current Stock.
+  //
+  // The test is a SINGLE prior pull taking the lot's whole recorded quantity, never a sum of
+  // pulls. That is the point: summing QTY Picked is the arithmetic balanceAt was deleted for
+  // (it does not reliably mean "amount consumed" — median 1.5x the requirement, p90 12x), and
+  // summing here would have written off lots that are plainly still there: T36475 with 1,143 kg
+  // against 89 kg of pulls, T35039 with 6,071 kg against 675 kg. One pull that accounts for the
+  // whole figure needs no arithmetic to believe — the lot is gone, or the sheet is behind by at
+  // least that much, and neither leaves it standing on the floor.
+  //
+  // Bounded to the lag window so history is untouched: a pull older than the frontier has long
+  // since been deducted, and the figure already shows its effect.
+  var pullFrontier = startOfToday - PICK_DEDUCTION_LAG_DAYS * 86400000;
+  function emptiedBefore(lotNo, t, tf) {
+    var arr = picksByLot[lotNo];
+    if (!arr || !arr.length) return false;
+    var rec = idx[lotNo];
+    var fig = (rec && rec.startQty != null) ? rec.startQty : (stockNow[lotNo] || 0);
+    if (!(fig > 0)) return false;
+    for (var pi = 0; pi < arr.length; pi++) {
+      if (arr[pi].t < pullFrontier) continue;
+      // Same ordering convention as the split-pull test: compare submission clocks when both
+      // slips carry one, otherwise fall back to the day stamp, where same-day rows compare
+      // equal and are correctly NOT treated as earlier.
+      var earlier = (tf != null && arr[pi].tf != null) ? (arr[pi].tf < tf) : (arr[pi].t < t);
+      if (!earlier) continue;
+      if ((arr[pi].qty || 0) >= fig - 0.01) return true;
+    }
+    return false;
+  }
+
   // Could this lot have contributed anything worth having to a run needing `needed`?
   //
   // Only applied when stockAt is exact, because otherwise we do not know. Inositol T30908 is
@@ -4346,7 +4392,8 @@ function _fefoIndex() {
   // what makes a quantity meaningful: 0.5 kg is ample for a 19 g run and useless for a 30 kg
   // one. Both directions were wrong before — a flat 1 kg floor discarded real opportunities on
   // micro-ingredients, and no floor at all admitted dust like this.
-  function couldContribute(lotNo, t, needed) {
+  function couldContribute(lotNo, t, needed, tf) {
+    if (emptiedBefore(lotNo, t, tf)) return false;
     var sa = stockAt(lotNo, t);
     if (!sa.present) return false;
     if (!sa.exact) return true;                      // unknown; do not rule it out
@@ -4377,6 +4424,7 @@ function _fefoIndex() {
   _fefoIdxCache = { idx: idx, byPart: byPart, picksByLot: picksByLot, byLotPart: byLotPart,
                     slots: slots, firstSlot: firstSlot,
                     stockNow: stockNow, stockAt: stockAt, couldContribute: couldContribute,
+                    emptiedBefore: emptiedBefore,
                     key: key };
   return _fefoIdxCache;
 }
@@ -4434,7 +4482,7 @@ function computeFefoMisses() {
         if (sib.exp < when) continue;                 // already expired then — skipping was right
         var rd = parseInvDate(sib.received);
         if (rd && rd.getTime() > when) continue;      // not received yet
-        if (!couldContribute(sn, when, mine[i].needed || 0)) continue;   // same test as the pick log
+        if (!couldContribute(sn, when, mine[i].needed || 0, mine[i].tf)) continue;   // same test as the pick log
         hit = true;
         if (!strand[sn]) strand[sn] = { skips: 0, last: null, alts: {}, events: [], byDec: {} };
         strand[sn].alts[k] = true;
