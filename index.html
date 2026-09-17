@@ -1026,6 +1026,27 @@ var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZP
 // Rows missing a part #, lot # or usable expiry date are skipped — an archived lot with no
 // expiry cannot serve as a FEFO comparison, so it is no loss.
 var CSV_INVENTORY_ARCHIVE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1775747917&single=true&output=csv';
+// Live inventory feed — the Apps Script web app in apps-script/feed-api.gs. Paste its /exec
+// URL here (no query string; the code appends ?feed=...) and the published CSVs above become
+// the FALLBACK rather than the source.
+//
+// Why: /pub?output=csv is not the sheet, it is a separately cached artifact, and that cache
+// serves several generations at once. Measured 2026-09-16 at 14:05 — three hours after
+// inventory corrected four lots — six cache-busted fetches returned the corrected file three
+// times and that morning's pre-correction file three times, byte-identical to the 11:30 copy.
+// Every mitigation the audit carries (the clean-hold, the confirm-before-alarming read) is
+// inference around a missing version stamp; this removes the need for it at source. The web
+// app reads the live spreadsheet, so there is no snapshot in the path.
+//
+// Empty string = not deployed yet, and everything runs exactly as it did before.
+var CSV_INVENTORY_LIVE = 'https://script.google.com/macros/s/AKfycbxZeEvbwywfvxePBeYuQlbL_knP-n8gaixkTLnA_NHJPA3M0fLYN0HkAvJhs-cjKQwm/exec';
+// One consecutive failure parks the live feed rather than paying a doomed request on every
+// poll; it is retried after this long, so a transient Apps Script blip heals itself without
+// anyone editing code. A parked feed is a console.warn, never a silent downgrade — falling
+// back to the published CSV means going back to the stale-snapshot rotation, and that must
+// not happen quietly.
+var LIVE_FEED_RETRY_MS = 10 * 60 * 1000;
+var _liveFeedParkedAt = 0;
 // Forthcoming (committed/forecasted) ingredient demand. NON-TABULAR: a wide sheet
 // of repeating [Part #, Ingredient Name, KG] blocks starting at row 12. We scan
 // every cell from row 12 down for a Part #, take the value two columns over as the
@@ -2416,6 +2437,28 @@ function fetchMaterialsIfNeeded(force) {
   });
 }
 
+function _liveFeedUsable() {
+  if (!CSV_INVENTORY_LIVE) return false;
+  if (!_liveFeedParkedAt) return true;
+  if (Date.now() - _liveFeedParkedAt < LIVE_FEED_RETRY_MS) return false;
+  _liveFeedParkedAt = 0;   // park expired: let it try again
+  return true;
+}
+
+function _readCSVUrl(url) {
+  return fetchWithTimeout(url, NO_CACHE).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }).then(function(text){
+    if (!text || text.trim().startsWith('<!')) throw new Error('Invalid response');
+    // The web app answers 200 with a plain-text ERROR body for an unknown feed or a renamed
+    // tab, because Apps Script cannot set a status code. Caught here so a misconfiguration
+    // falls back rather than being parsed as a one-row CSV.
+    if (text.slice(0, 6) === 'ERROR:') throw new Error(text.slice(0, 120));
+    return text;
+  });
+}
+
 function fetchInventoryCSV(fresh) {
   // Default (initial load): no cachebust, so a stable URL lets Google's CDN serve
   // its cached copy (~0.25s) instead of treating each request as new and
@@ -2423,13 +2466,19 @@ function fetchInventoryCSV(fresh) {
   // true origin read — used by every *refresh* path, where the whole point is to
   // see an edit the user just made. Without it a refresh can be answered from the
   // same 5-minute CDN bucket it was trying to escape.
-  return fetchWithTimeout(fresh ? bustUrl(CSV_INVENTORY, true) : CSV_INVENTORY, NO_CACHE).then(function(r){
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.text();
-  }).then(function(text){
-    if (!text || text.trim().startsWith('<!')) throw new Error('Invalid response');
-    return text;
-  }).catch(function(){ return ''; });
+  var pub = function(){
+    return _readCSVUrl(fresh ? bustUrl(CSV_INVENTORY, true) : CSV_INVENTORY).catch(function(){ return ''; });
+  };
+  if (!_liveFeedUsable()) return pub();
+  // Always cache-busted: the whole reason for this endpoint is that a cached answer is the
+  // problem, and the web app does its own 15s de-duplication anyway.
+  return _readCSVUrl(bustUrl(CSV_INVENTORY_LIVE + '?feed=inventory', true)).catch(function(e){
+    _liveFeedParkedAt = Date.now();
+    console.warn('Live inventory feed failed (' + (e && e.message ? e.message : e)
+      + '). Falling back to the published CSV for ' + Math.round(LIVE_FEED_RETRY_MS / 60000)
+      + ' min — that feed serves stale snapshots, so figures may lag the sheet by hours.');
+    return pub();
+  });
 }
 
 // Parse an inventory-sheet date ("8/18/2026"). Returns null for blank, malformed,
