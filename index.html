@@ -4392,8 +4392,52 @@ function _fefoIndex() {
   // what makes a quantity meaningful: 0.5 kg is ample for a 19 g run and useless for a 30 kg
   // one. Both directions were wrong before — a flat 1 kg floor discarded real opportunities on
   // micro-ingredients, and no floor at all admitted dust like this.
+  // ...and the mirror case: a lot that holds nothing NOW, and was last pulled before this
+  // pick, held nothing then either.
+  //
+  // Stock only falls, and a pull is the only thing that lowers it, so if nothing has drawn
+  // from a lot since some moment, its balance has stood at today's figure ever since. When
+  // that figure is zero, the lot was already empty at every pick that came after its final
+  // pull. No quantities are involved — only which came first.
+  //
+  // This is what emptiedBefore above cannot see. There the pull has not been deducted yet and
+  // the sheet still shows the stock; here the deduction has landed, the sheet reads 0, and the
+  // `fig > 0` test bails out. Reported by inventory 2026-09-18 on part 20-078: run 2609075
+  // (9/14 13:54) was told to pull T32787, whose last 3.80 kg had gone to run 2609074 at
+  // 9/14 13:43 — eleven minutes earlier, as a split pull topped up from T36668.
+  //
+  // In practice only SAME-DAY final pulls reach here: a pull on an earlier day already leaves
+  // `touched` false, so stockAt reports 0 kg as exact and couldContribute drops the lot on the
+  // quantity bar. What this adds is the ordering WITHIN the day, which is why it compares
+  // submission clocks — and why it is deliberately not bounded by pullFrontier, since the
+  // statement holds for a pick of any age.
+  //
+  // It is the narrow form of a rule that was tried bluntly and reverted on 2026-08-25:
+  // treating every unexplained 0 as "cannot know" flagged T34859 against a pick five days
+  // after that lot emptied. Keying on the final pull settles the direction instead of guessing
+  // it. Checked against both cases that shaped stockAt: T34859's pick is now suppressed, while
+  // T34275 — 9.94 kg at an 8:15 pick, drained to 0 by 14:29 the SAME day — keeps its finding,
+  // because its last pull came after that pick rather than before.
+  //
+  // Written as "no pull at or after this pick" rather than "the last pull precedes it":
+  // picksByLot is sorted on the DAY stamp, so its final entry is not necessarily the latest
+  // submission within that day. This form does not depend on the order at all, and a slip with
+  // no readable time compares equal on the day stamp and so counts as not-before — declining
+  // to suppress rather than guessing at an hour.
+  function emptySince(lotNo, t, tf) {
+    if ((stockNow[lotNo] || 0) > 0) return false;
+    var arr = picksByLot[lotNo];
+    if (!arr || !arr.length) return false;
+    for (var qi = 0; qi < arr.length; qi++) {
+      var atOrAfter = (tf != null && arr[qi].tf != null) ? (arr[qi].tf >= tf) : (arr[qi].t >= t);
+      if (atOrAfter) return false;          // something drew from it at or after this pick
+    }
+    return true;
+  }
+
   function couldContribute(lotNo, t, needed, tf) {
     if (emptiedBefore(lotNo, t, tf)) return false;
+    if (emptySince(lotNo, t, tf)) return false;
     var sa = stockAt(lotNo, t);
     if (!sa.present) return false;
     if (!sa.exact) return true;                      // unknown; do not rule it out
@@ -4424,7 +4468,7 @@ function _fefoIndex() {
   _fefoIdxCache = { idx: idx, byPart: byPart, picksByLot: picksByLot, byLotPart: byLotPart,
                     slots: slots, firstSlot: firstSlot,
                     stockNow: stockNow, stockAt: stockAt, couldContribute: couldContribute,
-                    emptiedBefore: emptiedBefore,
+                    emptiedBefore: emptiedBefore, emptySince: emptySince,
                     key: key };
   return _fefoIdxCache;
 }
