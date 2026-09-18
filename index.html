@@ -9402,6 +9402,25 @@ function computeMedianLotSize(sizes) {
 function fmtStockQty(v) {
   return Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
+// Consumption quantities, which the convention above rounds to whole units. That is right for
+// a material burning 17,000 kg a month and wrong for one measured in grams: Selenium Glycinate
+// 2%'s July drilldown read "0 kg" on five of eight rows whose Share column said 9.5%, 9.0%,
+// 8.3% — quantities that plainly existed, rounded out of sight — while the two rows above them
+// read "1 kg" for 0.69 kg. In the customer, quarter and product tables it was worse: the
+// rounded value gated the figure AND its bar, so anything under half a kilo rendered as an em
+// dash, which in those columns means "never used this material".
+//
+// At 1 and above the integer convention stands untouched, so nothing changes for the materials
+// it was written for; only sub-unit values gain decimals, and those are exactly the ones that
+// were being shown as nothing. A quantity too small even for two decimals says so rather than
+// printing a zero, which would mean "none".
+function fmtUsageQty(v) {
+  var n = Number(v);
+  if (!isFinite(n) || n <= 0) return '0';
+  if (n >= 1) return Math.round(n).toLocaleString();
+  if (n < 0.005) return '<0.01';
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
 
 function computeMonthsOfCover(onHand, threeMonthAvg) {
   // Returns months of supply at recent (3-mo avg) burn rate, or null when
@@ -13064,9 +13083,10 @@ function matSummaryInner(m, idx, monthKeys, unit) {
     } else {
       var maxCustKg = Math.max.apply(null, custData.map(function(c){ return c.kg; })) || 1;
       var custRows = custData.map(function(c) {
-        var kg = Math.round(c.kg);
+        // Gate on the real quantity, not the rounded one — see fmtUsageQty.
+        var kg = c.kg;
         var pct = totalKg ? ((c.kg/totalKg)*100).toFixed(1) : '0';
-        var bw = kg ? Math.round((c.kg/maxCustKg)*88) : 0;
+        var bw = kg > 0 ? Math.max(1, Math.round((c.kg/maxCustKg)*88)) : 0;
         var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
         return '<tr onclick="matDrillInto('+jsStr(c.customer)+')" style="cursor:pointer;" onmouseover="this.style.background=\'#1a1d20\'" onmouseout="this.style.background=\'transparent\'">'
           + '<td style="'+tdB+'padding-left:14px;color:#e8e6e0;font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;">'
@@ -13075,7 +13095,7 @@ function matSummaryInner(m, idx, monthKeys, unit) {
               + '<svg width="6" height="10" viewBox="0 0 6 10" fill="none" style="flex-shrink:0;"><path d="M1 1l4 4-4 4" stroke="#378ADD" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
             + '</span>'
           + '</td>'
-          + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
+          + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg>0?fmtUsageQty(kg)+' '+unit:'—')+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.products.size+'</td>'
           + '<td style="'+tdB+'text-align:right;color:#888780;">'+c.lots.size+'</td>'
           + '<td class="pnl-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
@@ -13122,13 +13142,16 @@ function matSummaryInner(m, idx, monthKeys, unit) {
     var maxQtrKg = Math.max.apply(null, displayQks.map(function(qk){ return qtrMap[qk]||0; })) || 1;
 
     var qtrRows = displayQks.map(function(qk, qi) {
-      var kg = Math.round(qtrMap[qk]||0);
+      var kg = qtrMap[qk] || 0;      // real quantity, not rounded — see fmtUsageQty
       var isCur = qk === curQk;
       var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
       var rBg = isCur ? 'background:#1a2030;' : '';
+      // Raw, matching `kg` above: comparing a raw quarter against a rounded one skews the
+      // delta on sub-unit materials (0.4 against a rounded 1 reads -60% instead of -33%), and
+      // the `> 0` gate would call a 0.4 kg quarter "no previous quarter" at all.
       var prevKg = null;
       for (var pi=qi-1; pi>=0; pi--) {
-        var pv = Math.round(qtrMap[displayQks[pi]]||0);
+        var pv = qtrMap[displayQks[pi]] || 0;
         if (pv > 0) { prevKg = pv; break; }
       }
       var delta = '';
@@ -13140,14 +13163,14 @@ function matSummaryInner(m, idx, monthKeys, unit) {
       } else if (kg > 0) {
         delta = '<span style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:500;background:#0C447C;color:#85B7EB;">new</span>';
       }
-      var bw = kg ? Math.round((kg/maxQtrKg)*88) : 0;
+      var bw = kg > 0 ? Math.max(1, Math.round((kg/maxQtrKg)*88)) : 0;
       var bCol = isCur ? '#378ADD' : '#4A6580';
       return '<tr>'
         + '<td style="'+tdB+rBg+'padding-left:14px;color:'+(isCur?'#378ADD':'#888780')+';font-weight:'+(isCur?'500':'400')+';">'
           + (isCur?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#378ADD;margin-right:5px;vertical-align:middle;"></span>':'')
           + quarterLabel(qk)+(isCur?' <span style="font-size:10px;color:#5f5e5a;font-weight:400;">partial</span>':'')
         + '</td>'
-        + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
+        + '<td style="'+tdB+rBg+'text-align:right;color:#e8e6e0;">'+(kg>0?fmtUsageQty(kg)+' '+unit:'—')+'</td>'
         + '<td style="'+tdB+rBg+'text-align:right;">'+delta+'</td>'
         + '<td class="pnl-bar-only" style="'+tdB+rBg+'padding-right:14px;width:120px;">'
           + '<div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;">'
@@ -13202,9 +13225,10 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
     var maxProdKg = Math.max.apply(null, prodData.map(function(p){ return p.kg; })) || 1;
     var colSpan = hasDate ? 5 : 4;
     var prodRows = prodData.map(function(p, pi) {
-      var kg = Math.round(p.kg);
+      // Gate on the real quantity, not the rounded one — see fmtUsageQty.
+      var kg = p.kg;
       var pct = totalKg ? ((p.kg/totalKg)*100).toFixed(1) : '0';
-      var bw = kg ? Math.round((p.kg/maxProdKg)*88) : 0;
+      var bw = kg > 0 ? Math.max(1, Math.round((p.kg/maxProdKg)*88)) : 0;
       var tdB = 'padding:6px 10px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;font-size:12px;';
       var isOpen = !!drillOpenLots[p.product];
       var lastCell = hasDate
@@ -13219,7 +13243,7 @@ function matProductDrillHTML(m, idx, monthKeys, unit) {
             + '<span style="overflow:hidden;text-overflow:ellipsis;">'+esc(displayProduct(p.product, drillCustomer))+'</span>'
           + '</span>'
         + '</td>'
-        + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg?kg.toLocaleString()+' '+unit:'—')+'</td>'
+        + '<td style="'+tdB+'text-align:right;color:#e8e6e0;">'+(kg>0?fmtUsageQty(kg)+' '+unit:'—')+'</td>'
         + '<td style="'+tdB+'text-align:right;color:#888780;">'+p.lots.size+'</td>'
         + lastCell
         + '<td class="pnl-bar-cell" style="'+tdB+'padding-right:14px;width:120px;">'
@@ -13913,7 +13937,7 @@ function renderMatInline(m, idx) {
   var panel = document.getElementById('mat-inline-'+idx);
   if (!panel) return;
   var unit = matUnit(m.name);
-  function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unit:'\u2014'; }
+  function fmt(v){ return v>0?fmtUsageQty(v)+' '+unit:'\u2014'; }
   function fmtStockI(v){ return v==null ? '\u2014' : (v>0 ? fmtStockQty(v)+' '+unit : '0 '+unit); }
 
   // No-usage-history rows are pure on-hand inventory \u2014 no consumption series to
@@ -14114,7 +14138,7 @@ function renderMatInline(m, idx) {
     type:'bar',
     data:{labels:monthLabels,datasets:[{data:chartData,backgroundColor:monthKeys.map(function(){ return '#1a3a5c'; }),borderColor:'#378ADD',borderWidth:1,borderRadius:3}]},
     options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:20}},
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return Math.round(c.raw).toLocaleString()+' '+unit+' \u2014 click to see products';}}}},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return fmtUsageQty(c.raw)+' '+unit+' \u2014 click to see products';}}}},
       onClick:function(evt, elements) {
         if (!elements || !elements.length) return;
         var barIdx = elements[0].index;
@@ -14140,7 +14164,9 @@ function renderMatInline(m, idx) {
     // gated on skipLabels (>12 months): the shared plugin drops a label when the text will not
     // fit its slot, which is the actual question, so a 13-month window with room keeps its
     // numbers.
-    plugins:[barValueLabels({id:'topLabels',halo:'#141618'})]
+    // Same sub-unit rule as the table below it, or a 0.69 kg month sits under a bar labelled
+    // "1" beside a drilldown that now reads 0.69.
+    plugins:[barValueLabels({id:'topLabels',halo:'#141618',format:fmtUsageQty})]
   });
 }
 
@@ -14257,7 +14283,7 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
       + '<td style="padding:5px 10px;font-size:12px;font-weight:500;color:#e8e6e0;vertical-align:top;">'+esc(p.product)+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;color:#888780;vertical-align:top;">'+lotList+'</td>'
       + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;vertical-align:top;">'+(p.units?(p.units.toLocaleString()+(p.unitLabel?' '+esc(p.unitLabel):'')+(p.planned?plannedTag():'')):'—')+'</td>'
-      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+Math.round(p.kg).toLocaleString()+' '+unit+'</td>'
+      + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#e8e6e0;white-space:nowrap;">'+fmtUsageQty(p.kg)+' '+unit+'</td>'
       + '<td class="pnl-bar-cell" style="padding:5px 14px;width:120px;">'
         + '<div style="display:flex;align-items:center;gap:6px;">'
           + '<div class="pnl-bar" style="flex:1;background:#2c2c2a;border-radius:2px;height:4px;overflow:hidden;">'
@@ -14581,7 +14607,7 @@ function renderMaterials() {
     // unit spells the word out for tooltips and the badge; unitS is what goes in the
     // numeric cells, where the column width is fixed and cannot absorb "softgels".
     var sg=isSoftgel(m.name), unit=matUnit(m.name), unitS=matUnitShort(m.name);
-    function fmt(v){ return v>0?Math.round(v).toLocaleString()+' '+unitS:'—'; }
+    function fmt(v){ return v>0?fmtUsageQty(v)+' '+unitS:'—'; }
     // Months of supply = on-hand ÷ 3-mo avg burn. Null (no usage history) → em dash.
     var monthsCover = computeMonthsOfCover(m.stock, m.avg3);
     // Grouped rows list the whole SKU-group roster on the subline, not just the parts
