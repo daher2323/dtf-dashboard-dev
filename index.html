@@ -13392,9 +13392,30 @@ function _fefoDetailRowHTML(miss, unit, nCols) {
     var cQty = pulled.map(function(p){ return '<div style="' + lh + '">' + (p.qty ? fmtStockQty(p.qty) + ' ' + unit : '—') + '</div>'; }).join('');
     // Days of life this lot still had when it was passed over — the crux of it.
     var lifeLeft = (miss.exp != null) ? Math.round((miss.exp - ev.when) / _EXPIRY_MS_PER_DAY) : null;
+    // Brand and product under the run number, exactly as the Pick Opportunities board shows
+    // it. A bare lot # says a run went past this material; the product name says WHICH run,
+    // and that is what tells you when it comes round again — the reason to care that a lot
+    // with 36 days left keeps getting skipped. ~97% of pick-log lots resolve; the rest are
+    // 6-digit stick-pack and R&D runs that never reach the reference sheet, and they keep
+    // just their number rather than being given an invented name.
+    var nm = ev.orderLot ? _fefoOpsLotName(ev.orderLot) : null;
+    // Wraps rather than ellipsing, for the reason the ops board does: the tail of a name like
+    // "Creamy Rice Cereal Blueberry Ice Cream" is exactly where it stops matching its
+    // siblings. Clamped at two lines so one long name cannot stretch the row, bounded in width
+    // so it cannot widen the column under auto layout, and white-space reset because the cell
+    // style sets nowrap for every other line in this table.
+    var nmHTML = nm
+      ? '<div style="font-size:10px;line-height:1.35;margin-top:1px;max-width:220px;'
+        + 'white-space:normal;overflow-wrap:break-word;display:-webkit-box;'
+        + '-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">'
+        + (nm.brand ? '<span style="color:#85B7EB;">' + esc(nm.brand) + '</span>' : '')
+        + (nm.brand && nm.product ? '<span style="color:#3a3a38;"> &middot; </span>' : '')
+        + (nm.product ? '<span style="color:#888780;">' + esc(nm.product) + '</span>' : '')
+        + '</div>'
+      : '';
     return '<tr>'
       + '<td style="' + td + 'color:#cfcdc7;">' + _matExpDateStr(ev.when) + '</td>'
-      + '<td style="' + td + 'color:#888780;">' + (ev.orderLot ? esc(ev.orderLot) : '—') + '</td>'
+      + '<td style="' + td + 'color:#888780;">' + (ev.orderLot ? esc(ev.orderLot) : '—') + nmHTML + '</td>'
       + '<td style="' + td + '">' + cLot + '</td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + cExp + '</td>'
       + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + cQty + '</td>'
