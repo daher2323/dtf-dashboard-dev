@@ -2567,9 +2567,14 @@ function parseInventory(text) {
       // parsing it twice invites the two readings drifting apart.
       var sdRaw = (r['Start Day Stock'] == null ? '' : String(r['Start Day Stock'])).trim();
       var sdQty = /[0-9]/.test(sdRaw) ? num(sdRaw) : null;
+      // Hoisted for the same reason, and now for a second reader: the expiry-exposure lot
+      // list carries it so "22.68 kg expired" can be told apart from "22.68 kg of a 500 kg
+      // drum expired". Same rule as Start Day Stock — a cell with no digit in it stays null,
+      // never num()'d to 0, because the feed serves #N/A while the tab recalculates and a
+      // fake 0 would read as "nothing was ever received".
+      var origRaw = (r['Original Qty Received'] == null ? '' : String(r['Original Qty Received'])).trim();
+      var origQty = /[0-9]/.test(origRaw) ? num(origRaw) : null;
       if (lotNo) {
-        var origRaw = (r['Original Qty Received'] == null ? '' : String(r['Original Qty Received'])).trim();
-        var origQty = /[0-9]/.test(origRaw) ? num(origRaw) : null;
         var peak = Math.max(qty, sdQty == null ? 0 : sdQty);
         if (origQty != null && origQty > 0) {
           _audit.checked++;
@@ -2633,7 +2638,8 @@ function parseInventory(text) {
           loc: (r['Locations'] || '').trim(),
           supplier: (r['Supplier/MFG'] || '').trim(),
           batch: (r['Lot / Batch'] || '').trim(),
-          status: (r['Status'] || '').trim()
+          status: (r['Status'] || '').trim(),
+          origQty: origQty                        // null where the cell is blank or a sentinel
         });
       }
     });
@@ -13986,16 +13992,30 @@ function _expiryExposureRows() {
       if (L.exp == null) continue;
       var days = Math.round((L.exp - today) / _EXPIRY_MS_PER_DAY);
       if (days > EXPIRY_SOON_DAYS) continue;
-      // Two dates that turn "this expired" into a reviewable question: how long it sat here,
-      // and how much life it arrived with. A lot received with 40 days on it and a lot sat on
-      // for two years are different failures with different owners, and the row should not
-      // make anyone work that out by subtracting dates in their head.
+      // Two figures that turn "this expired" into a reviewable question, each naming a
+      // different failure with a different owner:
+      //
+      //   lifeAtReceipt  how much shelf life it arrived with. Short means we accepted
+      //                  short-dated material — a buying conversation. Long means we sat on
+      //                  it — a planning one. Lion's Mane T23364 landed with 993 days and
+      //                  expired with 992 of them spent on our shelf.
+      //   fracLeft       how much of the drum is still here. Without it "22.68 kg expired"
+      //                  reads identically whether it is an untouched bag or the dust at the
+      //                  bottom of a 500 kg receipt, and those are not the same event:
+      //                  29% of at-risk lots have 10% or less of their receipt left, while
+      //                  16% have never been meaningfully opened.
+      //
+      // Days-held is deliberately NOT here. It is exactly lifeAtReceipt minus the days-left
+      // already in the Status column, so it was a third column carrying no third fact — and
+      // on a list that only ever shows near-expiry lots it sat a day or two from
+      // lifeAtReceipt on every row, which reads as duplication rather than as arithmetic.
       var rd = parseInvDate(L.received);
       out.push({
         part: pn, material: rec.material || '', lot: L.lot, qty: L.qty, exp: L.exp, days: days,
         loc: L.loc || '', supplier: L.supplier || '', batch: L.batch || '', received: L.received || '',
-        heldDays: rd ? Math.round((today - rd.getTime()) / _EXPIRY_MS_PER_DAY) : null,
         lifeAtReceipt: rd ? Math.round((L.exp - rd.getTime()) / _EXPIRY_MS_PER_DAY) : null,
+        origQty: (L.origQty != null && L.origQty > 0) ? L.origQty : null,
+        fracLeft: (L.origQty != null && L.origQty > 0) ? (L.qty / L.origQty) : null,
         unit: matUnit(rec.material || ''),
         scope: days < 0 ? 'expired' : 'soon'
       });
@@ -14012,6 +14032,28 @@ function _expoQtyTxt(kg, sg) {
   if (kg > 0 || sg <= 0) p.push(Math.round(kg).toLocaleString() + ' kg');
   if (sg > 0) p.push(Math.round(sg).toLocaleString() + ' softgels');
   return p.join(' + ');
+}
+// The share of a receipt still on the shelf, as a reading aid next to the quantity. Rounded,
+// but never to a figure that contradicts the row: a lot with 0.02 kg of 500 left is "<1%",
+// not "0%", because 0% next to a non-zero On hand reads as a broken cell. Above 100% the
+// receipt is smaller than the stock, which is the overage alert's business — flagged amber
+// and pointed there rather than quietly clamped.
+function _expoFracTxt(f) {
+  if (f == null) return '';
+  if (f > 1.005) return '<span title="This lot holds more than its recorded receipt — see the stock alert above; Original Qty Received needs correcting on the inventory sheet." style="color:#FAC775;">over receipt</span>';
+  var pct = f >= 0.995 ? 100 : (f > 0 && f < 0.005 ? null : Math.round(f * 100));
+  return '<span style="color:#5f5e5a;">' + (pct === null ? '&lt;1' : pct) + '% left</span>';
+}
+// Shelf life on arrival. A NEGATIVE one is not a small number to print quietly: the lot's
+// EXP. Date falls before its Receiving Date, so either it was accepted already expired or one
+// of the two dates is wrong. 16 lots read this way today, one of them by 677 days (Walnut
+// Powder T36175, received 7/27/2026 against an expiry of 9/18/2024) — which is a typo nobody
+// would ever find, because the lot is simply listed as expired like the 281 beside it.
+function _expoLifeTxt(d) {
+  if (d == null) return '—';
+  if (d < 0) return '<span title="This lot\u2019s EXP. Date falls BEFORE its Receiving Date \u2014 it was either received already expired, or one of the two dates is wrong on the inventory sheet." style="color:#FAC775;">'
+    + d.toLocaleString() + 'd</span>';
+  return d.toLocaleString() + 'd';
 }
 function _expoTotals(rows) {
   var t = { kg: 0, sg: 0, lots: rows.length };
@@ -14070,8 +14112,9 @@ function expiryExposurePanelHTML() {
       + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + _matExpDateStr(r.exp) + '</td>'
       + '<td style="' + td + 'text-align:right;">' + state + '</td>'
       + '<td style="' + td + 'text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.heldDays == null ? '—' : r.heldDays.toLocaleString() + 'd') + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.lifeAtReceipt == null ? '—' : r.lifeAtReceipt.toLocaleString() + 'd') + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.origQty == null ? '—'
+          : fmtStockQty(r.origQty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span> ' + _expoFracTxt(r.fracLeft)) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + _expoLifeTxt(r.lifeAtReceipt) + '</td>'
       + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc) + '</td>'
       + '<td style="' + td + 'padding-right:14px;color:#888780;max-width:220px;overflow:hidden;text-overflow:ellipsis;">' + (r.supplier ? esc(r.supplier) : '—') + '</td>'
       + '</tr>';
@@ -14106,13 +14149,14 @@ function expiryExposurePanelHTML() {
     + '<div style="padding:0 14px 9px;font-size:10px;color:#5f5e5a;font-family:system-ui;line-height:1.5;">'
       + 'Every in-stock lot in the inventory feed carrying a readable EXP. Date — not affected by the filters or search above. '
       + 'Lots with a missing or unreadable date are listed separately on the coverage line. '
-      + 'Days held and life at receipt come from Receiving Date, which is blank on some lots.'
+      + 'Life at receipt is the shelf life the lot arrived with (Receiving Date to EXP. Date) — a short one means we accepted short-dated material, a long one means it sat here. '
+      + 'Qty received is the original receipt, so On hand beside it says how much of the drum is actually at stake. Both are blank where the sheet has no Receiving Date or receipt quantity.'
     + '</div>'
     + '<div style="overflow-x:auto;max-height:420px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#16150f;">'
     + '<thead><tr style="border-bottom:0.5px solid #3d3524;">'
       + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
       + '<th style="' + thR + '">On hand</th><th style="' + thR + '">Expires</th><th style="' + thR + '">Status</th>'
-      + '<th style="' + thR + '">Received</th><th style="' + thR + '">Held</th><th style="' + thR + '">Life at receipt</th>'
+      + '<th style="' + thR + '">Received</th><th style="' + thR + '">Qty received</th><th style="' + thR + '">Life at receipt</th>'
       + '<th style="' + th + '">Location</th><th style="' + th + 'padding-right:14px;">Supplier</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
     + '</div>';
@@ -14139,7 +14183,7 @@ function exportExpiryExposure() {
   var now = new Date();
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
   var headers = ['Material','Part #','Lot #','On Hand','Unit','Expires','Days Left','Status',
-                 'Received','Days Held','Life At Receipt (days)','Location','Supplier','Supplier Batch'];
+                 'Received','Qty Received','% Of Receipt Left','Life At Receipt (days)','Location','Supplier','Supplier Batch'];
   var aoa = [
     ['Expiry exposure — ' + _EXPO_SCOPES[view]],
     ['Exported: ' + dateStr + ' · ' + T.lots.toLocaleString() + ' lot' + (T.lots===1?'':'s')
@@ -14148,7 +14192,9 @@ function exportExpiryExposure() {
     ['Every in-stock lot in the Raw Material Inventory feed with a readable EXP. Date that has expired or expires within '
       + EXPIRY_SOON_DAYS + ' days. Not affected by the Materials filters or search. Lots with a missing or unreadable date are excluded — those need a date entered before they can be assessed.'],
     ['Quantities are each material’s own unit (kg, or softgels where the material is a softgel), so totals are stated per unit and never added together.'],
-    ['Days Left is measured from the export date; a negative figure is days PAST the expiry date. Days Held and Life At Receipt are derived from Receiving Date and are blank where that cell is empty.'],
+    ['Days Left is measured from the export date; a negative figure is days PAST the expiry date. Life At Receipt is Receiving Date to EXP. Date — the shelf life the lot arrived with — and is blank where Receiving Date is empty. Days held needs no column: it is Life At Receipt minus Days Left.'],
+    ['A NEGATIVE Life At Receipt means the lot’s EXP. Date falls before its Receiving Date — it was received already expired, or one of the two dates is wrong on the sheet. Worth checking before treating the row as an ordinary expiry.'],
+    ['Qty Received is the sheet’s Original Qty Received, so On Hand against it shows how much of the drum is actually at stake: the dust at the bottom of a 500 kg receipt and an untouched 25 kg bag both read as "expired" without it. Blank where that cell is empty or still calculating; above 100% means the lot holds more than its recorded receipt, which is a sheet correction rather than a finding.'],
     ['Expired stock listed here is still on the shelf in the feed — it has not been written off or dispositioned. Review before acting: a lot may be on hold, reserved for a customer, or already scheduled for destruction.'],
     [],
     headers
@@ -14159,15 +14205,18 @@ function exportExpiryExposure() {
       Math.round(r.qty * 100) / 100, r.unit,
       _matExpDateStr(r.exp), r.days,
       r.days < 0 ? 'EXPIRED' : (r.days <= 30 ? 'Within 30 days' : 'Within ' + EXPIRY_SOON_DAYS + ' days'),
-      r.received, r.heldDays == null ? '' : r.heldDays, r.lifeAtReceipt == null ? '' : r.lifeAtReceipt,
+      r.received,
+      r.origQty == null ? '' : Math.round(r.origQty * 100) / 100,
+      r.fracLeft == null ? '' : Math.round(r.fracLeft * 1000) / 10,
+      r.lifeAtReceipt == null ? '' : r.lifeAtReceipt,
       r.loc, r.supplier, r.batch
     ]);
   });
   var wb = XLSX.utils.book_new();
   var ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:42},{wch:10},{wch:12},{wch:11},{wch:9},{wch:12},{wch:10},{wch:16},
-                 {wch:13},{wch:11},{wch:20},{wch:30},{wch:24},{wch:20}];
-  ws['!merges'] = [0,1,2,3,4,5].map(function(r){ return {s:{r:r,c:0},e:{r:r,c:headers.length-1}}; });
+                 {wch:13},{wch:13},{wch:17},{wch:20},{wch:30},{wch:24},{wch:20}];
+  ws['!merges'] = [0,1,2,3,4,5,6,7].map(function(r){ return {s:{r:r,c:0},e:{r:r,c:headers.length-1}}; });
   XLSX.utils.book_append_sheet(wb, ws, 'Expiry Exposure');
   XLSX.writeFile(wb, 'DTF_Expiry_Exposure_' + now.toISOString().split('T')[0] + '.xlsx');
 }
