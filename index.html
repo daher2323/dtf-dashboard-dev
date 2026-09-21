@@ -3186,6 +3186,29 @@ function _fefoPickTs(v) {
   if (h > 23 || mi > 59) return null;
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi, isNaN(se) ? 0 : se).getTime();
 }
+// Was this pick made for a PRODUCTION RUN? Only those are judged on FEFO.
+//
+// The Order Lot # column carries more than run numbers. Of the 23,124 pick rows naming a T#,
+// 190 are not a run: 131 read `R&D`, 55 `Quality`, and 4 are mis-keyed outright (a part #, a
+// quantity, a free-text note, a room name). Measured on the live feed 2026-09-21. R&D pulls
+// material to build samples and bid on business, and there declining a lot that is nearly out
+// of date is frequently the RIGHT call — you do not send a customer a trial made on material
+// that will be gone before the business lands. Flagging those decisions teaches people the
+// board does not understand what they do, which costs more than the findings are worth.
+//
+// A production lot number is all digits: 7 for a standard run (2609086), 6 for a stick/sample
+// run (250401). Every one of the 23,995 numeric entries in the feed is one or the other, and
+// nothing non-numeric is a run. Written open-ended on the top end so a longer future scheme
+// still counts, and floored at 6 so a mis-keyed short number cannot slip back in. A blank
+// carries no T# at all (0 rows), so it never reaches the engine either way.
+//
+// Non-production picks stay in the index as DRAWS — that split is the whole point of the flag.
+// An R&D pull empties a drum exactly like a production pull does, so stockAt / emptiedBefore /
+// emptySince must still see it; drop it and a lot R&D took to zero reads as having been on the
+// shelf, and gets offered as the lot a production run should have pulled.
+function _isProductionLot(v) {
+  return /^\d{6,}$/.test((v == null ? '' : String(v)).replace(/^\s+|\s+$/g, ''));
+}
 // ── FEFO opportunities: the pick decisions themselves ─────────────────────
 // computeFefoMisses answers "which lots are stranded and at risk today" — a
 // remediation list. This answers a different question for the same data: in a given
@@ -3404,6 +3427,11 @@ function computeFefoOps() {
         outcome: !onShelf ? 'consumed' : (lx != null && lx < today ? 'expired' : 'sitting'),
         leftKg: onShelf ? lq : 0,
         bothPulled: bothPulled,
+        // Pulled for something other than a production run (R&D, Quality, a mis-keyed cell).
+        // Carried rather than skipped outright so the summary strip can say how many rows the
+        // exclusion removed, the same way it does for split pulls — the merge key includes
+        // the production lot, so every pick folded into a row shares this value.
+        nonProd: !mine[i].prod,
         // `best` was drawn on a STRICTLY EARLIER slip of this same run+part, so by the time
         // this pick was made it had already been taken — it cannot also have been passed
         // over. Kept apart from bothPulled because the two consolidate differently: see the
@@ -3702,11 +3730,19 @@ function _fefoOpsGroups() {
   // nothing to hand round. Gated here so both consumers behave identically.
   if (!cov.enough) {
     return { P:P, cov:cov, belowFloor:true, inPeriod:[], flagged:[], groups:{}, order:[],
-             evaluable:0, oc:{expired:0,sitting:0,consumed:0}, splitPulls:0,
+             evaluable:0, oc:{expired:0,sitting:0,consumed:0}, splitPulls:0, nonProd:0,
              fixedTotal:0, openTotal:0, swapProven:0, topUpOnly:0 };
   }
   var all = computeFefoOps();
-  var inPeriod = all.filter(function(d){ return d.when >= P.start && d.when <= P.end; });
+  // Non-production pulls leave here and do not come back: they are not in inPeriod, so they
+  // reach neither the flagged list, the outcome tallies, the groups, nor the export. Counted
+  // against the same thresholds first, so the strip states how many rows the exclusion
+  // actually removed rather than how many R&D pulls happened to fall in the period.
+  var periodAll = all.filter(function(d){ return d.when >= P.start && d.when <= P.end; });
+  var nonProd = periodAll.filter(function(d){
+    return d.nonProd && !d.bothPulled && !d.drawnEarlier && d.lifeLeft <= fefoOpsLife && d.gapDays >= fefoOpsGap;
+  }).length;
+  var inPeriod = periodAll.filter(function(d){ return !d.nonProd; });
   // Split pulls come out before the thresholds are applied. They are not skips — the
   // earlier-expiring lot was drawn on the same slip — so counting them would overstate the
   // problem in the one view meant to be trusted daily. Reported separately rather than
@@ -3727,7 +3763,7 @@ function _fefoOpsGroups() {
   for (lk2 in ix.picksByLot) { if (!ix.picksByLot.hasOwnProperty(lk2)) continue;
     if (!ix.idx[lk2] || ix.idx[lk2].exp == null) continue;
     var pl = ix.picksByLot[lk2];
-    for (var pi = 0; pi < pl.length; pi++) if (pl[pi].t >= P.start && pl[pi].t <= P.end) evaluable++;
+    for (var pi = 0; pi < pl.length; pi++) if (pl[pi].prod && pl[pi].t >= P.start && pl[pi].t <= P.end) evaluable++;
   }
 
   // Group by part #, which is the unit a fix attaches to — a bin move, a label, a
@@ -3785,7 +3821,7 @@ function _fefoOpsGroups() {
     else if (d.couldCover === false) topUpOnly++;
   });
   return { P:P, cov:cov, belowFloor:false, inPeriod:inPeriod, flagged:flagged, groups:groups,
-           order:order, evaluable:evaluable, oc:oc, splitPulls:splitPulls.length,
+           order:order, evaluable:evaluable, oc:oc, splitPulls:splitPulls.length, nonProd:nonProd,
            fixedTotal:fixedTotal, openTotal:flagged.length - fixedTotal, swapProven:swapProven, topUpOnly:topUpOnly };
 }
 
@@ -3950,6 +3986,13 @@ function _fefoOpsPanelHTML() {
   if (G.splitPulls) {
     h += '<span style="color:#3a3a38;">&middot;</span>'
       + '<span title="Picks where the earlier-expiring lot was drawn on the SAME slip as the later one — the pull was spread over two lots, usually because the older one could not cover the quantity. Not a skip, so these are excluded from the flagged count." style="border-bottom:1px dotted #5f5e5a;cursor:help;">' + G.splitPulls + ' split pull' + (G.splitPulls===1?'':'s') + ' excluded</span>';
+  }
+  // Non-production pulls, stated for the same reason split pulls are: the rows were removed on
+  // purpose, and an exclusion nobody can see is indistinguishable from findings going missing.
+  // It is a count and a reason, not the rows — those are off this board for good.
+  if (G.nonProd) {
+    h += '<span style="color:#3a3a38;">&middot;</span>'
+      + '<span title="Pulls logged against something other than a production run — R&amp;D, Quality, or a mis-keyed Order Lot #. FEFO is not judged on those: R&amp;D builds samples to win business, where passing over material that is nearly out of date is often the right call." style="border-bottom:1px dotted #5f5e5a;cursor:help;">' + G.nonProd + ' non-production pull' + (G.nonProd===1?'':'s') + ' excluded</span>';
   }
   // Coverage is stated only when it is worth doubting. With the archived-lots feed linked it
   // runs 99-100% on the operational window, and a permanent "99% checkable" note next to a
@@ -4260,6 +4303,7 @@ function _fefoIndex() {
     // Ties count as first: two submissions in the same second are a duplicate, not a correction.
     var firstSlip = (tf == null) ? true : (grpFirst[gk2] === undefined || tf <= grpFirst[gk2]);
     var lpKey = (rows[i].orderLot || '') + '|' + (rows[i].part || '');
+    var rowProd = _isProductionLot(rows[i].orderLot);
     if (!byLotPart[lpKey]) byLotPart[lpKey] = [];
     byLotPart[lpKey].push({ t: t, tf: tf, ts: rowTs });
     for (j = 0; j < rowTs.length; j++) {
@@ -4273,7 +4317,10 @@ function _fefoIndex() {
       // has a live inventory row to read them off. rowTs/lpKey carry the slip context.
       picksByLot[tn].push({ t: t, tf: tf, firstSlip: firstSlip, qty: rowQty[tn], orderLot: rows[i].orderLot,
                             material: rows[i].material || '', pickPart: rows[i].part || '',
-                            needed: rows[i].needed || 0, rowTs: rowTs, lpKey: lpKey });
+                            needed: rows[i].needed || 0, rowTs: rowTs, lpKey: lpKey,
+                            // Judged on FEFO only if it was pulled for a run. Still counted as a
+                            // draw regardless — see _isProductionLot.
+                            prod: rowProd });
     }
   }
   for (k in picksByLot) { if (!picksByLot.hasOwnProperty(k)) continue;
@@ -4455,6 +4502,10 @@ function _fefoIndex() {
   for (i = 0; i < rows.length; i++) {
     var sd = _fefoPickDate(rows[i].date);
     if (!sd) continue;
+    // Non-production pulls are not judged, so they are not part of "what could we check".
+    // Leaving them in the denominator would move the coverage percentage — and with it the
+    // period floor — on the strength of picks this view never looks at.
+    if (!_isProductionLot(rows[i].orderLot)) continue;
     var st = sd.getTime(), ss = rows[i].slots || [];
     for (j = 0; j < ss.length; j++) {
       var sn2 = normT(ss[j].t);
@@ -4516,6 +4567,10 @@ function computeFefoMisses() {
     var siblings = byPart[used.part] || [];
     var mine = picksByLot[k];
     for (i = 0; i < mine.length; i++) {
+      // Same exclusion as the pick log: an R&D or Quality pull passing over a short-dated lot
+      // is not a FEFO failure, so it cannot charge that lot a skip or put a "skipped Nx" badge
+      // on the Lots tab. See _isProductionLot.
+      if (!mine[i].prod) continue;
       var when = mine[i].t, hit = false;
       for (j = 0; j < siblings.length; j++) {
         var sn = siblings[j];
