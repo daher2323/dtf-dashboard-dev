@@ -15063,16 +15063,25 @@ function renderMaterials() {
     t.lots90 = _expiryExposureRows().filter(function(r){ return r.scope === 'soon'; }).length;
     return t;
   })();
-  // Two audiences, so two forms. The FULL line belongs where someone is doing expiry
-  // work — the Expiring / FEFO segments — or where coverage is bad enough that a quiet
-  // Expiry column would mislead (it read 44% before the sheet's QUERY was replaced with
-  // FILTER, and that regression must not be able to hide again).
+  // The line has two forms, and what moves between them is only the COVERAGE RECITAL —
+  // "2,305 of 2,309 in-stock lots carry a usable expiry date (99.8%)". That belongs where
+  // someone is doing expiry work (the Expiring / FEFO segments) or where coverage is bad
+  // enough that a quiet Expiry column would mislead (it read 44% before the sheet's QUERY
+  // was replaced with FILTER, and that regression must not be able to hide again). On the
+  // default view it is noise: a percentage essentially at 100 invites a question with no
+  // useful answer.
   //
-  // On the default view the coverage recital is noise: the exposure is already on the
-  // Expiry column and the segment counts. What survives there is only the part with
-  // nowhere else to live — dates the sheet holds but nothing can read. That badge shows
-  // on the affected material's row, which you would have to know to look for. The line
-  // is self-extinguishing: fix the 24 typos and it disappears on its own.
+  // The EXPOSURE figures are not part of that trade and are always shown. They were, until
+  // they became clickable: the argument for hiding them was that the same exposure is on
+  // the Expiry column and the segment counts, which was true of a number you could only
+  // read. It is not true of the entry point to the lot list — hiding it meant the only
+  // route to "which 280 lots expired" was to switch filters first, which nobody discovers.
+  // A count with a route to it earns its place on every view.
+  //
+  // The data-quality residue (dates the sheet holds but nothing can read) is likewise
+  // always shown: that badge otherwise lives only on the affected material's row, which
+  // you would have to know to look for. Both are self-extinguishing — clear the stock,
+  // fix the typos, and the segments disappear on their own.
   var _covHTML = '';
   if (_cov.lots) {
     var _pct = (_cov.dated / _cov.lots * 100);
@@ -15086,26 +15095,25 @@ function renderMaterials() {
       + _cov.badLots + ' lot' + (_cov.badLots===1?'':'s') + ' with an unreadable expiry date' + (_expiryIssuesOpen ? ' \u25b4' : ' \u25be') + '</span>');
     if (_cov.undatedLots - _cov.badLots > 0) _badBits.push('<span onclick="toggleExpiryIssues()" style="border-bottom:1px dotted #444441;cursor:pointer;">'
       + (_cov.undatedLots - _cov.badLots) + ' with none recorded</span>');
-    var _bits = [], _label;
+    // Both figures open the lots behind them — same move as the unreadable-date count
+    // beside them, and for the same reason: a number nobody can drill into is a number
+    // nobody can act on.
+    var _openArrow = function(v){ return _expiryExposureView === v ? ' \u25b4' : ' \u25be'; };
+    var _expoBits = [];
+    if (_cov.expiredKg > 0 || _cov.expiredSg > 0) _expoBits.push('<span onclick="toggleExpiryExposure(\'expired\')" title="Show every in-stock lot that is already past its expiry date." style="border-bottom:1px dotted #6b2020;cursor:pointer;">'
+      + '<span style="color:#F09595;font-weight:500;">' + _expoQtyTxt(_cov.expiredKg, _cov.expiredSg)
+      + ' past date</span> in ' + _cov.expiredLots + ' lot' + (_cov.expiredLots===1?'':'s') + _openArrow('expired') + '</span>');
+    if (_cov.kg90 > 0 || _cov.sg90 > 0) _expoBits.push('<span onclick="toggleExpiryExposure(\'soon\')" title="Show every in-stock lot expiring within ' + EXPIRY_SOON_DAYS + ' days." style="border-bottom:1px dotted #3d3524;cursor:pointer;">'
+      + '<span style="color:#FAC775;">' + _expoQtyTxt(_cov.kg90, _cov.sg90) + '</span> expiring within ' + EXPIRY_SOON_DAYS + ' days'
+      + (_cov.lots90 ? ' in ' + _cov.lots90 + ' lot' + (_cov.lots90===1?'':'s') : '') + _openArrow('soon') + '</span>');
+    // Only the recital moves; the exposure and the data residue are on every view. The label
+    // follows suit — "Expiry coverage" would be a promise the short form does not keep.
+    var _bits = [], _label = _full ? 'Expiry coverage' : 'Expiry';
     if (_full) {
-      _label = 'Expiry coverage';
       _bits.push('<span style="color:#cfcdc7;">' + _cov.dated.toLocaleString() + ' of ' + _cov.lots.toLocaleString()
         + '</span> in-stock lots carry a usable expiry date (' + _pct.toFixed(1) + '%)');
-      // Both figures open the lots behind them — same move as the unreadable-date count
-      // beside them, and for the same reason: a number nobody can drill into is a number
-      // nobody can act on.
-      var _openArrow = function(v){ return _expiryExposureView === v ? ' \u25b4' : ' \u25be'; };
-      if (_cov.expiredKg > 0 || _cov.expiredSg > 0) _bits.push('<span onclick="toggleExpiryExposure(\'expired\')" title="Show every in-stock lot that is already past its expiry date." style="border-bottom:1px dotted #6b2020;cursor:pointer;">'
-        + '<span style="color:#F09595;font-weight:500;">' + _expoQtyTxt(_cov.expiredKg, _cov.expiredSg)
-        + ' past date</span> in ' + _cov.expiredLots + ' lot' + (_cov.expiredLots===1?'':'s') + _openArrow('expired') + '</span>');
-      if (_cov.kg90 > 0 || _cov.sg90 > 0) _bits.push('<span onclick="toggleExpiryExposure(\'soon\')" title="Show every in-stock lot expiring within ' + EXPIRY_SOON_DAYS + ' days." style="border-bottom:1px dotted #3d3524;cursor:pointer;">'
-        + '<span style="color:#FAC775;">' + _expoQtyTxt(_cov.kg90, _cov.sg90) + '</span> expiring within ' + EXPIRY_SOON_DAYS + ' days'
-        + (_cov.lots90 ? ' in ' + _cov.lots90 + ' lot' + (_cov.lots90===1?'':'s') : '') + _openArrow('soon') + '</span>');
-      _bits = _bits.concat(_badBits);
-    } else {
-      _label = 'Expiry data';
-      _bits = _badBits;                 // nothing wrong to report -> no line at all
     }
+    _bits = _bits.concat(_expoBits, _badBits);   // nothing to report -> no line at all
     if (_bits.length) {
       _covHTML = '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:11px;color:#888780;font-family:system-ui;">'
         + '<span style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">' + _label + '</span>'
