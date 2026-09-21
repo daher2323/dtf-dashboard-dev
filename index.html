@@ -7980,31 +7980,55 @@ function goToDefaultPerfRange() {
 // therefore unnecessary. Callers that want to override scroll (e.g. reset-to-top)
 // can assign a number to _nextRenderScrollY before triggering render().
 var _nextRenderScrollY = null;
+// Where the reader was, so a repaint can put them back. Window scroll, the focused field and
+// its caret, and the scrollTop of every element carrying `data-keep-scroll` — a panel that
+// scrolls inside a fixed height has its own position, and restoring only the page leaves it
+// snapped back to its first row.
+function _captureViewState(scrollY) {
+  var active = document.activeElement;
+  var st = { scrollY: scrollY, focusId: (active && active.id) ? active.id : null,
+             selStart: null, selEnd: null, inner: {} };
+  if (st.focusId && typeof active.selectionStart === 'number') {
+    try { st.selStart = active.selectionStart; st.selEnd = active.selectionEnd; } catch(e){}
+  }
+  var keep = document.querySelectorAll('[data-keep-scroll]');
+  for (var i = 0; i < keep.length; i++) if (keep[i].id) st.inner[keep[i].id] = keep[i].scrollTop;
+  return st;
+}
+function _restoreViewState(st) {
+  window.scrollTo(0, st.scrollY);
+  var k, el;
+  for (k in st.inner) { if (!st.inner.hasOwnProperty(k)) continue;
+    el = document.getElementById(k);
+    if (el) el.scrollTop = st.inner[k];
+  }
+  if (st.focusId) {
+    el = document.getElementById(st.focusId);
+    if (el && typeof el.focus === 'function') {
+      try { el.focus({ preventScroll: true }); } catch(e) { try { el.focus(); } catch(_){} }
+      if (st.selStart !== null && typeof el.setSelectionRange === 'function') {
+        try { el.setSelectionRange(st.selStart, st.selEnd); } catch(e){}
+      }
+    }
+  }
+}
+// True while renderImpl() is running under render(). Section renderers that do their own
+// preservation (renderMaterials) check it and stand down: render() captured the scroll first
+// and owns _nextRenderScrollY, so a second restore would race it and could undo a deliberate
+// reset-to-top.
+var _inRenderWrapper = false;
 function render() {
   var scrollY = (_nextRenderScrollY !== null) ? _nextRenderScrollY : window.scrollY;
   _nextRenderScrollY = null;
-  var active = document.activeElement;
-  var focusId = (active && active.id) ? active.id : null;
-  var selStart = null, selEnd = null;
-  if (focusId && active && typeof active.selectionStart === 'number') {
-    try { selStart = active.selectionStart; selEnd = active.selectionEnd; } catch(e){}
-  }
-  renderImpl();
+  var st = _captureViewState(scrollY);
+  _inRenderWrapper = true;
+  try { renderImpl(); } finally { _inRenderWrapper = false; }
   // Two rAFs: first lets the new DOM lay out, second lets Chart.js finish painting
   // into canvases we just inserted (which can shift layout and reset scroll).
   requestAnimationFrame(function() {
     requestAnimationFrame(function() {
-      window.scrollTo(0, scrollY);
+      _restoreViewState(st);
       syncSubBarTop();
-      if (focusId) {
-        var el = document.getElementById(focusId);
-        if (el && typeof el.focus === 'function') {
-          try { el.focus({ preventScroll: true }); } catch(e) { try { el.focus(); } catch(_){} }
-          if (selStart !== null && typeof el.setSelectionRange === 'function') {
-            try { el.setSelectionRange(selStart, selEnd); } catch(e){}
-          }
-        }
-      }
     });
   });
 }
@@ -14100,14 +14124,21 @@ function expiryExposurePanelHTML() {
       + 'color:' + (on ? '#e8e6e0' : '#888780') + ';font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;">' + label + '</button>';
   };
 
-  var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+  // Eleven columns and up to 447 rows inside a 420px box: the header cannot be allowed to
+  // scroll away, because nobody memorises "Received" vs "Qty received" vs "Life at receipt"
+  // from position alone. Sticky cells need border-collapse:separate to paint in WebKit (the
+  // same trade .pnl-sub-table makes), and that mode drops row-level borders — so the header
+  // rule and the row dividers are restored per cell below. The background must be opaque and
+  // match the panel's own header strip, or rows slide visibly under the labels.
+  var th = 'position:sticky;top:0;z-index:3;background:#211d16;border-bottom:0.5px solid #3d3524;'
+    + 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var thR = th.replace('text-align:left', 'text-align:right');
   var rows = shown.map(function(r){
-    var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
+    var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;border-bottom:0.5px solid #2c2c2a;';
     var state = r.days < 0
       ? '<span style="color:#F09595;font-weight:500;">' + Math.abs(r.days).toLocaleString() + 'd ago</span>'
       : '<span style="color:' + (r.days <= 30 ? '#FAC775' : '#cfcdc7') + ';">' + r.days.toLocaleString() + 'd left</span>';
-    return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
+    return '<tr>'
       + '<td style="' + td + 'color:#e8e6e0;max-width:280px;overflow:hidden;text-overflow:ellipsis;">' + esc(r.material || '—') + '</td>'
       + '<td style="' + td + 'color:#888780;">' + esc(r.part) + '</td>'
       + '<td style="' + td + '">' + _blendCopyCell(r.lot) + '</td>'
@@ -14155,8 +14186,9 @@ function expiryExposurePanelHTML() {
       + 'Life at receipt is the shelf life the lot arrived with (Receiving Date to EXP. Date) — a short one means we accepted short-dated material, a long one means it sat here. '
       + 'Qty received is the original receipt, so On hand beside it says how much of the drum is actually at stake. Both are blank where the sheet has no Receiving Date or receipt quantity.'
     + '</div>'
-    + '<div style="overflow-x:auto;max-height:420px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#16150f;">'
-    + '<thead><tr style="border-bottom:0.5px solid #3d3524;">'
+    + '<div id="expo-scroll" data-keep-scroll style="overflow-x:auto;max-height:420px;overflow-y:auto;">'
+    + '<table style="width:100%;border-collapse:separate;border-spacing:0;background:#16150f;">'
+    + '<thead><tr>'
       + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
       + '<th style="' + thR + '">On hand</th><th style="' + thR + '">Expires</th><th style="' + thR + '">Status</th>'
       + '<th style="' + thR + '">Received</th><th style="' + thR + '">Qty received</th><th style="' + thR + '">Life at receipt</th>'
@@ -14637,7 +14669,21 @@ function renderMatMonthDrill(m, idx, mk, label, barIdx) {
     + '</div>';
 }
 
+// Background refreshes repaint this view by calling renderMaterials() DIRECTLY — the
+// inventory fetch, the stock-overage confirmation, the pick-sheet load — so they never got
+// render()'s scroll preservation. The inventory feed lands a few seconds after first paint,
+// and it threw the reader back to the top of the page mid-read, every time. Same treatment
+// applied here rather than at the eight call sites, so a ninth cannot reintroduce it.
 function renderMaterials() {
+  // render() already captured the state and will restore it; see _inRenderWrapper.
+  if (_inRenderWrapper) { renderMaterialsImpl(); return; }
+  var st = _captureViewState(window.scrollY);
+  renderMaterialsImpl();
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){ _restoreViewState(st); });
+  });
+}
+function renderMaterialsImpl() {
   var content = document.getElementById('content');
   if (!content) return;
   hideColTip(); // drop any open header tooltip before the table is rebuilt
