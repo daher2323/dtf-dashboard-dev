@@ -3844,7 +3844,7 @@ function _fefoOpsPanelHTML() {
 
   var h = '';
   // ── Header: what this is, period navigator, granularity ──
-  h += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
+  h += '<div id="fefo-ops-panel" data-anchor style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     + '<div style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;">'
       + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
         + '<span style="font-size:11px;font-weight:500;color:#FFD700;text-transform:uppercase;letter-spacing:.04em;">Pick opportunities</span>'
@@ -8017,16 +8017,49 @@ function _releaseContentHeight() {
 function _captureViewState(scrollY) {
   var active = document.activeElement;
   var st = { scrollY: scrollY, focusId: (active && active.id) ? active.id : null,
-             selStart: null, selEnd: null, inner: {} };
+             selStart: null, selEnd: null, inner: {}, anchorId: null, anchorTop: 0 };
   if (st.focusId && typeof active.selectionStart === 'number') {
     try { st.selStart = active.selectionStart; st.selEnd = active.selectionEnd; } catch(e){}
   }
+  var i;
   var keep = document.querySelectorAll('[data-keep-scroll]');
-  for (var i = 0; i < keep.length; i++) if (keep[i].id) st.inner[keep[i].id] = keep[i].scrollTop;
+  for (i = 0; i < keep.length; i++) if (keep[i].id) st.inner[keep[i].id] = keep[i].scrollTop;
+  // The block the reader is actually looking at. Holding window.scrollY keeps the PAGE still,
+  // which is not the same thing: a block that arrives above the fold on a later refresh — the
+  // stock-overage alert, which only exists while the sheet disagrees with itself — pushes
+  // everything below it down by its own height, and the reader's rows slide out from under
+  // them without the scroll position changing at all. Anchoring to a block instead absorbs
+  // that, because what has to stay still is the content, not the offset.
+  //
+  // The anchor is the last tagged block at or above the viewport top (the one the fold sits
+  // inside), or the first one when they all start below it.
+  var anc = document.querySelectorAll('[data-anchor]');
+  for (i = 0; i < anc.length; i++) {
+    if (!anc[i].id) continue;
+    var top = anc[i].getBoundingClientRect().top;
+    if (st.anchorId === null || top <= 0) { st.anchorId = anc[i].id; st.anchorTop = top; }
+  }
   return st;
 }
 function _restoreViewState(st) {
   window.scrollTo(0, st.scrollY);
+  // ...then take out whatever grew or vanished above that point. Skipped at the very top of
+  // the page: there, an alert appearing is something to SEE, and pushing the reader down to
+  // hold the block beneath it still would hide the thing that just arrived. Also skipped when
+  // the anchor did not survive the render, which is how a section switch opts out — the ids
+  // belong to one view.
+  if (st.anchorId && st.scrollY > 0) {
+    var a = document.getElementById(st.anchorId);
+    if (a) {
+      var delta = a.getBoundingClientRect().top - st.anchorTop;
+      if (delta) window.scrollTo(0, Math.max(0, window.scrollY + delta));
+    }
+  }
+  // The anchor adjustment IS the new target, so record it. _settleAfterRender corrects
+  // anything that drifts from st.scrollY — left at the captured value it would read this
+  // deliberate shift as drift and undo it two frames later, putting the reader back exactly
+  // where the alert had displaced them.
+  st.scrollY = window.scrollY;
   var k, el;
   for (k in st.inner) { if (!st.inner.hasOwnProperty(k)) continue;
     el = document.getElementById(k);
@@ -14010,7 +14043,7 @@ function expiryIssuesPanelHTML() {
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
       + '</tr>';
   }).join('');
-  return '<div style="background:#1e1414;border:0.5px solid #4a2020;border-left:3px solid #F09595;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
+  return '<div id="expiry-issues-panel" data-anchor style="background:#1e1414;border:0.5px solid #4a2020;border-left:3px solid #F09595;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
     + '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#241717;">'
       + '<span style="font-size:11px;font-weight:500;color:#F09595;text-transform:uppercase;letter-spacing:.04em;">Expiry dates to fix</span>'
       + '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + out.length + ' lot' + (out.length===1?'':'s')
@@ -14192,7 +14225,7 @@ function expiryExposurePanelHTML() {
       + '</tr>';
   }).join('');
 
-  return '<div style="background:#191714;border:0.5px solid #3d3524;border-left:3px solid #FAC775;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
+  return '<div id="expo-panel" data-anchor style="background:#191714;border:0.5px solid #3d3524;border-left:3px solid #FAC775;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
     + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#211d16;">'
       + '<span style="font-size:11px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;">Expiry exposure</span>'
       + btn('expired', 'Past date', nExp) + btn('soon', 'Within ' + EXPIRY_SOON_DAYS + ' days', nSoon) + btn('all', 'Both', all.length)
@@ -15251,7 +15284,7 @@ function renderMaterialsImpl() {
     }
     _bits = _bits.concat(_expoBits, _badBits);   // nothing to report -> no line at all
     if (_bits.length) {
-      _covHTML = '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:11px;color:#888780;font-family:system-ui;">'
+      _covHTML = '<div id="expiry-cov-line" data-anchor style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:11px;color:#888780;font-family:system-ui;">'
         + '<span style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">' + _label + '</span>'
         + '<span>' + _bits.join(' <span style="color:#3a3a38;">&middot;</span> ') + '</span>'
         + '</div>';
@@ -15290,7 +15323,7 @@ function renderMaterialsImpl() {
   }
   content.innerHTML = pickerHTML + _overHTML + _covHTML + expiryExposurePanelHTML()
     + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
-    +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
+    +'<div id="mat-table-card" data-anchor style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     +'<div style="overflow-x:auto;"><table class="mat-table" style="width:100%;font-family:system-ui;table-layout:fixed;">'
     +'<colgroup>'
     +'<col style="width:28px;">'      // # (rank)
