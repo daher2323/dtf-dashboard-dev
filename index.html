@@ -3148,6 +3148,11 @@ var FEFO_EVENT_CAP = 25;             // per-lot evidence rows kept for the drill
 var PICK_DEDUCTION_LAG_DAYS = 2;
 var _fefoOpenLot = null;             // T# whose skip detail is expanded, or null
 var _expiryIssuesOpen = false;       // the unreadable/missing-date list under the coverage line
+// The lots behind the two kg figures on the same line. '' = closed; otherwise the slice
+// showing: 'expired' | 'soon' | 'all'. Sorted soonest-expiry-first by default, which reads
+// longest-expired-first on the expired slice — the order a review works down.
+var _expiryExposureView = '';
+var _expiryExposureSort = 'date';    // 'date' | 'qty'
 // Which section of an expanded material is showing. Sticky across materials on
 // purpose: auditing lots means opening five rows in a row and wanting Lots each time.
 var matInlineTab = 'usage';          // 'usage' | 'customers' | 'parts' | 'lots'
@@ -13956,6 +13961,216 @@ function toggleExpiryIssues() {
   _expiryIssuesOpen = !_expiryIssuesOpen;
   renderMaterials();
 }
+
+// ── Expiry exposure: the lots behind the two kg figures on the coverage line ──────
+//
+// "13,257 kg past date in 280 lots" and "8,995 kg expiring within 90 days" were facts with
+// nowhere to go. Naming an exposure without a route to it moves the hunt onto the reader:
+// those lots sit among 2,300 inventory rows across hundreds of materials, and expanding
+// materials one at a time to find them is not a review anybody runs twice. Same treatment
+// the unreadable-date count already had — click the figure, get the lots, export the table.
+//
+// Scope matches exactly what the two figures are computed over: lots HOLDING STOCK
+// (`lotRows`) with a readable date. A spent lot's expiry is not an exposure, and an undated
+// one is the neighbouring panel's business. It deliberately ignores the materials table's
+// filters and search — it answers "what is at risk in the building", not "what is at risk
+// among the rows I happen to be looking at" — and the header says so.
+function _expiryExposureRows() {
+  var out = [], pn, i;
+  var today = _expiryToday();
+  for (pn in inventoryByPart) {
+    if (!inventoryByPart.hasOwnProperty(pn)) continue;
+    var rec = inventoryByPart[pn], lr = rec.lotRows || [];
+    for (i = 0; i < lr.length; i++) {
+      var L = lr[i];
+      if (L.exp == null) continue;
+      var days = Math.round((L.exp - today) / _EXPIRY_MS_PER_DAY);
+      if (days > EXPIRY_SOON_DAYS) continue;
+      // Two dates that turn "this expired" into a reviewable question: how long it sat here,
+      // and how much life it arrived with. A lot received with 40 days on it and a lot sat on
+      // for two years are different failures with different owners, and the row should not
+      // make anyone work that out by subtracting dates in their head.
+      var rd = parseInvDate(L.received);
+      out.push({
+        part: pn, material: rec.material || '', lot: L.lot, qty: L.qty, exp: L.exp, days: days,
+        loc: L.loc || '', supplier: L.supplier || '', batch: L.batch || '', received: L.received || '',
+        heldDays: rd ? Math.round((today - rd.getTime()) / _EXPIRY_MS_PER_DAY) : null,
+        lifeAtReceipt: rd ? Math.round((L.exp - rd.getTime()) / _EXPIRY_MS_PER_DAY) : null,
+        unit: matUnit(rec.material || ''),
+        scope: days < 0 ? 'expired' : 'soon'
+      });
+    }
+  }
+  return out;
+}
+
+// Totals by unit, never a single number. Softgels are counted, not weighed, and one CLA lot
+// of 1,500 softgels was being added straight into the "kg expiring" headline — 17% of that
+// figure was not kilograms. Every total here, on screen and in the export, is stated per unit.
+function _expoQtyTxt(kg, sg) {
+  var p = [];
+  if (kg > 0 || sg <= 0) p.push(Math.round(kg).toLocaleString() + ' kg');
+  if (sg > 0) p.push(Math.round(sg).toLocaleString() + ' softgels');
+  return p.join(' + ');
+}
+function _expoTotals(rows) {
+  var t = { kg: 0, sg: 0, lots: rows.length };
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].unit === 'kg') t.kg += rows[i].qty; else t.sg += rows[i].qty;
+  }
+  return t;
+}
+function _expoSorted(rows) {
+  return rows.slice().sort(function(a, b){
+    // Quantity descending is offered but not the default: it ranks 1,500 softgels above
+    // 900 kg, which is a comparison across units that does not mean anything. By date is
+    // unambiguous and reads in FEFO order, the same as every other lot list here.
+    if (_expiryExposureSort === 'qty') return (b.qty - a.qty) || (a.exp - b.exp);
+    return (a.exp - b.exp) || (b.qty - a.qty);
+  });
+}
+var _EXPO_SCOPES = { expired: 'Past date', soon: 'Within ' + EXPIRY_SOON_DAYS + ' days', all: 'Both' };
+
+function expiryExposurePanelHTML() {
+  var view = _expiryExposureView;
+  if (!view) return '';
+  var all = _expiryExposureRows();
+  if (!all.length) return '';
+  var shown = _expoSorted(all.filter(function(r){ return view === 'all' || r.scope === view; }));
+  var T = _expoTotals(shown);
+  var nExp = 0, nSoon = 0, i;
+  for (i = 0; i < all.length; i++) { if (all[i].scope === 'expired') nExp++; else nSoon++; }
+
+  var btn = function(v, label, n) {
+    var on = view === v;
+    return '<button onclick="setExpiryExposureView(\'' + v + '\')" style="height:22px;padding:0 9px;border-radius:6px;cursor:pointer;'
+      + 'border:0.5px solid ' + (on ? '#EF9F27' : '#3d3524') + ';background:' + (on ? '#2a2113' : 'transparent') + ';'
+      + 'color:' + (on ? '#FAC775' : '#888780') + ';font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;">'
+      + label + ' <span style="color:' + (on ? '#EF9F27' : '#5f5e5a') + ';">' + n + '</span></button>';
+  };
+  var sbtn = function(v, label) {
+    var on = _expiryExposureSort === v;
+    return '<button onclick="setExpiryExposureSort(\'' + v + '\')" style="height:22px;padding:0 9px;border-radius:6px;cursor:pointer;'
+      + 'border:0.5px solid ' + (on ? '#444441' : '#2c2c2a') + ';background:' + (on ? '#252829' : 'transparent') + ';'
+      + 'color:' + (on ? '#e8e6e0' : '#888780') + ';font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;">' + label + '</button>';
+  };
+
+  var th = 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+  var thR = th.replace('text-align:left', 'text-align:right');
+  var rows = shown.map(function(r){
+    var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
+    var state = r.days < 0
+      ? '<span style="color:#F09595;font-weight:500;">' + Math.abs(r.days).toLocaleString() + 'd ago</span>'
+      : '<span style="color:' + (r.days <= 30 ? '#FAC775' : '#cfcdc7') + ';">' + r.days.toLocaleString() + 'd left</span>';
+    return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<td style="' + td + 'color:#e8e6e0;max-width:280px;overflow:hidden;text-overflow:ellipsis;">' + esc(r.material || '—') + '</td>'
+      + '<td style="' + td + 'color:#888780;">' + esc(r.part) + '</td>'
+      + '<td style="' + td + '">' + _blendCopyCell(r.lot) + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(r.qty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span></td>'
+      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + _matExpDateStr(r.exp) + '</td>'
+      + '<td style="' + td + 'text-align:right;">' + state + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.heldDays == null ? '—' : r.heldDays.toLocaleString() + 'd') + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.lifeAtReceipt == null ? '—' : r.lifeAtReceipt.toLocaleString() + 'd') + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc) + '</td>'
+      + '<td style="' + td + 'padding-right:14px;color:#888780;max-width:220px;overflow:hidden;text-overflow:ellipsis;">' + (r.supplier ? esc(r.supplier) : '—') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return '<div style="background:#191714;border:0.5px solid #3d3524;border-left:3px solid #FAC775;border-radius:0 10px 10px 0;margin:-6px 0 14px;overflow:hidden;">'
+    + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#211d16;">'
+      + '<span style="font-size:11px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;">Expiry exposure</span>'
+      + btn('expired', 'Past date', nExp) + btn('soon', 'Within ' + EXPIRY_SOON_DAYS + ' days', nSoon) + btn('all', 'Both', all.length)
+      + '<span style="font-size:11px;color:#888780;font-family:system-ui;">'
+        + '<span style="color:#cfcdc7;">' + _expoQtyTxt(T.kg, T.sg) + '</span> across ' + T.lots.toLocaleString() + ' lot' + (T.lots===1?'':'s')
+      + '</span>'
+      + '<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">'
+        + '<span style="font-size:10px;color:#5f5e5a;font-family:system-ui;">Sort</span>'
+        + sbtn('date', 'By date') + sbtn('qty', 'By quantity')
+        + '<button onclick="exportExpiryExposure()" style="height:22px;padding:0 10px;border-radius:6px;cursor:pointer;border:1px solid #378ADD;'
+          + 'background:#0C447C;color:#85B7EB;font-size:11px;font-weight:500;font-family:system-ui;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;">'
+          + '<svg width="11" height="11" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>'
+          + 'Export</button>'
+        // The panel outlives its trigger: the two figures only appear on the coverage line
+        // when the Expiring or FEFO filter is on, so switching back to the default view can
+        // leave this open with nothing on screen to close it. Hence an explicit dismiss.
+        + '<button onclick="setExpiryExposureView(\'\')" title="Close" style="width:22px;height:22px;border-radius:6px;cursor:pointer;'
+          + 'border:0.5px solid #3d3524;background:transparent;color:#888780;font-size:11px;display:inline-flex;align-items:center;justify-content:center;padding:0;">'
+          + '<svg width="9" height="9" viewBox="0 0 8 8" fill="none"><line x1="1" y1="1" x2="7" y2="7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="7" y1="1" x2="1" y2="7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+        + '</button>'
+      + '</span>'
+    + '</div>'
+    // The basis, on the panel rather than only in the export. Two things a reader would
+    // otherwise have to assume: this is the whole building, not the filtered table above it,
+    // and an expired lot still counted here is stock nobody has dispositioned yet.
+    + '<div style="padding:0 14px 9px;font-size:10px;color:#5f5e5a;font-family:system-ui;line-height:1.5;">'
+      + 'Every in-stock lot in the inventory feed carrying a readable EXP. Date — not affected by the filters or search above. '
+      + 'Lots with a missing or unreadable date are listed separately on the coverage line. '
+      + 'Days held and life at receipt come from Receiving Date, which is blank on some lots.'
+    + '</div>'
+    + '<div style="overflow-x:auto;max-height:420px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;background:#16150f;">'
+    + '<thead><tr style="border-bottom:0.5px solid #3d3524;">'
+      + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
+      + '<th style="' + thR + '">On hand</th><th style="' + thR + '">Expires</th><th style="' + thR + '">Status</th>'
+      + '<th style="' + thR + '">Received</th><th style="' + thR + '">Held</th><th style="' + thR + '">Life at receipt</th>'
+      + '<th style="' + th + '">Location</th><th style="' + th + 'padding-right:14px;">Supplier</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+    + '</div>';
+}
+
+// Clicking the segment that is already showing closes the panel, so the figure works as a
+// plain toggle; clicking the other one switches slice without a close-then-open.
+function toggleExpiryExposure(view) {
+  _expiryExposureView = (_expiryExposureView === view) ? '' : view;
+  renderMaterials();
+}
+function setExpiryExposureView(view) { _expiryExposureView = view; renderMaterials(); }
+function setExpiryExposureSort(sort) { _expiryExposureSort = sort; renderMaterials(); }
+
+// The table as shown, for a meeting. Mirrors the screen's scope and order deliberately —
+// this one is an internal working list, not a customer-facing document, so "what I was
+// looking at" is the right thing to hand round.
+function exportExpiryExposure() {
+  var view = _expiryExposureView || 'all';
+  var all = _expiryExposureRows();
+  var shown = _expoSorted(all.filter(function(r){ return view === 'all' || r.scope === view; }));
+  if (!shown.length) return;
+  var T = _expoTotals(shown);
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  var headers = ['Material','Part #','Lot #','On Hand','Unit','Expires','Days Left','Status',
+                 'Received','Days Held','Life At Receipt (days)','Location','Supplier','Supplier Batch'];
+  var aoa = [
+    ['Expiry exposure — ' + _EXPO_SCOPES[view]],
+    ['Exported: ' + dateStr + ' · ' + T.lots.toLocaleString() + ' lot' + (T.lots===1?'':'s')
+      + ' · ' + _expoQtyTxt(T.kg, T.sg)
+      + ' · sorted ' + (_expiryExposureSort === 'qty' ? 'by quantity' : 'by expiry date')],
+    ['Every in-stock lot in the Raw Material Inventory feed with a readable EXP. Date that has expired or expires within '
+      + EXPIRY_SOON_DAYS + ' days. Not affected by the Materials filters or search. Lots with a missing or unreadable date are excluded — those need a date entered before they can be assessed.'],
+    ['Quantities are each material’s own unit (kg, or softgels where the material is a softgel), so totals are stated per unit and never added together.'],
+    ['Days Left is measured from the export date; a negative figure is days PAST the expiry date. Days Held and Life At Receipt are derived from Receiving Date and are blank where that cell is empty.'],
+    ['Expired stock listed here is still on the shelf in the feed — it has not been written off or dispositioned. Review before acting: a lot may be on hold, reserved for a customer, or already scheduled for destruction.'],
+    [],
+    headers
+  ];
+  shown.forEach(function(r){
+    aoa.push([
+      r.material, r.part, r.lot,
+      Math.round(r.qty * 100) / 100, r.unit,
+      _matExpDateStr(r.exp), r.days,
+      r.days < 0 ? 'EXPIRED' : (r.days <= 30 ? 'Within 30 days' : 'Within ' + EXPIRY_SOON_DAYS + ' days'),
+      r.received, r.heldDays == null ? '' : r.heldDays, r.lifeAtReceipt == null ? '' : r.lifeAtReceipt,
+      r.loc, r.supplier, r.batch
+    ]);
+  });
+  var wb = XLSX.utils.book_new();
+  var ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:42},{wch:10},{wch:12},{wch:11},{wch:9},{wch:12},{wch:10},{wch:16},
+                 {wch:13},{wch:11},{wch:20},{wch:30},{wch:24},{wch:20}];
+  ws['!merges'] = [0,1,2,3,4,5].map(function(r){ return {s:{r:r,c:0},e:{r:r,c:headers.length-1}}; });
+  XLSX.utils.book_append_sheet(wb, ws, 'Expiry Exposure');
+  XLSX.writeFile(wb, 'DTF_Expiry_Exposure_' + now.toISOString().split('T')[0] + '.xlsx');
+}
 function matInlineTabBar(m, idx) {
   var e = m.expiry || null;
   var lotN = e ? e.lots.length : 0;
@@ -14827,15 +15042,25 @@ function renderMaterials() {
   // rows currently listed) — the honest denominator for anything the Expiry column
   // says. Undated and unreadable are separated because they need different fixes.
   var _cov = (function(){
-    var t = { lots:0, dated:0, undatedLots:0, undatedKg:0, badLots:0, badKg:0, expiredKg:0, expiredLots:0, kg90:0 }, pn;
+    var t = { lots:0, dated:0, undatedLots:0, undatedKg:0, badLots:0, badKg:0,
+              expiredKg:0, expiredSg:0, expiredLots:0, kg90:0, sg90:0, lots90:0 }, pn;
     for (pn in inventoryByPart) {
       if (!inventoryByPart.hasOwnProperty(pn)) continue;
       var e = expiryPosition([pn], 0);
       t.lots += e.lots.length; t.dated += e.dated;
       t.undatedLots += e.noExpiryLots; t.undatedKg += e.noExpiryKg;
       t.badLots += e.badDateLots; t.badKg += e.badDateKg;
-      t.expiredKg += e.expiredKg; t.expiredLots += e.expiredLots; t.kg90 += e.kg90;
+      t.expiredLots += e.expiredLots;
+      // Softgels are counted, not weighed. Summed into the same running total they put 1,500
+      // softgels of CLA inside an "8,995 kg expiring" headline — 17% of that figure was not
+      // kilograms. Kept apart here, stated apart on the line, and totalled per unit in the panel.
+      if (isSoftgel(inventoryByPart[pn].material || '')) { t.expiredSg += e.expiredKg; t.sg90 += e.kg90; }
+      else { t.expiredKg += e.expiredKg; t.kg90 += e.kg90; }
     }
+    // Lot count behind the 90-day figure, so that segment can say what it opens onto. The
+    // per-part walk above has no tally for it (kg90 is a running sum over a FEFO sort), and a
+    // second pass over lotRows is the same arithmetic the panel does.
+    t.lots90 = _expiryExposureRows().filter(function(r){ return r.scope === 'soon'; }).length;
     return t;
   })();
   // Two audiences, so two forms. The FULL line belongs where someone is doing expiry
@@ -14866,9 +15091,16 @@ function renderMaterials() {
       _label = 'Expiry coverage';
       _bits.push('<span style="color:#cfcdc7;">' + _cov.dated.toLocaleString() + ' of ' + _cov.lots.toLocaleString()
         + '</span> in-stock lots carry a usable expiry date (' + _pct.toFixed(1) + '%)');
-      if (_cov.expiredKg > 0) _bits.push('<span style="color:#F09595;font-weight:500;">' + Math.round(_cov.expiredKg).toLocaleString()
-        + ' kg past date</span> in ' + _cov.expiredLots + ' lot' + (_cov.expiredLots===1?'':'s'));
-      if (_cov.kg90 > 0) _bits.push('<span style="color:#FAC775;">' + Math.round(_cov.kg90).toLocaleString() + ' kg</span> expiring within 90 days');
+      // Both figures open the lots behind them — same move as the unreadable-date count
+      // beside them, and for the same reason: a number nobody can drill into is a number
+      // nobody can act on.
+      var _openArrow = function(v){ return _expiryExposureView === v ? ' \u25b4' : ' \u25be'; };
+      if (_cov.expiredKg > 0 || _cov.expiredSg > 0) _bits.push('<span onclick="toggleExpiryExposure(\'expired\')" title="Show every in-stock lot that is already past its expiry date." style="border-bottom:1px dotted #6b2020;cursor:pointer;">'
+        + '<span style="color:#F09595;font-weight:500;">' + _expoQtyTxt(_cov.expiredKg, _cov.expiredSg)
+        + ' past date</span> in ' + _cov.expiredLots + ' lot' + (_cov.expiredLots===1?'':'s') + _openArrow('expired') + '</span>');
+      if (_cov.kg90 > 0 || _cov.sg90 > 0) _bits.push('<span onclick="toggleExpiryExposure(\'soon\')" title="Show every in-stock lot expiring within ' + EXPIRY_SOON_DAYS + ' days." style="border-bottom:1px dotted #3d3524;cursor:pointer;">'
+        + '<span style="color:#FAC775;">' + _expoQtyTxt(_cov.kg90, _cov.sg90) + '</span> expiring within ' + EXPIRY_SOON_DAYS + ' days'
+        + (_cov.lots90 ? ' in ' + _cov.lots90 + ' lot' + (_cov.lots90===1?'':'s') : '') + _openArrow('soon') + '</span>');
       _bits = _bits.concat(_badBits);
     } else {
       _label = 'Expiry data';
@@ -14906,12 +15138,14 @@ function renderMaterials() {
   var _overHTML = _overAlert + (_stockOveragesOpen ? stockOveragePanelHTML() : '')
     + _blindLine + (_stockBlindOpen ? stockBlindPanelHTML() : '');
   if (matView === 'lothealth' && materialsFefoOnly) {
-    content.innerHTML = pickerHTML + _overHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
+    content.innerHTML = pickerHTML + _overHTML + _covHTML + expiryExposurePanelHTML()
+      + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
       + _fefoOpsPanelHTML();
     filterMaterials();
     return;
   }
-  content.innerHTML = pickerHTML + _overHTML + _covHTML + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
+  content.innerHTML = pickerHTML + _overHTML + _covHTML + expiryExposurePanelHTML()
+    + (_expiryIssuesOpen ? expiryIssuesPanelHTML() : '')
     +'<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;overflow:hidden;">'
     +'<div style="overflow-x:auto;"><table class="mat-table" style="width:100%;font-family:system-ui;table-layout:fixed;">'
     +'<colgroup>'
