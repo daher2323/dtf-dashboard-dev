@@ -14040,9 +14040,12 @@ function _expoQtyTxt(kg, sg) {
 // and pointed there rather than quietly clamped.
 function _expoFracTxt(f) {
   if (f == null) return '';
-  if (f > 1.005) return '<span title="This lot holds more than its recorded receipt — see the stock alert above; Original Qty Received needs correcting on the inventory sheet." style="color:#FAC775;">over receipt</span>';
+  if (f > 1.005) return '<span title="This lot holds more than its recorded receipt — see the stock alert above; Original Qty Received needs correcting on the inventory sheet." style="color:#FAC775;">(over receipt)</span>';
   var pct = f >= 0.995 ? 100 : (f > 0 && f < 0.005 ? null : Math.round(f * 100));
-  return '<span style="color:#5f5e5a;">' + (pct === null ? '&lt;1' : pct) + '% left</span>';
+  // Bracketed: the cell states one quantity, and the share is a gloss on it rather than a
+  // second figure sitting beside it. Unbracketed, "250 kg 45% left" reads as two columns
+  // that lost their divider.
+  return '<span style="color:#5f5e5a;">(' + (pct === null ? '&lt;1' : pct) + '% left)</span>';
 }
 // Shelf life on arrival. A NEGATIVE one is not a small number to print quietly: the lot's
 // EXP. Date falls before its Receiving Date, so either it was accepted already expired or one
