@@ -7980,10 +7980,40 @@ function goToDefaultPerfRange() {
 // therefore unnecessary. Callers that want to override scroll (e.g. reset-to-top)
 // can assign a number to _nextRenderScrollY before triggering render().
 var _nextRenderScrollY = null;
+// ── Repainting #content without moving the reader ────────────────────────────────
+//
+// The scroll jump is not a timing problem, so restoring the position after the fact was never
+// the right fix — it puts the reader back a frame or two later, which is visible as a lurch.
+// What actually happens: assigning innerHTML empties the box, the document's height collapses,
+// and the browser CLAMPS window.scrollY to the new maximum. The position is gone before any
+// code of ours runs; a later scrollTo is an apology, not a fix.
+//
+// So hold the height instead. Floor #content at what it currently measures for the duration of
+// the swap and the document never shrinks, so there is nothing to clamp and the scroll simply
+// does not move. The floor is released two frames later, once the new content — and any
+// Chart.js canvas that sizes itself on the first frame — can carry its own height.
+//
+// Everything a rebuild genuinely destroys is restored SYNCHRONOUSLY, in the same task as the
+// swap: a fixed-height panel's scrollTop and the focused field both address elements that exist
+// the instant innerHTML returns, and nothing paints until the task ends, so neither flickers.
+// The deferred pass that remains only corrects a position that actually drifted, which in the
+// normal case means it does nothing at all.
+function _holdContentHeight() {
+  var c = document.getElementById('content');
+  if (!c) return 0;
+  var h = c.offsetHeight;                 // one forced layout, before anything is torn down
+  if (h > 0) c.style.minHeight = h + 'px';
+  return h;
+}
+function _releaseContentHeight() {
+  var c = document.getElementById('content');
+  if (c) c.style.minHeight = '';
+}
+
 // Where the reader was, so a repaint can put them back. Window scroll, the focused field and
 // its caret, and the scrollTop of every element carrying `data-keep-scroll` — a panel that
-// scrolls inside a fixed height has its own position, and restoring only the page leaves it
-// snapped back to its first row.
+// scrolls inside a fixed height has its own position, and the element itself does not survive
+// a rebuild, so that one has to be re-applied rather than held.
 function _captureViewState(scrollY) {
   var active = document.activeElement;
   var st = { scrollY: scrollY, focusId: (active && active.id) ? active.id : null,
@@ -8021,13 +8051,21 @@ function render() {
   var scrollY = (_nextRenderScrollY !== null) ? _nextRenderScrollY : window.scrollY;
   _nextRenderScrollY = null;
   var st = _captureViewState(scrollY);
+  _holdContentHeight();
   _inRenderWrapper = true;
   try { renderImpl(); } finally { _inRenderWrapper = false; }
-  // Two rAFs: first lets the new DOM lay out, second lets Chart.js finish painting
-  // into canvases we just inserted (which can shift layout and reset scroll).
+  _restoreViewState(st);
+  _settleAfterRender(st);
+}
+// Release the floor, and only then correct the scroll if something moved it anyway — a late
+// Chart.js layout, or a genuinely shorter page the floor was masking. Two rAFs because the
+// first is where a canvas sizes itself. The drift test is what keeps this from being the old
+// unconditional restore: at rest it does nothing, so there is nothing to see.
+function _settleAfterRender(st) {
   requestAnimationFrame(function() {
     requestAnimationFrame(function() {
-      _restoreViewState(st);
+      if (Math.abs(window.scrollY - st.scrollY) > 1) window.scrollTo(0, st.scrollY);
+      _releaseContentHeight();
       syncSubBarTop();
     });
   });
@@ -14678,10 +14716,10 @@ function renderMaterials() {
   // render() already captured the state and will restore it; see _inRenderWrapper.
   if (_inRenderWrapper) { renderMaterialsImpl(); return; }
   var st = _captureViewState(window.scrollY);
+  _holdContentHeight();
   renderMaterialsImpl();
-  requestAnimationFrame(function(){
-    requestAnimationFrame(function(){ _restoreViewState(st); });
-  });
+  _restoreViewState(st);
+  _settleAfterRender(st);
 }
 function renderMaterialsImpl() {
   var content = document.getElementById('content');
