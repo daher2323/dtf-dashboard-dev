@@ -1312,7 +1312,7 @@ var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets 
 var allRowsRaw = [];
 var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders' | 'quality'
                                 // ('customers' and 'orders' are the two halves of the "Sales" top tab)
-var qualitySubTab = 'recall';   // Quality sub-tab; 'recall' is the only option today
+var qualitySubTab = 'recall';   // Quality sub-tab: 'recall' | 'blend' | 'part'
 var topView = 'summary', subView = 'today';
 // Recall Tracking (transient view state). recallResult persists across re-renders
 // so a background data refresh doesn't wipe an active trace; it only changes when
@@ -1327,6 +1327,12 @@ var _recallJumpHighlight = null;  // lot # to highlight in the ops table after a
 var blendQuery = '';
 var blendResult = null;   // null = no search yet; { rows, lot, product, parts, materials, tnums } once searched
 var blendPending = '';    // a Lot # searched before pickRows finished loading; runs on arrival
+// Part Lookup (where-used). Same persistence contract as the two above: the result
+// survives a background refresh and only changes when the user runs a new lookup.
+var partQuery = '';
+var partResult = null;    // null = no lookup yet; { customers:[] } once searched
+var partPending = '';     // a Part # looked up before pickRows finished loading
+var partOpen = {};        // customer name -> 1 open / -1 closed; absent = the size default
 var selectedCustomer = null;
 var sortCol = 'date', sortDir = -1, page = 1, PAGE_SIZE = 50;
 var custLimit = 10;
@@ -6295,10 +6301,12 @@ function renderSubBar() {
     // small amber triangle identifies the recall tool inside the neutral Quality tab.
     var qr = qualitySubTab === 'recall';
     var qb = qualitySubTab === 'blend';
+    var qp = qualitySubTab === 'part';
     sb.innerHTML =
       '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
       + '<button onclick="setQualitySubTab(\'recall\')" style="'+navBtnStyle(qr)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>Recall Tracking</button>'
       + '<button onclick="setQualitySubTab(\'blend\')" style="'+navBtnStyle(qb)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M6.2 2v3.8L2.6 12a1 1 0 0 0 .9 1.5h9a1 1 0 0 0 .9-1.5L9.8 5.8V2"/><line x1="5" y1="2" x2="11" y2="2"/><line x1="4.2" y1="9.5" x2="11.8" y2="9.5"/></svg>Blend Lookup</button>'
+      + '<button onclick="setQualitySubTab(\'part\')" style="'+navBtnStyle(qp)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z"/><path d="M2.4 4.6L8 7.6l5.6-3"/><line x1="8" y1="7.6" x2="8" y2="14.4"/></svg>Part Lookup</button>'
       + '</div>';
   } else {
     sb.innerHTML = '';
@@ -6554,6 +6562,7 @@ function renderQuality() {
   // days-old pick sheet is worse than no trace at all.
   refreshStockFeedsIfStale();
   if (qualitySubTab === 'blend') { renderBlend(); return; }
+  if (qualitySubTab === 'part') { renderPart(); return; }
   if (qualitySubTab === 'recall') { renderRecall(); return; }
   renderRecall(); // default/fallback
 }
@@ -17914,6 +17923,23 @@ function recallSummaryHTML(res) {
     // sheet is T-prefixed — so say that instead of "No matches", which reads as "we have no
     // record of this" and sends someone looking for a data problem that isn't there.
     if (!_qLooksLikeTNum(res.tNum)) {
+      // A Part # in the T# box is the likeliest of the three transpositions — T33196 and
+      // 20-089 are both "the number on the material", and only one of them is a drum.
+      // Checked before the Lot # branch, which it cannot collide with: a part # carries a
+      // dash and a production lot is bare digits.
+      if (_qLooksLikePart(res.tNum)) {
+        var pOk = _qPartWouldResolve(res.tNum);
+        return head + _qWrongBoxHTML(res.tNum, {
+          title: 'That\'s a Part #, not a T#',
+          body: 'Recall Tracking traces one <b style="color:#c9c7c1;">drum</b> &mdash; a material lot T# like <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9c7c1;">T33196</span>. A <b style="color:#c9c7c1;">Part #</b> names the material itself.'
+            + (pOk
+                ? '<br><br><b style="color:#c9c7c1;">Part Lookup</b> takes a Part # and lists every customer and product that has used it.'
+                : '<br><br>No pick has drawn this part since the pick sheet began, so there is nothing to look up.'),
+          jumpFn: pOk ? 'qJumpToPart' : null,
+          btnLabel: 'Look it up in Part Lookup',
+          btnBorder: 'rgba(29,158,117,0.65)', btnBg: 'rgba(29,158,117,0.15)', btnTxt: '#9FE1CB'
+        }) + '</div>';
+      }
       // Whether it is a REAL lot is answered by the production feed, not by whether the
       // pick sheet has components for it: 1,408 of 3,219 production lots (44%) carry no
       // pick records at all, so resolving against the pick sheet alone would tell nearly
@@ -18427,6 +18453,19 @@ function blendSummaryHTML(res) {
     // The mirror of the guard on Recall Tracking: the two tools are inverses, so the
     // transposition happens in both directions and the dead end is just as unhelpful
     // either way.
+    if (_qLooksLikePart(res.lot)) {
+      var bpOk = _qPartWouldResolve(res.lot);
+      return bhead + _qWrongBoxHTML(res.lot, {
+        title: 'That\'s a Part #, not a Lot #',
+        body: 'Blend Lookup takes a <b style="color:#c9c7c1;">production Lot #</b> &mdash; 6 or 7 digits, like <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9c7c1;">2609002</span>. A <b style="color:#c9c7c1;">Part #</b> names a material.'
+          + (bpOk
+              ? '<br><br><b style="color:#c9c7c1;">Part Lookup</b> goes the other way &mdash; it lists every customer and product that has used this part.'
+              : '<br><br>No pick has drawn this part since the pick sheet began, so there is nothing to look up.'),
+        jumpFn: bpOk ? 'qJumpToPart' : null,
+        btnLabel: 'Look it up in Part Lookup',
+        btnBorder: 'rgba(29,158,117,0.65)', btnBg: 'rgba(29,158,117,0.15)', btnTxt: '#9FE1CB'
+      }) + '</div>';
+    }
     if (_qLooksLikeTNum(res.lot)) {
       var rResolves = _qRecallWouldResolve(res.lot);
       return bhead + _qWrongBoxHTML(res.lot, {
@@ -18814,6 +18853,513 @@ function exportBlend() {
   XLSX.writeFile(wb, 'blend_' + safe + '.xlsx');
 }
 
+
+// ══ Quality — Part Lookup (where-used) ═════════════════════════════════════
+// The third leg of the Quality trio. Recall takes a material lot T# forward to the
+// runs that consumed it; Blend takes a production Lot # down to its components; this
+// takes a PART # sideways, to every customer and product that has ever drawn it.
+//
+// The question it answers is a supply question, not a quality one — a vendor slips on
+// 10-359 and someone has to say who gets the phone call — which is why it reports
+// customers first, products second and lots last. That ordering is the whole point:
+// 10-359 fans out to 51 products but only 3 customers, and "three customers" is the
+// answer a person can act on.
+//
+// SCOPE, and it is a real limit, not a rounding error. The pick sheet records what was
+// PICKED. So this reports who HAS CONSUMED the material, never whose formula contains
+// it: a product that uses 10-359 but has not run since the pick sheet began simply is
+// not here, and the dashboard holds no BOM to fill that gap. Every surface says "has
+// used" rather than "uses", and the table states the first recorded pick for the part
+// so the reader can see how much history the answer rests on. Do not relabel these as
+// "products containing this material" — that is a claim this data cannot support.
+
+// Part #s are NN-NNN, with a real NN-NNNN tail (909 pick lines, e.g. 20-1000..20-1022),
+// so the guard has to accept both. Separator typos on the sheet (20.184, 20_184) are
+// normalised; a bare run of digits is NOT dashed when it is 6 long, because a 6-digit
+// number is a stick/sample production lot at least as often as it is a 4-suffix part.
+function normPart(v) {
+  var s = String(v == null ? '' : v).replace(/^\s+|\s+$/g, '').toUpperCase();
+  s = s.replace(/[._\s]+/g, '-');
+  var m = /^(\d{2})-?(\d{3,4})$/.exec(s);
+  if (!m) return s;
+  if (s.indexOf('-') === -1 && m[2].length === 4) return s;
+  return m[1] + '-' + m[2];
+}
+function _qLooksLikePart(q) { return /^\d{2}-\d{3,4}$/.test(normPart(q)); }
+
+// Every recorded draw of this part, read off materialsData (the CONSUMPTION feed) and
+// deliberately NOT off pickRows.
+//
+// pickRows keeps only lines carrying at least one T#, which is exactly right for Recall
+// — a line with no drum number cannot be traced to a drum — and exactly wrong here. The
+// question is which production lots consumed the part, and a pick logged without its T#
+// consumed it just the same. Measured on 10-359: pickRows sees 113 lots across 2
+// customers, materialsData 117 across 3. Reading the drum feed would have dropped Black
+// Market from the answer entirely, which on a vendor-delay call is the whole cost of the
+// mistake. materialsData is built from the same fetch, is deduped per (lot, part,
+// requirement), and carries a parsed Date.
+function tracePartNumber(rows, query) {
+  var q = normPart(query);
+  if (q === '') return [];
+  var hits = [], i;
+  for (i = 0; i < rows.length; i++) {
+    if (normPart(rows[i].partNum) !== q) continue;
+    hits.push({ orderLot: rows[i].lot, part: rows[i].partNum, material: rows[i].material,
+                date: rows[i].date, qty: rows[i].qty });
+  }
+  return hits;
+}
+
+// Collapse hits to lots, resolve each lot to product/customer/units, then group
+// customer -> product. Lot-first for the same reason buildRecallResult is: one lot
+// drawing a part on three pick lines is ONE lot, and looking its units up per hit is
+// the double-count trap.
+function buildPartResult(hits, part) {
+  var maps = buildLotResolution();
+  var byLot = {}, lotOrder = [], matSet = {}, i, k, h;
+  var firstTs = null, lastTs = null, pd;
+  for (i = 0; i < hits.length; i++) {
+    h = hits[i];
+    k = String(h.orderLot == null ? '' : h.orderLot).trim();
+    if (!byLot[k]) { byLot[k] = { lot: k, pickDate: h.date }; lotOrder.push(k); }
+    if (h.date && (!byLot[k].pickDate || h.date > byLot[k].pickDate)) byLot[k].pickDate = h.date;
+    if (h.material) matSet[h.material] = 1;
+    pd = h.date;     // already a Date — parseMaterials parsed it
+    if (pd) {
+      if (firstTs == null || pd.getTime() < firstTs) firstTs = pd.getTime();
+      if (lastTs == null || pd.getTime() > lastTs) lastTs = pd.getTime();
+    }
+  }
+
+  var custIdx = {}, custs = [], unresolved = [], nonProd = [], prodSet = {};
+  var totUnits = 0, plannedAny = false;
+  var j, agg, product, customer, info, runDate, ts, c, pIdx, p;
+  for (j = 0; j < lotOrder.length; j++) {
+    agg = byLot[lotOrder[j]];
+    product = maps.productByLot[agg.lot] || (lotMap[agg.lot] && lotMap[agg.lot].product)
+      || (lotIndex[agg.lot] && (lotIndex[agg.lot].combined || lotIndex[agg.lot].product)) || null;
+    // Two very different reasons a lot fails to resolve, and they must not share a bucket.
+    // The pick sheet's Order Lot # also carries 'R&D' and 'Quality' — deliberate non-
+    // production draws, which are a fact about the material (R&D is building samples with
+    // it) and not an error. Everything else is a data fault: a blank cell, or a quantity
+    // mis-keyed into the lot column ('61.32'). Both are surfaced, neither is counted as a
+    // customer, and only the second asks anyone to go fix the sheet.
+    if (!product) {
+      // A leading letter is what makes it a named draw ('R&D', 'Quality'). Everything
+      // else — a 7-digit lot the index has never heard of, a quantity mis-keyed into the
+      // lot column ('61.32') — is a fault someone has to go fix, and filing it under R&D
+      // would bury it.
+      if (/^[A-Za-z]/.test(String(agg.lot || ''))) nonProd.push({ lot: agg.lot, pickDate: agg.pickDate });
+      else unresolved.push({ lot: agg.lot, pickDate: agg.pickDate, fault: true });
+      continue;
+    }
+    customer = product.split('-')[0].trim() || '(unnamed)';
+    info = lotUnitsInfo(agg.lot, maps.unitsByLot);
+    if (info.src === 'planned') plannedAny = true;
+    runDate = maps.prodDateByLot[agg.lot] || agg.pickDate || null;
+    ts = runDate ? runDate.getTime() : -Infinity;
+    totUnits += (info.units || 0);
+    prodSet[product] = 1;
+
+    if (!custIdx.hasOwnProperty(customer)) {
+      custIdx[customer] = custs.length;
+      custs.push({ name: customer, products: [], prodIdx: {}, lots: 0, units: 0, lastTs: -Infinity, planned: false });
+    }
+    c = custs[custIdx[customer]];
+    c.lots++; c.units += (info.units || 0);
+    if (ts > c.lastTs) c.lastTs = ts;
+    if (info.src === 'planned') c.planned = true;
+
+    if (!c.prodIdx.hasOwnProperty(product)) {
+      c.prodIdx[product] = c.products.length;
+      c.products.push({ product: product, lots: [], units: 0, lastTs: -Infinity, planned: false });
+    }
+    p = c.products[c.prodIdx[product]];
+    p.lots.push({ lot: agg.lot, runDate: runDate, ts: ts, units: info.units, planned: info.src === 'planned' });
+    p.units += (info.units || 0);
+    if (ts > p.lastTs) p.lastTs = ts;
+    if (info.src === 'planned') p.planned = true;
+  }
+
+  // Most lots first — this is an impact list, so the customer with the most exposure
+  // leads. Recency breaks ties: between two customers at one lot each, the one that ran
+  // it last month matters more than the one that ran it in January.
+  custs.sort(function(a, b) {
+    if (b.lots !== a.lots) return b.lots - a.lots;
+    return (b.lastTs || 0) - (a.lastTs || 0);
+  });
+  for (i = 0; i < custs.length; i++) {
+    custs[i].products.sort(function(a, b) {
+      if (b.lots.length !== a.lots.length) return b.lots.length - a.lots.length;
+      return (b.lastTs || 0) - (a.lastTs || 0);
+    });
+    for (j = 0; j < custs[i].products.length; j++) {
+      custs[i].products[j].lots.sort(function(a, b) { return (b.ts || 0) - (a.ts || 0); });
+    }
+  }
+
+  return { part: normPart(part), rawPart: String(part || '').trim(),
+           material: Object.keys(matSet).join(', '),
+           customers: custs, unresolved: unresolved, nonProd: nonProd,
+           totLots: lotOrder.length, totProducts: countKeys(prodSet), totUnits: totUnits,
+           plannedAny: plannedAny, firstTs: firstTs, lastTs: lastTs };
+}
+
+// ── Part Lookup handlers ──────────────────────────────────────────────────
+function onPartInput(v) { partQuery = v; }
+function onPartKey(e) { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); runPartTrace(); } }
+
+function runPartTrace() {
+  var inp = document.getElementById('part-input');
+  var raw = inp ? inp.value : partQuery;
+  partQuery = raw;
+  var qn = normPart(raw);
+  if (qn === '') { partResult = null; partPending = ''; render(); return; }
+  if (materialsData.length === 0) {      // consumption feed not loaded yet — run on arrival
+    partPending = qn; partResult = null; fetchMaterialsIfNeeded(); render(); return;
+  }
+  trackEvent('part_lookup', { part: qn });
+  partOpen = {};                          // a new part starts with its groups closed
+  partResult = buildPartResult(tracePartNumber(materialsData, qn), raw.trim());
+  partPending = '';
+  render();
+}
+
+function clearPartTrace() {
+  partQuery = ''; partResult = null; partPending = ''; partOpen = {};
+  render();
+  var inp = document.getElementById('part-input');
+  if (inp) { try { inp.focus(); } catch(e){} }
+}
+
+// Expand/collapse one customer's product list. Groups are closed by default past the
+// threshold in renderPartTableHTML — DL-Malic Acid reaches 52 customers and 782 lots,
+// so an always-open table would be unreadable for exactly the materials most worth
+// looking up. The median part touches 2 customers and opens fully.
+function togglePartCust(name, def) {
+  var k = String(name);
+  var open = partOpen.hasOwnProperty(k) ? partOpen[k] === 1 : !!def;
+  partOpen[k] = open ? -1 : 1;   // explicit both ways: the default flips with the result size
+  render();
+}
+
+function qJumpToPart(q) {
+  qualitySubTab = 'part';
+  partQuery = String(q || '');
+  recallResult = null; recallPending = '';
+  blendResult = null; blendPending = '';
+  trackEvent('quality_subtab', { subtab: 'part' });
+  renderSubBar();
+  partOpen = {};
+  if (materialsData.length) {
+    partResult = buildPartResult(tracePartNumber(materialsData, normPart(partQuery)), partQuery.trim());
+  } else { partResult = null; partPending = normPart(partQuery); fetchMaterialsIfNeeded(); }
+  render();
+}
+
+// Does the part tool have an answer for this? Same cheap single pass the other two use.
+function _qPartWouldResolve(q) {
+  if (!materialsData.length) return false;
+  return tracePartNumber(materialsData, q).length > 0;
+}
+
+function renderPart() {
+  closeMsPanel();
+  fetchMaterialsIfNeeded();   // idempotent; builds pickRows from the same fetch
+  fetchLotIndexIfNeeded();
+  fetchStickProductionIfNeeded(); // stick/sample lots resolve their units off this feed
+
+  if (partPending && materialsData.length > 0) {
+    var pq = partPending; partPending = '';
+    trackEvent('part_lookup', { part: pq });
+    partResult = buildPartResult(tracePartNumber(materialsData, pq), pq);
+  }
+
+  var loading = materialsData.length === 0;
+  var q = esc(partQuery);
+  var hasResult = partResult && partResult.customers;
+  var html = '';
+
+  html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:0;overflow:hidden;margin-bottom:1.25rem;">'
+    + '<div style="display:flex;flex-wrap:wrap;align-items:stretch;min-height:184px;">'
+    +   '<div style="flex:1 1 340px;padding:22px 24px;border-right:0.5px solid #2c3036;display:flex;align-items:flex-start;justify-content:center;box-sizing:border-box;">'
+    +     '<div style="width:100%;max-width:420px;">'
+    +       '<div style="font-size:15px;font-weight:600;color:#e8e6e0;">Trace a Part #</div>'
+    +       '<div style="font-size:12px;color:#7d8288;margin:6px 0 14px;line-height:1.45;">Enter a material Part # to see every customer and product that has used it &mdash; for answering who a vendor delay or a supply problem would reach.</div>'
+    +       '<div style="display:flex;gap:8px;align-items:stretch;">'
+    +         '<input id="part-input" type="text" value="'+q+'" placeholder="e.g. 10-359" autocomplete="off" spellcheck="false" oninput="onPartInput(this.value)" onkeydown="onPartKey(event)" onfocus="this.style.borderColor=\'rgba(29,158,117,0.65)\'" onblur="this.style.borderColor=\'#444441\'" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:10px 12px;min-width:160px;flex:1 1 160px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;box-sizing:border-box;" />'
+    +         '<button onclick="runPartTrace()" style="box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;padding:0 18px;border-radius:8px;border:0.5px solid rgba(29,158,117,0.65);background:rgba(29,158,117,0.15);color:#9FE1CB;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#9FE1CB" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#9FE1CB" stroke-width="1.3" stroke-linecap="round"/></svg>Look up</button>'
+    +         '<button onclick="clearPartTrace()" title="Clear and start a new lookup" style="box-sizing:border-box;display:inline-flex;align-items:center;padding:0 14px;border-radius:8px;border:0.5px solid #444441;background:transparent;color:#888780;font-size:13px;font-weight:500;cursor:pointer;font-family:system-ui;visibility:'+((partResult || partQuery) ? 'visible' : 'hidden')+';" onmouseover="this.style.color=\'#e8e6e0\';this.style.borderColor=\'#5f5e5a\'" onmouseout="this.style.color=\'#888780\';this.style.borderColor=\'#444441\'">Clear</button>'
+    +       '</div>'
+    +       (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
+    +     '</div>'
+    +   '</div>'
+    +   '<div style="flex:1 1 340px;padding:24px 32px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">'
+    +     (hasResult ? partSummaryHTML(partResult)
+                     : '<div style="color:#5f5e5a;font-size:12px;text-align:center;">Enter a Part # and look up to see who uses it here.</div>')
+    +   '</div>'
+    + '</div>'
+    + '</div>';
+
+  if (hasResult && partResult.customers.length > 0) html += renderPartTableHTML(partResult);
+  document.getElementById('content').innerHTML = html;
+}
+
+function partMetricCell(v, l) {
+  return '<div style="flex:1;"><div style="font-size:24px;font-weight:700;line-height:1;color:#f2f4f6;">' + v
+    + '</div><div style="font-size:11px;color:#8b9096;margin-top:6px;">' + l + '</div></div>';
+}
+
+// Right-pane result bubble — green treatment, matching the tab. Handles the
+// nothing-found case inline, including the two wrong-box hand-offs.
+function partSummaryHTML(res) {
+  var partTxt = esc(res.rawPart || res.part || '');
+  var box = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#9FE1CB" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z"/><path d="M2.4 4.6L8 7.6l5.6-3"/><line x1="8" y1="7.6" x2="8" y2="14.4"/></svg>';
+  var wellStyle = 'width:100%;max-width:500px;box-sizing:border-box;background:#0e1114;border:2px solid rgba(29,158,117,0.6);border-radius:12px;padding:18px 24px;text-align:center;box-shadow:0 0 26px rgba(29,158,117,0.07);';
+
+  if (res.customers.length === 0) {
+    var head = '<div style="'+wellStyle+'">'
+      + '<div style="display:inline-flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px;">'+box
+      +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#9FE1CB;font-weight:700;">'+partTxt+'</span></div>';
+
+    // Wrong box, same courtesy the other two extend each other: a T# or a production
+    // Lot # typed in here is answered by a different tool, and saying so beats "no
+    // matches", which reads as "we have no record of this material".
+    if (!_qLooksLikePart(res.rawPart)) {
+      var isT = _qLooksLikeTNum(res.rawPart);
+      var isLot = _qLooksLikeProdLot(res.rawPart);
+      var bodyW = 'Part Lookup takes a <b style="color:#c9c7c1;">material Part #</b> &mdash; the number on the spec, like <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9c7c1;">10-359</span> &mdash; and lists every customer and product that has used it.';
+      var jf = null, lbl = '', bd = 'rgba(53,138,221,0.6)', bg = 'rgba(53,138,221,0.15)', tx = '#85B7EB';
+      // Named, the way both siblings name it. "That doesn't look like a Part #" is true of
+      // a T# and of 'banana' alike, and only one of those is a person one tab away from
+      // their answer.
+      var wTitle = isT ? 'That\'s a T#, not a Part #'
+        : isLot ? 'That\'s a Lot #, not a Part #'
+        : 'That doesn\'t look like a Part #';
+      if (isT && _qRecallWouldResolve(res.rawPart)) {
+        bodyW += '<br><br>' + esc(res.rawPart) + ' is a material lot <b style="color:#c9c7c1;">T#</b> &mdash; one drum of a part. <b style="color:#c9c7c1;">Recall Tracking</b> traces it to the runs that consumed it.';
+        jf = 'qJumpToRecall'; lbl = 'Trace it in Recall Tracking';
+        bd = 'rgba(245,166,35,0.55)'; bg = 'rgba(245,166,35,0.15)'; tx = '#F5A623';
+      } else if (isLot && _qBlendWouldResolve(res.rawPart)) {
+        bodyW += '<br><br>' + esc(res.rawPart) + ' is a production <b style="color:#c9c7c1;">Lot #</b>. <b style="color:#c9c7c1;">Blend Lookup</b> lists every component that went into it.';
+        jf = 'qJumpToBlend'; lbl = 'Look it up in Blend Lookup';
+      }
+      return head + _qWrongBoxHTML(res.rawPart, {
+        title: wTitle,
+        body: bodyW, jumpFn: jf, btnLabel: lbl, btnBorder: bd, btnBg: bg, btnTxt: tx
+      }) + '</div>';
+    }
+    // Shaped right, found nothing. That is a different statement from "not a part #"
+    // and has a different cause — 20-1189 is a well-formed part number with no picks
+    // against it — so it gets its own wording rather than a generic miss.
+    return head
+      + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No recorded use</div>'
+      + '<div style="font-size:12px;color:#888780;line-height:1.5;">No pick has drawn this part since the pick sheet began. Either it has not been run, or the number is off by a digit.</div>'
+      + '</div>';
+  }
+
+  var matText = res.material ? esc(res.material) : '(material name unavailable)';
+  var divider = '<div style="width:0.5px;align-self:stretch;background:rgba(29,158,117,0.2);"></div>';
+  var bubble =
+    '<div style="'+wellStyle+'">'
+    + '<div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:15px;">'+box
+    +   '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#9FE1CB;font-weight:700;">'+esc(res.part)+'</span>'
+    +   '<span style="color:#d4d7db;font-size:13px;">'+matText+'</span>'
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:center;border-top:0.5px solid rgba(29,158,117,0.2);padding-top:15px;">'
+    +   partMetricCell(res.customers.length.toLocaleString(), 'Customer' + (res.customers.length === 1 ? '' : 's')) + divider
+    +   partMetricCell(res.totProducts.toLocaleString(), 'Products') + divider
+    +   partMetricCell(res.totLots.toLocaleString(), 'Lots run')
+    + '</div>'
+    + '</div>';
+
+  var flag = res.unresolved.length > 0
+    ? '<div style="width:100%;box-sizing:border-box;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;text-align:left;">'
+      + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#F09595" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="10.8" r="0.4" fill="#F09595"/></svg>'
+      + '<span>'+res.unresolved.length.toLocaleString()+' lot'+(res.unresolved.length===1?'':'s')+' on the pick sheet could not be matched to a production run and '+(res.unresolved.length===1?'is':'are')+' not counted above — listed under the table.</span>'
+      + '</div>'
+    : '';
+
+  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:500px;">' + bubble + flag + '</div>';
+}
+
+// Customers using this part. Grouped customer -> product, expandable; lots live one
+// level further in, on the product row's own line, because by then the reader has
+// narrowed to something they can act on.
+var PART_AUTO_OPEN_MAX = 3;   // groups open by default only when the whole answer fits
+
+function renderPartTableHTML(res) {
+  var out = '', i, j;
+  var maxLots = 1;
+  for (i = 0; i < res.customers.length; i++) maxLots = Math.max(maxLots, res.customers[i].lots);
+
+  out += '<div id="part-results" data-anchor class="pnl-on-card" style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:16px 18px 10px;">';
+  out += '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap;">'
+    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Customers that have used this part</div>'
+    + '<button onclick="exportPartUsage()" style="font-size:12px;padding:5px 12px;border:1.5px solid #378ADD;border-radius:8px;background:#0C447C;cursor:pointer;color:#85B7EB;font-weight:500;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:system-ui;">'
+    +   '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1v7M3.5 5.5l3 3 3-3M2 11h9"/></svg>Export usage</button>'
+    + '</div>';
+
+  var autoOpen = res.customers.length <= PART_AUTO_OPEN_MAX;
+  var th = 'padding:7px 10px;font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:600;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;';
+  out += '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="border-collapse:separate;border-spacing:0;">'
+    + '<thead><tr>'
+    + '<th style="'+th+'text-align:left;">Customer / product</th>'
+    + '<th style="'+th+'text-align:right;">Products</th>'
+    + '<th style="'+th+'text-align:right;">Lots</th>'
+    + '<th style="'+th+'text-align:right;">Units</th>'
+    + '<th style="'+th+'text-align:right;">Last run</th>'
+    + '<th style="'+th+'text-align:left;width:120px;">Share of lots</th>'
+    + '</tr></thead><tbody>';
+
+  var td = 'padding:7px 10px;border-bottom:0.5px solid #2c2c2a;font-size:12px;white-space:nowrap;';
+  for (i = 0; i < res.customers.length; i++) {
+    var c = res.customers[i];
+    var open = partOpen.hasOwnProperty(c.name) ? partOpen[c.name] === 1 : autoOpen;
+    var bw = Math.max(2, Math.round((c.lots / maxLots) * 100));
+    var caret = '<svg width="7" height="11" viewBox="0 0 6 10" fill="none" style="flex-shrink:0;transform:rotate('+(open?'90':'0')+'deg);transition:transform .12s;"><path d="M1 1l4 4-4 4" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    out += '<tr onclick="togglePartCust('+jsStr(c.name)+','+(autoOpen?'1':'0')+')" style="cursor:pointer;" onmouseover="this.style.background=\'#1a1d20\'" onmouseout="this.style.background=\'transparent\'">'
+      + '<td style="'+td+'color:#e8e6e0;font-weight:600;"><span style="display:inline-flex;align-items:center;gap:7px;">'+caret+esc(c.name)+'</span></td>'
+      + '<td style="'+td+'text-align:right;color:#c9c7c1;">'+c.products.length.toLocaleString()+'</td>'
+      + '<td style="'+td+'text-align:right;color:#c9c7c1;">'+c.lots.toLocaleString()+'</td>'
+      + '<td style="'+td+'text-align:right;color:#c9c7c1;">'+(c.units ? Math.round(c.units).toLocaleString() : '—')+(c.planned?plannedTag():'')+'</td>'
+      + '<td style="'+td+'text-align:right;color:#888780;">'+_partWhen(c.lastTs)+'</td>'
+      + '<td style="'+td+'"><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;width:100%;min-width:80px;"><div style="height:100%;width:'+bw+'%;background:#1D9E75;"></div></div></td>'
+      + '</tr>';
+    if (!open) continue;
+    for (j = 0; j < c.products.length; j++) {
+      var p = c.products[j];
+      out += '<tr>'
+        + '<td style="'+td+'color:#c9c7c1;padding-left:32px;max-width:340px;overflow:hidden;text-overflow:ellipsis;">'+esc(displayProduct(p.product, c.name))+'</td>'
+        + '<td style="'+td+'"></td>'
+        + '<td style="'+td+'text-align:right;color:#888780;">'+p.lots.length.toLocaleString()+'</td>'
+        + '<td style="'+td+'text-align:right;color:#888780;">'+(p.units ? Math.round(p.units).toLocaleString() : '—')+(p.planned?plannedTag():'')+'</td>'
+        + '<td style="'+td+'text-align:right;color:#888780;">'+_partWhen(p.lastTs)+'</td>'
+        + '<td style="'+td+'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#5f5e5a;overflow:hidden;text-overflow:ellipsis;max-width:120px;" title="'+esc(_partLotList(p.lots, 99))+'">'+esc(_partLotList(p.lots, 3))+'</td>'
+        + '</tr>';
+    }
+  }
+  out += '</tbody></table></div>';
+
+  if (res.plannedAny) out += plannedNote();
+
+  // The scope caveat rides with the table, not in a tooltip: a reader who takes this
+  // list as "every product containing the material" will under-call a recall or a
+  // vendor delay, and the only defence is saying plainly what the window is.
+  out += '<div style="padding:6px 10px 2px;font-size:10px;color:#5f5e5a;font-family:system-ui;line-height:1.5;">'
+    + 'This is what <b style="color:#7d8288;">has consumed</b> the material, not what is formulated with it &mdash; a product that uses this part but has not run in the window below will not appear.'
+    + ' Materials tracking begins ' + MATERIALS_TRACKING_START.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+    + ' and earlier picks are not counted'
+    + (res.firstTs ? '; the first recorded draw of this part is ' + new Date(res.firstTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '')
+    + '.</div>';
+
+  // R&D and Quality draws, stated plainly rather than filed as errors. On a vendor-delay
+  // call "R&D has pulled this 6 times" is a real answer — samples are being built on it —
+  // and it belongs nowhere in a customer count.
+  if (res.nonProd.length) {
+    out += '<div style="margin-top:10px;padding:8px 10px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:5px;">Non-production draws</div>';
+    out += '<div style="font-size:11px;color:#c9c7c1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + _partNonProdSummary(res.nonProd) + '</div>';
+    out += '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:5px;line-height:1.5;">Logged against R&amp;D or Quality rather than a production lot &mdash; sampling, bid work or testing. No customer, so not counted above.</div>'
+      + '</div>';
+  }
+
+  if (res.unresolved.length) {
+    out += '<div style="margin-top:10px;padding:8px 10px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
+      + '<div style="font-size:10px;color:#F09595;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:5px;">Picks with no matching production lot</div>';
+    for (i = 0; i < res.unresolved.length; i++) {
+      var u = res.unresolved[i];
+      out += '<div style="font-size:11px;color:#888780;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'
+        + 'Order Lot # ' + (u.lot ? esc(u.lot) : '(blank)') + (u.pickDate ? '  ·  picked ' + esc(_partWhen(u.pickDate.getTime())) : '') + '</div>';
+    }
+    out += '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:5px;line-height:1.5;">A lot number that resolves to no production run and no entry on the Lot # sheet &mdash; usually a blank or mis-keyed Order Lot #. Correct it at source and it joins the table above on the next sync.</div>'
+      + '</div>';
+  }
+
+  out += '</div>';
+  return out;
+}
+
+function _partWhen(ts) {
+  if (!ts || ts === -Infinity) return '—';
+  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+// "R&D x6, Quality x2" — the labels are whatever the sheet carries, counted, not listed:
+// individual R&D pulls have no lot number to show.
+function _partNonProdSummary(rows) {
+  var byLab = {}, order = [], i, k;
+  for (i = 0; i < rows.length; i++) {
+    k = String(rows[i].lot || '').trim() || '(blank)';
+    if (!byLab.hasOwnProperty(k)) { byLab[k] = 0; order.push(k); }
+    byLab[k]++;
+  }
+  order.sort(function(a, b) { return byLab[b] - byLab[a]; });
+  var out = [];
+  for (i = 0; i < order.length; i++) out.push(esc(order[i]) + ' \u00d7' + byLab[order[i]]);
+  return out.join('   \u00b7   ');
+}
+function _partLotList(lots, cap) {
+  var a = [], i;
+  for (i = 0; i < Math.min(lots.length, cap); i++) a.push(lots[i].lot);
+  if (lots.length > cap) a.push('+' + (lots.length - cap));
+  return a.join(', ');
+}
+
+function exportPartUsage() {
+  if (typeof XLSX === 'undefined') { alert('Export library not loaded yet, please try again.'); return; }
+  if (!partResult || !partResult.customers.length) { alert('Nothing to export — look up a part first.'); return; }
+  var res = partResult;
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  var rows = [
+    ['DTF Part Usage — Part #: ' + res.part],
+    ['Material: ' + (res.material || '(unavailable)')],
+    ['Customers: ' + res.customers.length + ' · Products: ' + res.totProducts
+      + ' · Lots run: ' + res.totLots + ' · Units produced: ' + Math.round(res.totUnits).toLocaleString()],
+    ['Exported: ' + dateStr],
+    [],
+    // Same caveat as the screen, on the sheet's own face: nobody opening this workbook
+    // can see the footnote it was exported from.
+    ['BASIS: this lists what HAS CONSUMED the material, not what is formulated with it — a product that uses this part but has not run in the window does not appear. '
+      + 'Materials tracking begins ' + MATERIALS_TRACKING_START.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+      + ' and earlier picks are not counted'
+      + (res.firstTs ? '; the first recorded draw of this part is ' + new Date(res.firstTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '') + '.'],
+    []
+  ];
+  rows.push(['Customer', 'Product', 'Lots', 'Units produced', 'Last run', 'Lot #s']);
+  res.customers.forEach(function(c) {
+    c.products.forEach(function(p) {
+      rows.push([c.name, displayProduct(p.product, c.name), p.lots.length,
+                 p.units ? Math.round(p.units) : '',
+                 p.lastTs && p.lastTs !== -Infinity ? new Date(p.lastTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '',
+                 _partLotList(p.lots, 99)]);
+    });
+  });
+  if (res.plannedAny) {
+    rows.push([]);
+    rows.push(['Some unit figures come from the Lot # sheet\'s Amt rather than a production run (bulk or sample-pack lots that never went down a line) — those are what the lot was written up for, not what it produced.']);
+  }
+  if (res.nonProd.length) {
+    rows.push([]);
+    rows.push(['NON-PRODUCTION DRAWS (not counted above) — logged against R&D or Quality rather than a production lot.']);
+    rows.push([_partNonProdSummary(res.nonProd).replace(/<[^>]*>/g, '').replace(/\u00b7/g, '·')]);
+  }
+  if (res.unresolved.length) {
+    rows.push([]);
+    rows.push(['PICKS WITH NO MATCHING PRODUCTION LOT (not counted above)']);
+    rows.push(['Order Lot #', 'Picked']);
+    res.unresolved.forEach(function(u) {
+      rows.push([u.lot || '(blank)',
+                 u.pickDate ? u.pickDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '']);
+    });
+  }
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:26},{wch:42},{wch:8},{wch:15},{wch:14},{wch:40}];
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Part Usage');
+  var safe = String(res.part || 'unknown').replace(/[^A-Za-z0-9]/g, '') || 'unknown';
+  XLSX.writeFile(wb, 'part_usage_' + safe + '.xlsx');
+}
 
 function toggleExportPopover(e) {
   e.stopPropagation();
