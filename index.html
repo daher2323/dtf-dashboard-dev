@@ -6161,12 +6161,12 @@ function hideColTip() {
 function setMainSection(s) {
   closeMsPanel();
   // 'sales' is a virtual umbrella tab over the internal 'orders' and 'customers'
-  // sections. Clicking it lands on Open Orders → Summary, unless you're already
-  // inside Sales — in which case keep whichever sub-view you were on.
+  // sections. Clicking it lands on Customers, unless you're already inside Sales,
+  // in which case keep whichever sub-view you were on. Customers leads the Sales
+  // toggle and is the landing view by decision (2026-09-23); Open Orders is second.
   if (s === 'sales') {
     if (mainSection === 'orders' || mainSection === 'customers') { renderSubBar(); render(); return; }
-    s = 'orders';
-    ordersView = 'summary';
+    s = 'customers';
   }
   mainSection = s;
   trackEvent('tab_view', { tab_name: s === 'orders' ? 'open_orders' : s });
@@ -6209,8 +6209,8 @@ function renderSubBar() {
   // its own secondary controls after the divider.
   var salesToggle =
     '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    + '<button onclick="setMainSection(\'orders\')" style="'+navBtnStyle(mainSection==='orders')+'">Open Orders</button>'
     + '<button onclick="setMainSection(\'customers\')" style="'+navBtnStyle(mainSection==='customers')+'">Customers</button>'
+    + '<button onclick="setMainSection(\'orders\')" style="'+navBtnStyle(mainSection==='orders')+'">Open Orders</button>'
     + '</div>'
     + '<div class="sub-divider"></div>';
 
@@ -10880,6 +10880,15 @@ function setCustInlineTab(v) {
 // custInlineTab, so comparing two brands doesn't mean re-picking it each time.
 // The current period is still running and is drawn faded (the Weekly Output
 // convention), so a half-finished month doesn't read as a drop.
+//
+// Monthly shows the year so far once it is at least 6 months in (June onwards,
+// counting the month in progress), otherwise the last 6 months, which reach back
+// into last year. Every month since TRACKING_START was 21 bars, too many to read
+// at a glance. Quarterly keeps the full history; 7 bars is fine.
+//
+// Bars are deliberately not clickable. They once opened the quarter breakdown in
+// the table below, but that landed out of view and read as the chart merely
+// redrawing.
 var custChartGran = 'monthly';   // 'monthly' | 'quarterly'
 var CUST_BAR = '#1a3a5c', CUST_BAR_EDGE = '#378ADD';
 var CUST_BAR_PART = 'rgba(26,58,92,0.45)', CUST_BAR_PART_EDGE = 'rgba(55,138,221,0.45)';
@@ -10907,7 +10916,8 @@ function _custChartGranBtns() {
 function _custChartBlockHTML(sid) {
   return '<div style="padding:10px 16px 4px;border-bottom:0.5px solid #2c2c2a;">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">'
-    +   '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Units produced</div>'
+    +   '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Units produced'
+    +     ' <span id="ch-chart-range-' + sid + '" style="text-transform:none;letter-spacing:0;font-weight:400;color:#5f5e5a;margin-left:4px;"></span></div>'
     +   '<div class="cust-gran-bar" style="display:flex;gap:2px;padding:2px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:7px;">' + _custChartGranBtns() + '</div>'
     + '</div>'
     + '<div style="position:relative;height:170px;"><canvas id="ch-chart-' + sid + '" role="img" aria-label="Units produced over time"></canvas></div>'
@@ -10933,8 +10943,23 @@ function _drawCustChart(sid) {
   var cd = JSON.parse(dataEl.textContent);
   var monthly = custChartGran === 'monthly';
   var series = (monthly ? cd.chartM : cd.chartQ) || [];
-  if (!series.length) return;
   var now = new Date();
+  var rangeTxt = '';
+  if (monthly) {
+    var ytdStart = _custMonthKey(new Date(now.getFullYear(), 0, 1));
+    if (now.getMonth() >= 5) {
+      series = series.filter(function(m) { return m.key >= ytdStart; });
+      rangeTxt = '· ' + now.getFullYear() + ' year to date';
+    } else {
+      series = series.slice(-6);
+      rangeTxt = '· last 6 months';
+    }
+  } else if (series.length) {
+    rangeTxt = '· ' + quarterLabel(series[0].key) + ' to now';
+  }
+  var rangeEl = document.getElementById('ch-chart-range-' + sid);
+  if (rangeEl) rangeEl.textContent = rangeTxt;
+  if (!series.length) return;
   var curKey = monthly ? _custMonthKey(now) : getQuarterKey(now);
   var labels = [], data = [], bg = [], edge = [], partial = [], i;
   for (i = 0; i < series.length; i++) {
@@ -10945,7 +10970,7 @@ function _drawCustChart(sid) {
     edge.push(isCur ? CUST_BAR_PART_EDGE : CUST_BAR_EDGE);
     partial.push(isCur);
   }
-  var skip = labels.length > 12;
+  var skip = labels.length > 12;   // monthly tops out at 12 (a full YTD); only quarterly history grows past it
   charts[key] = new Chart(cv, {
     type: 'bar',
     data: { labels: labels, datasets: [{ data: data, backgroundColor: bg, borderColor: edge, borderWidth: 1, borderRadius: 3, maxBarThickness: 48 }] },
@@ -10954,30 +10979,16 @@ function _drawCustChart(sid) {
         tooltip: { callbacks: { label: function(c) {
           var t = Math.round(c.raw).toLocaleString() + ' units';
           if (partial[c.dataIndex]) t += ' — ' + (monthly ? 'month' : 'quarter') + ' in progress';
-          return c.raw ? t + ' — click for the quarter breakdown' : t;
+          return t;
         } } } },
-      // A bar opens its quarter's breakdown in the table below — the same panel a
-      // click on the quarter row opens — so the chart is a way in, not a dead end.
-      onClick: function(evt, els) {
-        if (!els || !els.length || !data[els[0].index]) return;
-        var k = series[els[0].index].key;
-        var qk = monthly ? getQuarterKey(new Date(parseInt(k.split('-')[0], 10), parseInt(k.split('-')[1], 10) - 1, 1)) : k;
-        custInlineTab = 'quarters';
-        _chQtrExpanded[sid] = null;          // toggleCustQuarter flips it; always land open
-        toggleCustQuarter(sid, qk, cd.name);
-      },
-      onHover: function(event, els) {
-        var t = event.native ? event.native.target : event.target;
-        if (t) t.style.cursor = (els.length && data[els[0].index]) ? 'pointer' : 'default';
-      },
       scales: {
         x: { ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, autoSkip: skip, maxRotation: skip ? 45 : 0 }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } },
         y: { beginAtZero: true, ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, callback: function(v) { return Math.round(v).toLocaleString(); } }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } }
       } },
     plugins: [barValueLabels({ id: 'custTrendLabels', halo: '#141618',
       colorFor: function(i) { return partial[i] ? BAR_LABEL_OFF : BAR_LABEL; },
-      // Monthly bars sit ~40px apart; a full "243,118" would be dropped by the fit
-      // check on most of them, so monthly labels are abbreviated.
+      // Abbreviated so a full year of monthly bars still fits its labels; the fit
+      // check drops any label wider than its slot rather than overlapping.
       format: function(v) { return monthly ? _custShortNum(v) : Math.round(v).toLocaleString(); } })]
   });
 }
