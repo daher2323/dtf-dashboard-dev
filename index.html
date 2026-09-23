@@ -1312,7 +1312,7 @@ var allRows = [], allRows25 = [], lotMap = {}, dailyTargets = {}, weeklyTargets 
 var allRowsRaw = [];
 var mainSection = 'production'; // 'production' | 'customers' | 'procurement' | 'orders' | 'quality'
                                 // ('customers' and 'orders' are the two halves of the "Sales" top tab)
-var qualitySubTab = 'recall';   // Quality sub-tab: 'recall' | 'blend' | 'part'
+var qualitySubTab = 'blend';    // Quality sub-tab: 'blend' | 'part' | 'recall' (tab order)
 var topView = 'summary', subView = 'today';
 // Recall Tracking (transient view state). recallResult persists across re-renders
 // so a background data refresh doesn't wipe an active trace; it only changes when
@@ -6299,14 +6299,16 @@ function renderSubBar() {
     // Quality sub-tab bar — same segmented pattern as Procurement. Built as a real
     // group so more sub-tabs (CoA, deviations, hold/release…) drop in later. The
     // small amber triangle identifies the recall tool inside the neutral Quality tab.
+    // Ordered largest thing to smallest: a finished Lot # (Blend), a Part # (Part),
+    // one drum's T# (Recall). Blend is first, so it is also the landing tab.
     var qr = qualitySubTab === 'recall';
     var qb = qualitySubTab === 'blend';
     var qp = qualitySubTab === 'part';
     sb.innerHTML =
       '<div style="display:flex;gap:2px;padding:3px;background:#141618;border:0.5px solid #2c2c2a;border-radius:8px;">'
-      + '<button onclick="setQualitySubTab(\'recall\')" style="'+navBtnStyle(qr)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>Recall Tracking</button>'
       + '<button onclick="setQualitySubTab(\'blend\')" style="'+navBtnStyle(qb)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#85B7EB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M6.2 2v3.8L2.6 12a1 1 0 0 0 .9 1.5h9a1 1 0 0 0 .9-1.5L9.8 5.8V2"/><line x1="5" y1="2" x2="11" y2="2"/><line x1="4.2" y1="9.5" x2="11.8" y2="9.5"/></svg>Blend Lookup</button>'
       + '<button onclick="setQualitySubTab(\'part\')" style="'+navBtnStyle(qp)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M8 1.6l5.6 3v6.8L8 14.4l-5.6-3V4.6z"/><path d="M2.4 4.6L8 7.6l5.6-3"/><line x1="8" y1="7.6" x2="8" y2="14.4"/></svg>Part Lookup</button>'
+      + '<button onclick="setQualitySubTab(\'recall\')" style="'+navBtnStyle(qr)+'"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#F5A623" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:5px;"><path d="M8 2L1 14h14L8 2z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/><circle cx="8" cy="11.6" r="0.4" fill="#F5A623"/></svg>Recall Tracking</button>'
       + '</div>';
   } else {
     sb.innerHTML = '';
@@ -18931,7 +18933,7 @@ function buildPartResult(hits, part) {
     }
   }
 
-  var custIdx = {}, custs = [], unresolved = [], nonProd = [], prodSet = {};
+  var custIdx = {}, custs = [], nonProd = [], prodSet = {};
   // Stick/sample packs are counted per pack and finished units per bottle or jar, so the
   // two are totalled apart and never summed. One Alpha Lion stick run is 35,000 packs,
   // which would outweigh a year of its tubs in a single "units" figure and leave the
@@ -18944,19 +18946,16 @@ function buildPartResult(hits, part) {
     agg = byLot[lotOrder[j]];
     product = maps.productByLot[agg.lot] || (lotMap[agg.lot] && lotMap[agg.lot].product)
       || (lotIndex[agg.lot] && (lotIndex[agg.lot].combined || lotIndex[agg.lot].product)) || null;
-    // Two very different reasons a lot fails to resolve, and they must not share a bucket.
-    // The pick sheet's Order Lot # also carries 'R&D' and 'Quality' — deliberate non-
-    // production draws, which are a fact about the material (R&D is building samples with
-    // it) and not an error. Everything else is a data fault: a blank cell, or a quantity
-    // mis-keyed into the lot column ('61.32'). Both are surfaced, neither is counted as a
-    // customer, and only the second asks anyone to go fix the sheet.
+    // A pick whose Order Lot # names no production run is not a customer, so it is left
+    // out of the counts and noted beneath the table. Most are deliberate — the column
+    // also carries 'R&D' and 'Quality' — and those keep their own label. The rest (a
+    // blank, a lot the index has never seen, a quantity mis-keyed as '61.32') count
+    // together as 'Other'. They used to get a red "could not be matched" banner, taken
+    // out by decision: on a supply lookup it read as a doubt about every figure above it,
+    // over what is usually a single stray pick. Don't bring the alarm back here.
     if (!product) {
-      // A leading letter is what makes it a named draw ('R&D', 'Quality'). Everything
-      // else — a 7-digit lot the index has never heard of, a quantity mis-keyed into the
-      // lot column ('61.32') — is a fault someone has to go fix, and filing it under R&D
-      // would bury it.
-      if (/^[A-Za-z]/.test(String(agg.lot || ''))) nonProd.push({ lot: agg.lot, pickDate: agg.pickDate });
-      else unresolved.push({ lot: agg.lot, pickDate: agg.pickDate, fault: true });
+      nonProd.push({ label: /^[A-Za-z]/.test(String(agg.lot || '')) ? String(agg.lot).trim() : 'Other',
+                     lot: agg.lot, pickDate: agg.pickDate });
       continue;
     }
     customer = product.split('-')[0].trim() || '(unnamed)';
@@ -19012,7 +19011,7 @@ function buildPartResult(hits, part) {
 
   return { part: normPart(part), rawPart: String(part || '').trim(),
            material: Object.keys(matSet).join(', '),
-           customers: custs, unresolved: unresolved, nonProd: nonProd,
+           customers: custs, nonProd: nonProd,
            totLots: lotOrder.length, totProducts: countKeys(prodSet), totUnits: totUnits,
            totSticks: totSticks, anySticks: anySticks,
            plannedAny: plannedAny, firstTs: firstTs, lastTs: lastTs };
@@ -19186,14 +19185,8 @@ function partSummaryHTML(res) {
     + '</div>'
     + '</div>';
 
-  var flag = res.unresolved.length > 0
-    ? '<div style="width:100%;box-sizing:border-box;padding:8px 12px;background:#2A1414;border:0.5px solid #7A2B2B;border-radius:8px;font-size:12px;color:#F09595;display:flex;align-items:center;gap:7px;text-align:left;">'
-      + '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#F09595" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><circle cx="8" cy="10.8" r="0.4" fill="#F09595"/></svg>'
-      + '<span>'+res.unresolved.length.toLocaleString()+' lot'+(res.unresolved.length===1?'':'s')+' on the pick sheet could not be matched to a production run and '+(res.unresolved.length===1?'is':'are')+' not counted above — listed under the table.</span>'
-      + '</div>'
-    : '';
 
-  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:500px;">' + bubble + flag + '</div>';
+  return '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:500px;">' + bubble + '</div>';
 }
 
 // Customers using this part. Grouped customer -> product, expandable; lots live one
@@ -19269,28 +19262,17 @@ function renderPartTableHTML(res) {
     + (res.firstTs ? '; the first recorded draw of this part is ' + new Date(res.firstTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '')
     + '.</div>';
 
-  // R&D and Quality draws, stated plainly rather than filed as errors. On a vendor-delay
-  // call "R&D has pulled this 6 times" is a real answer — samples are being built on it —
-  // and it belongs nowhere in a customer count.
+  // R&D, Quality and other non-run draws, stated plainly rather than filed as errors. On
+  // a vendor-delay call "R&D has pulled this 6 times" is a real answer — samples are being
+  // built on it — and it belongs nowhere in a customer count.
   if (res.nonProd.length) {
     out += '<div style="margin-top:10px;padding:8px 10px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
       + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:5px;">Non-production draws</div>';
     out += '<div style="font-size:11px;color:#c9c7c1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + _partNonProdSummary(res.nonProd) + '</div>';
-    out += '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:5px;line-height:1.5;">Logged against R&amp;D or Quality rather than a production lot &mdash; sampling, bid work or testing. No customer, so not counted above.</div>'
+    out += '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:5px;line-height:1.5;">Logged against R&amp;D, Quality or something other than a production lot &mdash; sampling, bid work or testing. No customer, so not counted above.</div>'
       + '</div>';
   }
 
-  if (res.unresolved.length) {
-    out += '<div style="margin-top:10px;padding:8px 10px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:8px;">'
-      + '<div style="font-size:10px;color:#F09595;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:5px;">Picks with no matching production lot</div>';
-    for (i = 0; i < res.unresolved.length; i++) {
-      var u = res.unresolved[i];
-      out += '<div style="font-size:11px;color:#888780;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'
-        + 'Order Lot # ' + (u.lot ? esc(u.lot) : '(blank)') + (u.pickDate ? '  ·  picked ' + esc(_partWhen(u.pickDate.getTime())) : '') + '</div>';
-    }
-    out += '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:5px;line-height:1.5;">A lot number that resolves to no production run and no entry on the Lot # sheet &mdash; usually a blank or mis-keyed Order Lot #. Correct it at source and it joins the table above on the next sync.</div>'
-      + '</div>';
-  }
 
   out += '</div>';
   return out;
@@ -19310,7 +19292,7 @@ function _partWhen(ts) {
 function _partNonProdSummary(rows) {
   var byLab = {}, order = [], i, k;
   for (i = 0; i < rows.length; i++) {
-    k = String(rows[i].lot || '').trim() || '(blank)';
+    k = rows[i].label || String(rows[i].lot || '').trim() || 'Other';
     if (!byLab.hasOwnProperty(k)) { byLab[k] = 0; order.push(k); }
     byLab[k]++;
   }
@@ -19366,17 +19348,8 @@ function exportPartUsage() {
   }
   if (res.nonProd.length) {
     rows.push([]);
-    rows.push(['NON-PRODUCTION DRAWS (not counted above) — logged against R&D or Quality rather than a production lot.']);
+    rows.push(['NON-PRODUCTION DRAWS (not counted above) — logged against R&D, Quality or something other than a production lot.']);
     rows.push([_partNonProdSummary(res.nonProd).replace(/<[^>]*>/g, '').replace(/\u00b7/g, '·')]);
-  }
-  if (res.unresolved.length) {
-    rows.push([]);
-    rows.push(['PICKS WITH NO MATCHING PRODUCTION LOT (not counted above)']);
-    rows.push(['Order Lot #', 'Picked']);
-    res.unresolved.forEach(function(u) {
-      rows.push([u.lot || '(blank)',
-                 u.pickDate ? u.pickDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '']);
-    });
   }
   var ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = [{wch:26},{wch:42},{wch:8},{wch:15}]
