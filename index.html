@@ -10842,6 +10842,7 @@ function toggleCH(safeId, customerName) {
   if (_chExpanded[safeId]) {
     trackEvent('customer_drilldown_open', { customer_name: customerName || safeId });
     generateSynopsis(safeId);
+    _drawCustChart(safeId);   // after the body is shown: Chart.js sizes to its canvas at construction
   }
 }
 
@@ -10866,6 +10867,124 @@ function setCustInlineTab(v) {
     btns[i].setAttribute('style', _custTabBtnStyle(btns[i].getAttribute('data-cust-tab') === custInlineTab));
   }
   trackEvent('customer_panel_tab', { tab: custInlineTab });
+}
+
+// ── Customer trend chart ────────────────────────────────────────────────
+// The quarter table carries the figures and the coloured badges carry the
+// direction, but neither shows the SHAPE: whether a customer is ramping, steady,
+// or falling away. Same bar treatment as the Materials usage chart, so the two
+// read as one family. It sits above the By quarter / By product tabs because it
+// describes the customer, not either table.
+//
+// Monthly / Quarterly is one setting for every customer, sticky like
+// custInlineTab, so comparing two brands doesn't mean re-picking it each time.
+// The current period is still running and is drawn faded (the Weekly Output
+// convention), so a half-finished month doesn't read as a drop.
+var custChartGran = 'monthly';   // 'monthly' | 'quarterly'
+var CUST_BAR = '#1a3a5c', CUST_BAR_EDGE = '#378ADD';
+var CUST_BAR_PART = 'rgba(26,58,92,0.45)', CUST_BAR_PART_EDGE = 'rgba(55,138,221,0.45)';
+
+function _custMonthKey(d) {
+  var m = d.getMonth() + 1;
+  return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m;
+}
+function _custMonthLabel(mk) {
+  var y = parseInt(mk.split('-')[0], 10), m = parseInt(mk.split('-')[1], 10);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' }) + " '" + String(y).slice(2);
+}
+
+function _custChartGranBtns() {
+  function b(v, label) {
+    var on = custChartGran === v;
+    return '<button class="cust-gran-btn" data-gran="' + v + '" onclick="event.stopPropagation();setCustChartGran(\'' + v + '\')" style="'
+      + 'padding:2px 9px;border-radius:5px;font-size:11px;cursor:pointer;font-family:system-ui;'
+      + (on ? 'border:1px solid #378ADD;background:#0C447C;color:#85B7EB;font-weight:500;'
+            : 'border:1px solid transparent;background:transparent;color:#888780;font-weight:400;')
+      + '">' + label + '</button>';
+  }
+  return b('monthly', 'Monthly') + b('quarterly', 'Quarterly');
+}
+function _custChartBlockHTML(sid) {
+  return '<div style="padding:10px 16px 4px;border-bottom:0.5px solid #2c2c2a;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">'
+    +   '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Units produced</div>'
+    +   '<div class="cust-gran-bar" style="display:flex;gap:2px;padding:2px;background:#1a1d20;border:0.5px solid #2c2c2a;border-radius:7px;">' + _custChartGranBtns() + '</div>'
+    + '</div>'
+    + '<div style="position:relative;height:170px;"><canvas id="ch-chart-' + sid + '" role="img" aria-label="Units produced over time"></canvas></div>'
+    + '</div>';
+}
+
+function setCustChartGran(g) {
+  custChartGran = (g === 'quarterly') ? 'quarterly' : 'monthly';
+  var bars = document.querySelectorAll('.cust-gran-bar'), i;
+  for (i = 0; i < bars.length; i++) bars[i].innerHTML = _custChartGranBtns();
+  Object.keys(_chExpanded).forEach(function(sid) { if (_chExpanded[sid]) _drawCustChart(sid); });
+  trackEvent('customer_chart_gran', { gran: custChartGran });
+}
+
+function _drawCustChart(sid) {
+  var cv = document.getElementById('ch-chart-' + sid);
+  var dataEl = document.getElementById('ch-data-' + sid);
+  var key = 'cust_' + sid;
+  // renderCustomers is also called directly (search, Top N) without render()'s
+  // teardown, so the previous instance on this key has to go here or it leaks.
+  if (charts[key]) { try { charts[key].destroy(); } catch (e) {} delete charts[key]; }
+  if (!cv || !dataEl || typeof Chart === 'undefined') return;
+  var cd = JSON.parse(dataEl.textContent);
+  var monthly = custChartGran === 'monthly';
+  var series = (monthly ? cd.chartM : cd.chartQ) || [];
+  if (!series.length) return;
+  var now = new Date();
+  var curKey = monthly ? _custMonthKey(now) : getQuarterKey(now);
+  var labels = [], data = [], bg = [], edge = [], partial = [], i;
+  for (i = 0; i < series.length; i++) {
+    var isCur = series[i].key === curKey;
+    labels.push(monthly ? _custMonthLabel(series[i].key) : quarterLabel(series[i].key));
+    data.push(series[i].units);
+    bg.push(isCur ? CUST_BAR_PART : CUST_BAR);
+    edge.push(isCur ? CUST_BAR_PART_EDGE : CUST_BAR_EDGE);
+    partial.push(isCur);
+  }
+  var skip = labels.length > 12;
+  charts[key] = new Chart(cv, {
+    type: 'bar',
+    data: { labels: labels, datasets: [{ data: data, backgroundColor: bg, borderColor: edge, borderWidth: 1, borderRadius: 3, maxBarThickness: 48 }] },
+    options: { responsive: true, maintainAspectRatio: false, layout: { padding: { top: 20 } },
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: function(c) {
+          var t = Math.round(c.raw).toLocaleString() + ' units';
+          if (partial[c.dataIndex]) t += ' — ' + (monthly ? 'month' : 'quarter') + ' in progress';
+          return c.raw ? t + ' — click for the quarter breakdown' : t;
+        } } } },
+      // A bar opens its quarter's breakdown in the table below — the same panel a
+      // click on the quarter row opens — so the chart is a way in, not a dead end.
+      onClick: function(evt, els) {
+        if (!els || !els.length || !data[els[0].index]) return;
+        var k = series[els[0].index].key;
+        var qk = monthly ? getQuarterKey(new Date(parseInt(k.split('-')[0], 10), parseInt(k.split('-')[1], 10) - 1, 1)) : k;
+        custInlineTab = 'quarters';
+        _chQtrExpanded[sid] = null;          // toggleCustQuarter flips it; always land open
+        toggleCustQuarter(sid, qk, cd.name);
+      },
+      onHover: function(event, els) {
+        var t = event.native ? event.native.target : event.target;
+        if (t) t.style.cursor = (els.length && data[els[0].index]) ? 'pointer' : 'default';
+      },
+      scales: {
+        x: { ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, autoSkip: skip, maxRotation: skip ? 45 : 0 }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } },
+        y: { beginAtZero: true, ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, callback: function(v) { return Math.round(v).toLocaleString(); } }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } }
+      } },
+    plugins: [barValueLabels({ id: 'custTrendLabels', halo: '#141618',
+      colorFor: function(i) { return partial[i] ? BAR_LABEL_OFF : BAR_LABEL; },
+      // Monthly bars sit ~40px apart; a full "243,118" would be dropped by the fit
+      // check on most of them, so monthly labels are abbreviated.
+      format: function(v) { return monthly ? _custShortNum(v) : Math.round(v).toLocaleString(); } })]
+  });
+}
+function _custShortNum(v) {
+  if (v >= 1e6) return (v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M';
+  if (v >= 1e3) return Math.round(v / 1e3) + 'k';
+  return Math.round(v).toLocaleString();
 }
 
 // Click a quarter row in the customer detail table → drill into the breakdown
@@ -11354,6 +11473,7 @@ function computeCustomerData() {
   var cutoff = new Date(TRACKING_START);
   var custQtr = {};
   var custProd = {};   // cust -> product -> {units, units25, lots, lots25}
+  var custMon = {};    // cust -> 'YYYY-MM' -> units, for the panel's trend chart
   var totalQtr = {};   // total units across all customers per quarter
   var totalYtd = 0;    // total units across all customers YTD this year
   var totalYtd25 = 0;  // same window last year
@@ -11380,6 +11500,9 @@ function computeCustomerData() {
     }
     if (!totalQtr[qk]) totalQtr[qk] = 0;
     totalQtr[qk] += num(r['Final Units']);
+    var mk = _custMonthKey(dt);
+    if (!custMon[cust]) custMon[cust] = {};
+    custMon[cust][mk] = (custMon[cust][mk] || 0) + num(r['Final Units']);
 
     // Per-product totals, accumulated in this same pass rather than per customer on demand:
     // the drill-down markup is built for EVERY customer (hidden until expanded, like Open
@@ -11407,6 +11530,17 @@ function computeCustomerData() {
   while (getQuarterKey(dq) <= curQk) {
     displayQtrs.push(getQuarterKey(dq));
     dq.setMonth(dq.getMonth() + 3);
+  }
+
+  // Every month from TRACKING_START to now, so a month with no runs is a visible gap in
+  // the chart rather than a missing bar that silently closes up the axis.
+  var displayMonths = [];
+  var dmo = new Date(TRACKING_START);
+  dmo.setDate(1);
+  var curMk = _custMonthKey(now);
+  while (_custMonthKey(dmo) <= curMk) {
+    displayMonths.push(_custMonthKey(dmo));
+    dmo.setMonth(dmo.getMonth() + 1);
   }
 
   // Total YTD across all customers (for % of production)
@@ -11504,7 +11638,10 @@ function computeCustomerData() {
       return (b.units - a.units) || (b.units25 - a.units25);
     });
 
-    results.push({cust:cust, qtrs:qtrs, tag:tag, ytd:ytd, ytd25:ytd25, ytdLots:ytdLots, ytdLots25:ytdLots25, ytdPct:ytdPct, ytdPct25:ytdPct25, annuals:annuals, withData:withData, products:products});
+    var mmap = custMon[cust] || {};
+    var months = displayMonths.map(function(mk) { return { key: mk, units: mmap[mk] || 0 }; });
+
+    results.push({cust:cust, qtrs:qtrs, months:months, tag:tag, ytd:ytd, ytd25:ytd25, ytdLots:ytdLots, ytdLots25:ytdLots25, ytdPct:ytdPct, ytdPct25:ytdPct25, annuals:annuals, withData:withData, products:products});
   });
 
   // Sort by YTD units descending
@@ -12033,12 +12170,17 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       ytdPct: cd.ytdPct, ytdPct25: cd.ytdPct25,
       qtrs: cd.qtrs.filter(function(q){return q.units>0;}).map(function(q){
         return {key:q.key, label:quarterLabel(q.key), units:q.units, lots:q.lots, avgRun:q.avgRun, pctOfProd:q.pctOfProd};
-      })
+      }),
+      // Trend chart series. Unlike qtrs above, these keep the empty periods: a gap is
+      // part of the shape the chart exists to show.
+      chartQ: cd.qtrs.map(function(q){ return {key:q.key, units:q.units}; }),
+      chartM: cd.months
     };
 
     var detailTable = '<div id="ch-body-'+sid+'" style="display:'+(expanded?'block':'none')+';background:#141618;border-bottom:0.5px solid #1e2124;">'
       +'<script type="application/json" id="ch-data-'+sid+'">'+JSON.stringify(custDataObj)+'<\/script>'
       +'<div id="ch-synopsis-'+sid+'" style="padding:12px 16px;border-bottom:0.5px solid #2c2c2a;background:#141618;min-height:44px;"></div>'
+      + _custChartBlockHTML(sid)
       + _custTabBarHTML(cd)
       +'<div class="cust-tab-panel" data-cust-tab="quarters" style="display:'+(custInlineTab==='quarters'?'block':'none')+';">'
       +'<div class="pnl-sub-scroll" style="overflow-x:auto;">'
@@ -12081,7 +12223,7 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
 
 function _triggerExpandedSynopses() {
   Object.keys(_chExpanded).forEach(function(sid) {
-    if (_chExpanded[sid]) generateSynopsis(sid);
+    if (_chExpanded[sid]) { generateSynopsis(sid); _drawCustChart(sid); }
   });
 }
 
