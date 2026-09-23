@@ -10934,62 +10934,116 @@ function setCustChartGran(g) {
 }
 
 // ── Volatility ──
-// How much a customer's volume swings period to period, as the coefficient of
-// variation: the standard deviation of the period totals over their mean. Being
+// How much a customer's volume swings month to month, as the coefficient of
+// variation: the standard deviation of the monthly totals over their mean. Being
 // relative, a 50k customer and a 500k one are judged on one scale: 50k/51k/48k
 // scores 3%, 60k/10k/100k/20k scores 75%.
 //
-// Scored over what the chart shows, with three exclusions that each matter:
-//   - The period in progress is left out. A half-finished month always reads as a
-//     collapse and would inflate every customer's score.
-//   - Periods before the customer's first production are left out. A customer that
-//     came on board in March has no January to be volatile about.
-//   - Empty periods after that DO count. A customer running every other month is
-//     genuinely volatile from a planning seat.
-// Below CUST_VOL_MIN_PERIODS completed periods no score is given; a figure off two
-// or three points is noise dressed up as a measurement.
+// Scored on MONTHS ONLY, whichever view is showing, so a customer has one score
+// and flipping the toggle doesn't change it. Summing months into quarters smooths
+// the swings away (Alpha Lion: 45% monthly, 24% quarterly; Frontline 68% vs 18%),
+// so one set of thresholds cannot serve both, and months are the grain a planner
+// actually has to absorb. The quarterly view states the basis and draws no band.
 //
-// Known blind spot, accepted: CV ignores order, so a steady ramp scores as variable
-// although it is predictable. Our customers mostly zig-zag rather than trend. If a
-// ramp ever misleads, measure dispersion around a fitted trend line instead.
+// The window is the monthly chart's (year to date, or the last 6 months before
+// June), with four exclusions that each matter:
+//   - The month in progress. A half-finished month always reads as a collapse.
+//   - Months before the customer's first production. No January to be volatile
+//     about if they started in March.
+//   - The onboarding ramp: a leading run of months under CUST_VOL_RAMP_FRAC of the
+//     customer's median month. CV ignores order, so a ramp (Ancestral went 7k, 10k,
+//     then 100k+ a quarter) scores as volatility when it is a customer arriving.
+//     Only a run at the START is trimmed; a dip in the middle is real volatility.
+//     The trimmed months are named on screen. Checked on the top 25: it changes
+//     RSP (44% -> 28%) and nobody else on the monthly window.
+//   - Empty months after the start DO count. Running every other month is volatile.
+// Below CUST_VOL_MIN_PERIODS scored months there is no score.
+//
+// Still blind, accepted: a ramp that never flattens (steady growth) reads as
+// variable, and nothing here knows WHY a customer swings. The score is where to
+// look, not the explanation.
 var CUST_VOL_MIN_PERIODS = 4;
-var CUST_VOL_STEADY = 20, CUST_VOL_VOLATILE = 50;   // CV %, rounded; judgment calls, tune against the spread
+// CV %, rounded. Calibrated 2026-09-23 against the top 25 customers' Jan-Aug months:
+// a first cut at 20/50 put 0 Steady, 7 Variable, 18 Volatile, which is a badge that
+// says Volatile on nearly everyone and so distinguishes nobody. In contract
+// manufacturing a month's volume is whichever POs happened to land, so +/-30% is as
+// steady as our customers get. 35/75 splits the same 25 into 2 / 12 / 11
+// (Ancestral 26% and RSP 28% Steady; Alpha Lion 45%, Dragon Pharma 50% Variable).
+// Re-check the split before moving these.
+var CUST_VOL_STEADY = 35, CUST_VOL_VOLATILE = 75;
+var CUST_VOL_RAMP_FRAC = 0.25;
+
+// The monthly chart's window, shared by the chart and the score so they can't drift.
+function _custMonthWindow(months, now) {
+  if (now.getMonth() >= 5) {
+    var ytdStart = _custMonthKey(new Date(now.getFullYear(), 0, 1));
+    return { series: months.filter(function(m) { return m.key >= ytdStart; }),
+             rangeTxt: '· ' + now.getFullYear() + ' year to date' };
+  }
+  return { series: months.slice(-6), rangeTxt: '· last 6 months' };
+}
+
+// data[] and partial[] run parallel. Returns the stats plus `start`, the index of
+// the first scored month, so the band can begin where the scoring does.
 function _custVolatility(data, partial) {
-  var vals = [], started = false, i;
+  var idx = [], i;
   for (i = 0; i < data.length; i++) {
     if (partial[i]) continue;
-    if (!started && !data[i]) continue;
-    started = true;
-    vals.push(data[i] || 0);
+    if (!idx.length && !data[i]) continue;          // before first production
+    idx.push(i);
   }
-  if (vals.length < CUST_VOL_MIN_PERIODS) return { n: vals.length, scored: false };
+  var ramp = 0;
+  if (idx.length) {
+    var sorted = idx.map(function(k) { return data[k] || 0; }).sort(function(a, b) { return a - b; });
+    var h = sorted.length >> 1;
+    var med = sorted.length % 2 ? sorted[h] : (sorted[h - 1] + sorted[h]) / 2;
+    while (ramp < idx.length && (data[idx[ramp]] || 0) < CUST_VOL_RAMP_FRAC * med) ramp++;
+  }
+  var rampIdx = idx.slice(0, ramp);
+  idx = idx.slice(ramp);
+  var out = { n: idx.length, scored: false, rampIdx: rampIdx, start: idx.length ? idx[0] : -1 };
+  if (idx.length < CUST_VOL_MIN_PERIODS) return out;
   var sum = 0, sq = 0;
-  for (i = 0; i < vals.length; i++) sum += vals[i];
-  var mean = sum / vals.length;
-  if (!mean) return { n: vals.length, scored: false };
-  for (i = 0; i < vals.length; i++) sq += (vals[i] - mean) * (vals[i] - mean);
-  var sd = Math.sqrt(sq / vals.length);   // population SD: it describes these periods, it doesn't estimate others
+  for (i = 0; i < idx.length; i++) sum += data[idx[i]] || 0;
+  var mean = sum / idx.length;
+  if (!mean) return out;
+  for (i = 0; i < idx.length; i++) sq += ((data[idx[i]] || 0) - mean) * ((data[idx[i]] || 0) - mean);
+  var sd = Math.sqrt(sq / idx.length);   // population SD: it describes these months, it doesn't estimate others
   var pct = Math.round(sd / mean * 100);
-  var band = pct < CUST_VOL_STEADY ? 'steady' : pct <= CUST_VOL_VOLATILE ? 'variable' : 'volatile';
-  return { n: vals.length, scored: true, mean: mean, sd: sd, pct: pct, band: band };
+  out.scored = true; out.mean = mean; out.sd = sd; out.pct = pct;
+  out.band = pct < CUST_VOL_STEADY ? 'steady' : pct <= CUST_VOL_VOLATILE ? 'variable' : 'volatile';
+  return out;
 }
-function _custVolHTML(v, monthly) {
-  var unit = monthly ? 'month' : 'quarter';
+
+// v from _custVolatility; labels are the monthly labels its indexes point into.
+function _custVolHTML(v, labels, showKey) {
+  var rampTxt = '';
+  if (v.rampIdx.length) {
+    var a = labels[v.rampIdx[0]], b = labels[v.rampIdx[v.rampIdx.length - 1]];
+    rampTxt = 'excludes ' + v.rampIdx.length + ' ramp-up month' + (v.rampIdx.length === 1 ? '' : 's')
+      + ' (' + (a === b ? a : a + '–' + b) + ')';
+  }
+  var note = function(t) { return t ? '<span style="color:#5f5e5a;">· ' + t + '</span>' : ''; };
   if (!v.scored) {
-    return '<span style="color:#5f5e5a;">Volatility: not enough history yet (' + v.n + ' completed ' + unit + (v.n === 1 ? '' : 's')
-      + ', needs ' + CUST_VOL_MIN_PERIODS + ')</span>';
+    return '<span style="color:#5f5e5a;">Volatility: not enough history yet (' + v.n + ' scored month' + (v.n === 1 ? '' : 's')
+      + ', needs ' + CUST_VOL_MIN_PERIODS + ')</span>' + note(rampTxt);
   }
   var sty = { steady:   ['#085041', '#9FE1CB', 'Steady'],
               variable: ['#633806', '#FAC775', 'Variable'],
               volatile: ['#791F1F', '#F09595', 'Volatile'] }[v.band];
-  var tip = 'Coefficient of variation: the standard deviation of ' + v.n + ' completed ' + unit + 's divided by their average. '
-    + 'Under ' + CUST_VOL_STEADY + '% is steady, over ' + CUST_VOL_VOLATILE + '% is volatile. The ' + unit + ' in progress is not counted.';
+  var tip = 'Coefficient of variation: the standard deviation of ' + v.n + ' completed months divided by their average. '
+    + 'Under ' + CUST_VOL_STEADY + '% is steady, over ' + CUST_VOL_VOLATILE + '% is volatile. '
+    + 'Scored on months in either view. Leaves out the month in progress and any onboarding ramp '
+    + '(opening months under ' + Math.round(CUST_VOL_RAMP_FRAC * 100) + '% of the typical month).';
   return '<span title="' + esc(tip) + '" style="display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:500;background:' + sty[0] + ';color:' + sty[1] + ';cursor:help;">' + sty[2] + '</span>'
-    + '<span title="' + esc(tip) + '" style="cursor:help;">' + unit.charAt(0).toUpperCase() + unit.slice(1) + 's typically swing <b style="color:#c9c7c1;font-weight:500;">±' + v.pct + '%</b> around ' + _custShortNum(v.mean) + '</span>'
-    + '<span style="display:inline-flex;align-items:center;gap:10px;margin-left:auto;font-size:10px;color:#5f5e5a;">'
-    +   '<span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;border-top:1.5px dashed #EF9F27;"></span>average</span>'
-    +   '<span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:8px;background:rgba(133,183,235,0.16);border-radius:2px;"></span>typical range</span>'
-    + '</span>';
+    + '<span title="' + esc(tip) + '" style="cursor:help;">Months typically swing <b style="color:#c9c7c1;font-weight:500;">±' + v.pct + '%</b> around ' + _custShortNum(v.mean) + '</span>'
+    + note(rampTxt)
+    + (showKey
+      ? '<span style="display:inline-flex;align-items:center;gap:10px;margin-left:auto;font-size:10px;color:#5f5e5a;">'
+        +   '<span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;border-top:1.5px dashed #EF9F27;"></span>average</span>'
+        +   '<span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:8px;background:rgba(133,183,235,0.16);border-radius:2px;"></span>typical range</span>'
+        + '</span>'
+      : note('scored on months'));
 }
 
 function _drawCustChart(sid) {
@@ -11002,26 +11056,27 @@ function _drawCustChart(sid) {
   if (!cv || !dataEl || typeof Chart === 'undefined') return;
   var cd = JSON.parse(dataEl.textContent);
   var monthly = custChartGran === 'monthly';
-  var series = (monthly ? cd.chartM : cd.chartQ) || [];
   var now = new Date();
-  var rangeTxt = '';
-  if (monthly) {
-    var ytdStart = _custMonthKey(new Date(now.getFullYear(), 0, 1));
-    if (now.getMonth() >= 5) {
-      series = series.filter(function(m) { return m.key >= ytdStart; });
-      rangeTxt = '· ' + now.getFullYear() + ' year to date';
-    } else {
-      series = series.slice(-6);
-      rangeTxt = '· last 6 months';
-    }
-  } else if (series.length) {
-    rangeTxt = '· ' + quarterLabel(series[0].key) + ' to now';
+  var curMk = _custMonthKey(now);
+  // The score is always computed on the monthly window, whichever view is up.
+  var mw = _custMonthWindow(cd.chartM || [], now);
+  var mData = [], mPart = [], mLabels = [], i;
+  for (i = 0; i < mw.series.length; i++) {
+    mData.push(mw.series[i].units);
+    mPart.push(mw.series[i].key === curMk);
+    mLabels.push(_custMonthLabel(mw.series[i].key));
   }
+  var vol = _custVolatility(mData, mPart);
+  var volEl = document.getElementById('ch-chart-vol-' + sid);
+  if (volEl) volEl.innerHTML = _custVolHTML(vol, mLabels, monthly && vol.scored);
+
+  var series = monthly ? mw.series : (cd.chartQ || []);
+  var rangeTxt = monthly ? mw.rangeTxt : (series.length ? '· ' + quarterLabel(series[0].key) + ' to now' : '');
   var rangeEl = document.getElementById('ch-chart-range-' + sid);
   if (rangeEl) rangeEl.textContent = rangeTxt;
   if (!series.length) return;
-  var curKey = monthly ? _custMonthKey(now) : getQuarterKey(now);
-  var labels = [], data = [], bg = [], edge = [], partial = [], i;
+  var curKey = monthly ? curMk : getQuarterKey(now);
+  var labels = [], data = [], bg = [], edge = [], partial = [];
   for (i = 0; i < series.length; i++) {
     var isCur = series[i].key === curKey;
     labels.push(monthly ? _custMonthLabel(series[i].key) : quarterLabel(series[i].key));
@@ -11031,17 +11086,17 @@ function _drawCustChart(sid) {
     partial.push(isCur);
   }
   var skip = labels.length > 12;   // monthly tops out at 12 (a full YTD); only quarterly history grows past it
-  var vol = _custVolatility(data, partial);
-  var volEl = document.getElementById('ch-chart-vol-' + sid);
-  if (volEl) volEl.innerHTML = _custVolHTML(vol, monthly);
   // Bars stay dataset 0: barValueLabels labels dataset 0 only. The band is two
   // invisible lines one SD either side of the mean with the gap between them
   // filled, so a steady customer's bars sit inside it and a volatile one's jump out.
+  // Monthly only (the stats are monthly), and it starts where the scoring starts:
+  // null before that, so a trimmed ramp sits visibly outside it.
   var datasets = [{ data: data, backgroundColor: bg, borderColor: edge, borderWidth: 1, borderRadius: 3, maxBarThickness: 48, order: 3 }];
-  if (vol.scored) {
+  if (monthly && vol.scored) {
     var hi = [], lo = [], avg = [];
     for (i = 0; i < data.length; i++) {
-      hi.push(vol.mean + vol.sd); lo.push(Math.max(0, vol.mean - vol.sd)); avg.push(vol.mean);
+      var on = i >= vol.start;
+      hi.push(on ? vol.mean + vol.sd : null); lo.push(on ? Math.max(0, vol.mean - vol.sd) : null); avg.push(on ? vol.mean : null);
     }
     datasets.push({ type: 'line', label: 'band-hi', data: hi, borderColor: 'transparent', pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0, order: 2 });
     datasets.push({ type: 'line', label: 'band-lo', data: lo, borderColor: 'transparent', backgroundColor: 'rgba(133,183,235,0.08)', pointRadius: 0, pointHoverRadius: 0, fill: '-1', tension: 0, order: 2 });
