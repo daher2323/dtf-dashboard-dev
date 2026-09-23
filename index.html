@@ -11001,6 +11001,7 @@ function _drawCustChart(sid) {
     edge.push(isCur ? CUST_BAR_PART_EDGE : CUST_BAR_EDGE);
     partial.push(isCur);
   }
+  var skip = labels.length > 12;   // monthly tops out at 12 (a full YTD); only quarterly history grows past it
   var fullSeries = monthly ? (cd.chartM || []) : (cd.chartQ || []);
   var fullData = [], fullPart = [];
   for (i = 0; i < fullSeries.length; i++) {
