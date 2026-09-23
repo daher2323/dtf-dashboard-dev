@@ -18932,8 +18932,14 @@ function buildPartResult(hits, part) {
   }
 
   var custIdx = {}, custs = [], unresolved = [], nonProd = [], prodSet = {};
-  var totUnits = 0, plannedAny = false;
-  var j, agg, product, customer, info, runDate, ts, c, pIdx, p;
+  // Stick/sample packs are counted per pack and finished units per bottle or jar, so the
+  // two are totalled apart and never summed. One Alpha Lion stick run is 35,000 packs,
+  // which would outweigh a year of its tubs in a single "units" figure and leave the
+  // reader no way to take them apart. Classified by lot number (6 digits = stick/sample,
+  // 7 = a line run), the same rule Logistics uses (_logiIsStick), so the split holds
+  // even when a stick lot's figure fell back to the Lot # sheet's Amt.
+  var totUnits = 0, totSticks = 0, plannedAny = false, anySticks = false;
+  var j, agg, product, customer, info, runDate, ts, c, pIdx, p, stick, u;
   for (j = 0; j < lotOrder.length; j++) {
     agg = byLot[lotOrder[j]];
     product = maps.productByLot[agg.lot] || (lotMap[agg.lot] && lotMap[agg.lot].product)
@@ -18956,29 +18962,35 @@ function buildPartResult(hits, part) {
     customer = product.split('-')[0].trim() || '(unnamed)';
     info = lotUnitsInfo(agg.lot, maps.unitsByLot);
     if (info.src === 'planned') plannedAny = true;
+    stick = _logiIsStick(agg.lot);
+    if (stick) anySticks = true;
+    u = info.units || 0;
     runDate = maps.prodDateByLot[agg.lot] || agg.pickDate || null;
     ts = runDate ? runDate.getTime() : -Infinity;
-    totUnits += (info.units || 0);
+    if (stick) totSticks += u; else totUnits += u;
     prodSet[product] = 1;
 
     if (!custIdx.hasOwnProperty(customer)) {
       custIdx[customer] = custs.length;
-      custs.push({ name: customer, products: [], prodIdx: {}, lots: 0, units: 0, lastTs: -Infinity, planned: false });
+      custs.push({ name: customer, products: [], prodIdx: {}, lots: 0, units: 0, sticks: 0, lastTs: -Infinity, planned: false, plannedSticks: false });
     }
     c = custs[custIdx[customer]];
-    c.lots++; c.units += (info.units || 0);
+    c.lots++;
+    if (stick) c.sticks += u; else c.units += u;
     if (ts > c.lastTs) c.lastTs = ts;
-    if (info.src === 'planned') c.planned = true;
+    // The asterisk follows the figure it qualifies: an Amt-sourced stick lot marks the
+    // Stick packs cell, not the Units cell beside it.
+    if (info.src === 'planned') { if (stick) c.plannedSticks = true; else c.planned = true; }
 
     if (!c.prodIdx.hasOwnProperty(product)) {
       c.prodIdx[product] = c.products.length;
-      c.products.push({ product: product, lots: [], units: 0, lastTs: -Infinity, planned: false });
+      c.products.push({ product: product, lots: [], units: 0, sticks: 0, lastTs: -Infinity, planned: false, plannedSticks: false });
     }
     p = c.products[c.prodIdx[product]];
-    p.lots.push({ lot: agg.lot, runDate: runDate, ts: ts, units: info.units, planned: info.src === 'planned' });
-    p.units += (info.units || 0);
+    p.lots.push({ lot: agg.lot, runDate: runDate, ts: ts, units: info.units, planned: info.src === 'planned', stick: stick });
+    if (stick) p.sticks += u; else p.units += u;
     if (ts > p.lastTs) p.lastTs = ts;
-    if (info.src === 'planned') p.planned = true;
+    if (info.src === 'planned') { if (stick) p.plannedSticks = true; else p.planned = true; }
   }
 
   // Most lots first — this is an impact list, so the customer with the most exposure
@@ -19002,6 +19014,7 @@ function buildPartResult(hits, part) {
            material: Object.keys(matSet).join(', '),
            customers: custs, unresolved: unresolved, nonProd: nonProd,
            totLots: lotOrder.length, totProducts: countKeys(prodSet), totUnits: totUnits,
+           totSticks: totSticks, anySticks: anySticks,
            plannedAny: plannedAny, firstTs: firstTs, lastTs: lastTs };
 }
 
@@ -19208,6 +19221,7 @@ function renderPartTableHTML(res) {
     + '<th style="'+th+'text-align:right;">Products</th>'
     + '<th style="'+th+'text-align:right;">Lots</th>'
     + '<th style="'+th+'text-align:right;">Units</th>'
+    + (res.anySticks ? '<th style="'+th+'text-align:right;" title="Stick and sample packs (6-digit lots), counted per pack. Kept apart from Units, which counts bottles and jars.">Stick packs</th>' : '')
     + '<th style="'+th+'text-align:right;">Last run</th>'
     + '<th style="'+th+'text-align:left;width:120px;">Share of lots</th>'
     + '</tr></thead><tbody>';
@@ -19222,7 +19236,8 @@ function renderPartTableHTML(res) {
       + '<td style="'+td+'color:#e8e6e0;font-weight:600;"><span style="display:inline-flex;align-items:center;gap:7px;">'+caret+esc(c.name)+'</span></td>'
       + '<td style="'+td+'text-align:right;color:#c9c7c1;">'+c.products.length.toLocaleString()+'</td>'
       + '<td style="'+td+'text-align:right;color:#c9c7c1;">'+c.lots.toLocaleString()+'</td>'
-      + '<td style="'+td+'text-align:right;color:#c9c7c1;">'+(c.units ? Math.round(c.units).toLocaleString() : '—')+(c.planned?plannedTag():'')+'</td>'
+      + '<td style="'+td+'text-align:right;color:#c9c7c1;">'+_partQty(c.units, c.planned)+'</td>'
+      + (res.anySticks ? '<td style="'+td+'text-align:right;color:#c9c7c1;">'+_partQty(c.sticks, c.plannedSticks)+'</td>' : '')
       + '<td style="'+td+'text-align:right;color:#888780;">'+_partWhen(c.lastTs)+'</td>'
       + '<td style="'+td+'"><div style="height:6px;background:#2c2c2a;border-radius:3px;overflow:hidden;width:100%;min-width:80px;"><div style="height:100%;width:'+bw+'%;background:#1D9E75;"></div></div></td>'
       + '</tr>';
@@ -19233,7 +19248,8 @@ function renderPartTableHTML(res) {
         + '<td style="'+td+'color:#c9c7c1;padding-left:32px;max-width:340px;overflow:hidden;text-overflow:ellipsis;">'+esc(displayProduct(p.product, c.name))+'</td>'
         + '<td style="'+td+'"></td>'
         + '<td style="'+td+'text-align:right;color:#888780;">'+p.lots.length.toLocaleString()+'</td>'
-        + '<td style="'+td+'text-align:right;color:#888780;">'+(p.units ? Math.round(p.units).toLocaleString() : '—')+(p.planned?plannedTag():'')+'</td>'
+        + '<td style="'+td+'text-align:right;color:#888780;">'+_partQty(p.units, p.planned)+'</td>'
+        + (res.anySticks ? '<td style="'+td+'text-align:right;color:#888780;">'+_partQty(p.sticks, p.plannedSticks)+'</td>' : '')
         + '<td style="'+td+'text-align:right;color:#888780;">'+_partWhen(p.lastTs)+'</td>'
         + '<td style="'+td+'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#5f5e5a;overflow:hidden;text-overflow:ellipsis;max-width:120px;" title="'+esc(_partLotList(p.lots, 99))+'">'+esc(_partLotList(p.lots, 3))+'</td>'
         + '</tr>';
@@ -19280,6 +19296,11 @@ function renderPartTableHTML(res) {
   return out;
 }
 
+// A units or stick-pack cell. The dash also covers a product that simply has none of the
+// other kind, so a stick-pack product reads "—" under Units rather than a misleading 0.
+function _partQty(v, planned) {
+  return v ? Math.round(v).toLocaleString() + (planned ? plannedTag() : '') : '—';
+}
 function _partWhen(ts) {
   if (!ts || ts === -Infinity) return '—';
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -19315,7 +19336,8 @@ function exportPartUsage() {
     ['DTF Part Usage — Part #: ' + res.part],
     ['Material: ' + (res.material || '(unavailable)')],
     ['Customers: ' + res.customers.length + ' · Products: ' + res.totProducts
-      + ' · Lots run: ' + res.totLots + ' · Units produced: ' + Math.round(res.totUnits).toLocaleString()],
+      + ' · Lots run: ' + res.totLots + ' · Units produced: ' + Math.round(res.totUnits).toLocaleString()
+      + (res.anySticks ? ' · Stick packs: ' + Math.round(res.totSticks).toLocaleString() : '')],
     ['Exported: ' + dateStr],
     [],
     // Same caveat as the screen, on the sheet's own face: nobody opening this workbook
@@ -19326,13 +19348,16 @@ function exportPartUsage() {
       + (res.firstTs ? '; the first recorded draw of this part is ' + new Date(res.firstTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '') + '.'],
     []
   ];
-  rows.push(['Customer', 'Product', 'Lots', 'Units produced', 'Last run', 'Lot #s']);
+  var hdr = ['Customer', 'Product', 'Lots', 'Units produced'];
+  if (res.anySticks) hdr.push('Stick packs');
+  rows.push(hdr.concat(['Last run', 'Lot #s']));
   res.customers.forEach(function(c) {
     c.products.forEach(function(p) {
-      rows.push([c.name, displayProduct(p.product, c.name), p.lots.length,
-                 p.units ? Math.round(p.units) : '',
+      var qty = [p.units ? Math.round(p.units) : ''];
+      if (res.anySticks) qty.push(p.sticks ? Math.round(p.sticks) : '');
+      rows.push([c.name, displayProduct(p.product, c.name), p.lots.length].concat(qty, [
                  p.lastTs && p.lastTs !== -Infinity ? new Date(p.lastTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '',
-                 _partLotList(p.lots, 99)]);
+                 _partLotList(p.lots, 99)]));
     });
   });
   if (res.plannedAny) {
@@ -19354,7 +19379,8 @@ function exportPartUsage() {
     });
   }
   var ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:26},{wch:42},{wch:8},{wch:15},{wch:14},{wch:40}];
+  ws['!cols'] = [{wch:26},{wch:42},{wch:8},{wch:15}]
+    .concat(res.anySticks ? [{wch:13}] : [], [{wch:14},{wch:40}]);
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Part Usage');
   var safe = String(res.part || 'unknown').replace(/[^A-Za-z0-9]/g, '') || 'unknown';
