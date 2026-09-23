@@ -10948,17 +10948,26 @@ function setCustChartGran(g) {
 // months-only score was tried and reverted the same day for hiding exactly this.)
 //
 // Each is scored over its own chart's window (monthly: year to date, or the last
-// 6 months before June; quarterly: every quarter since TRACKING_START), with four
-// exclusions that each matter:
-//   - The period in progress. A half-finished period always reads as a collapse.
-//   - Periods before the customer's first production. No January to be volatile
-//     about if they started in March.
-//   - The onboarding ramp: a leading run of periods under CUST_VOL_RAMP_FRAC of
-//     the customer's median period. CV ignores order, so a ramp (Ancestral went
-//     7k, 10k, then 100k+ a quarter) scores as volatility when it is a customer
-//     arriving. Only a run at the START is trimmed; a dip in the middle is real
-//     volatility. The trimmed periods are named on screen.
-//   - Empty periods after the start DO count. Running every other month is volatile.
+// 6 months before June; quarterly: every quarter since TRACKING_START). The period
+// in progress is always left out; a half-finished period reads as a collapse.
+//
+// "Is this a new customer?" is judged on the customer's WHOLE history since
+// TRACKING_START, never on the chart window. The window-only version called RSP's
+// Feb '26 a ramp-up and skipped its empty January, for a customer that had run
+// every quarter of 2025: an established customer's empty month is real volatility.
+//   - Established (producing in the first tracked period): nothing is skipped or
+//     trimmed; every completed period in the window counts, zeros included. With
+//     no data before TRACKING_START, a customer already running then gets no
+//     benefit of the doubt: a ramp is only claimed where it was observed.
+//   - New (first production later, with observed empty periods before it):
+//     periods before first production are skipped, and the onboarding ramp is
+//     trimmed: the run of periods from first production that sit under
+//     CUST_VOL_RAMP_FRAC of the customer's median period (median over their whole
+//     history). CV ignores order, so Ancestral's 7k, 10k, then 100k+ a quarter
+//     otherwise scores as volatility when it is a customer arriving. Only that
+//     opening run is trimmed; a dip later on is real volatility. Trimmed periods
+//     that fall inside the window are named on screen.
+//   - Empty periods after first production always count.
 // Below CUST_VOL_MIN_PERIODS scored periods there is no score.
 //
 // Still blind, accepted: a ramp that never flattens (steady growth) reads as
@@ -10969,8 +10978,10 @@ var CUST_VOL_MIN_PERIODS = 4;
 // a first cut at 20/50 put 0 Steady, 7 Variable, 18 Volatile, which is a badge that
 // says Volatile on nearly everyone and so distinguishes nobody. In contract
 // manufacturing a month's volume is whichever POs happened to land, so +/-30% is as
-// steady as our customers get. 35/75 splits the same 25 into 2 / 12 / 11
-// (Ancestral 26% and RSP 28% Steady; Alpha Lion 45%, Dragon Pharma 50% Variable).
+// steady as our customers get. 35/75 splits the same 25 into 1 / 10 / 14 once an
+// established customer's empty months count (Ancestral 26% Steady; Alpha Lion 45%,
+// Dragon Pharma 50%, RSP 60% Variable). It was 2 / 12 / 11 before that fix, when
+// empty months at the start of the window were wrongly skipped.
 // Quarterly 25/50 splits the same 25 into 4 / 7 / 10 with 4 unscored (too few
 // quarters since they started): Alpha Lion 24%, Ekko 23%, Frontline 18%, Panda 19%
 // Steady. Re-check the split before moving either pair.
@@ -10987,35 +10998,43 @@ function _custMonthWindow(months, now) {
   return { series: months.slice(-6), rangeTxt: '· last 6 months' };
 }
 
-// data[] and partial[] run parallel. Returns the stats plus `start`, the index of
-// the first scored period, so the band can begin where the scoring does. Grain-
-// agnostic; the thresholds are applied by _custVolBand.
-function _custVolatility(data, partial) {
-  var idx = [], i;
-  for (i = 0; i < data.length; i++) {
-    if (partial[i]) continue;
-    if (!idx.length && !data[i]) continue;          // before first production
+// full[] / partial[] are the customer's WHOLE series since TRACKING_START; only
+// indexes >= winStart are scored. Returned indexes (rampIdx, start) are relative
+// to winStart, i.e. into the chart's own labels. Grain-agnostic; the thresholds
+// are applied by _custVolBand.
+function _custVolatility(full, partial, winStart) {
+  var n = full.length, fp = -1, i;
+  for (i = 0; i < n; i++) { if (full[i]) { fp = i; break; } }
+  var ramp = {};
+  if (fp > 0) {                                     // new customer: a ramp is possible
+    var hist = [];
+    for (i = fp; i < n; i++) if (!partial[i]) hist.push(full[i] || 0);
+    if (hist.length) {
+      hist.sort(function(a, b) { return a - b; });
+      var h = hist.length >> 1;
+      var med = hist.length % 2 ? hist[h] : (hist[h - 1] + hist[h]) / 2;
+      for (i = fp; i < n; i++) {
+        if (partial[i]) continue;
+        if ((full[i] || 0) >= CUST_VOL_RAMP_FRAC * med) break;
+        ramp[i] = true;
+      }
+    }
+  }
+  var idx = [], rampIdx = [];
+  for (i = winStart; i < n; i++) {
+    if (partial[i] || fp === -1 || i < fp) continue;
+    if (ramp[i]) { rampIdx.push(i - winStart); continue; }
     idx.push(i);
   }
-  var ramp = 0;
-  if (idx.length) {
-    var sorted = idx.map(function(k) { return data[k] || 0; }).sort(function(a, b) { return a - b; });
-    var h = sorted.length >> 1;
-    var med = sorted.length % 2 ? sorted[h] : (sorted[h - 1] + sorted[h]) / 2;
-    while (ramp < idx.length && (data[idx[ramp]] || 0) < CUST_VOL_RAMP_FRAC * med) ramp++;
-  }
-  var rampIdx = idx.slice(0, ramp);
-  idx = idx.slice(ramp);
-  var out = { n: idx.length, scored: false, rampIdx: rampIdx, start: idx.length ? idx[0] : -1 };
+  var out = { n: idx.length, scored: false, rampIdx: rampIdx, start: idx.length ? idx[0] - winStart : -1 };
   if (idx.length < CUST_VOL_MIN_PERIODS) return out;
   var sum = 0, sq = 0;
-  for (i = 0; i < idx.length; i++) sum += data[idx[i]] || 0;
+  for (i = 0; i < idx.length; i++) sum += full[idx[i]] || 0;
   var mean = sum / idx.length;
   if (!mean) return out;
-  for (i = 0; i < idx.length; i++) sq += ((data[idx[i]] || 0) - mean) * ((data[idx[i]] || 0) - mean);
-  var sd = Math.sqrt(sq / idx.length);   // population SD: it describes these months, it doesn't estimate others
-  var pct = Math.round(sd / mean * 100);
-  out.scored = true; out.mean = mean; out.sd = sd; out.pct = pct;
+  for (i = 0; i < idx.length; i++) sq += ((full[idx[i]] || 0) - mean) * ((full[idx[i]] || 0) - mean);
+  var sd = Math.sqrt(sq / idx.length);   // population SD: it describes these periods, it doesn't estimate others
+  out.scored = true; out.mean = mean; out.sd = sd; out.pct = Math.round(sd / mean * 100);
   return out;
 }
 function _custVolBand(pct, gran) {
@@ -11084,8 +11103,17 @@ function _drawCustChart(sid) {
     edge.push(isCur ? CUST_BAR_PART_EDGE : CUST_BAR_EDGE);
     partial.push(isCur);
   }
-  // Scored on exactly the periods on screen, at that view's grain.
-  var vol = _custVolatility(data, partial);
+  // Scored on the periods on screen, at that view's grain, but judged against the
+  // customer's full history (see _custVolatility): the whole series goes in with
+  // the window's offset.
+  var fullSeries = monthly ? (cd.chartM || []) : (cd.chartQ || []);
+  var fullData = [], fullPart = [];
+  for (i = 0; i < fullSeries.length; i++) {
+    fullData.push(fullSeries[i].units);
+    fullPart.push(fullSeries[i].key === curKey);
+  }
+  var winStart = Math.max(0, fullSeries.length - series.length);   // the window is always a suffix
+  var vol = _custVolatility(fullData, fullPart, winStart);
   if (volEl) volEl.innerHTML = _custVolHTML(vol, labels, monthly);
   var skip = labels.length > 12;   // monthly tops out at 12 (a full YTD); only quarterly history grows past it
   // Bars stay dataset 0: barValueLabels labels dataset 0 only. The band is two
