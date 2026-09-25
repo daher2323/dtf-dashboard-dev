@@ -2153,8 +2153,40 @@ function buildLotMap(rows) {
     // 2026-09-02, mid-run. First non-blank wins; no lot in the feed records two
     // different scoops, so there is nothing to choose between.
     if (!m[lot].scoop && r['Scoop']) m[lot].scoop = r['Scoop'];
+    // Evidence for _lotProductType: which kinds of line the lot touched, whether any row
+    // names a bottle, and the line of its earliest row that actually produced units.
+    var lt = _pmLineType(r['Line']);
+    if (lt) m[lot]._types = (m[lot]._types || '') + (m[lot]._types && m[lot]._types.indexOf(lt) !== -1 ? '' : lt + ' ');
+    if (_containerNamed(r['Bottle Size'])) m[lot]._bottle = true;
+    var ru = num(r['Final Units']), rd = parseLocalDate((r['Date'] || '').trim());
+    if (lt && ru > 0 && rd && (!m[lot]._fillTs || rd.getTime() < m[lot]._fillTs)) { m[lot]._fillTs = rd.getTime(); m[lot]._fillType = lt; }
   });
+  for (var k in m) if (m.hasOwnProperty(k)) m[k].ptype = _lotProductType(m[k]);
   return m;
+}
+
+// A container cell that names something (not blank, not "N/A").
+function _containerNamed(v) {
+  var t = (v == null ? '' : String(v)).trim().toUpperCase();
+  return t !== '' && t !== 'N/A' && t !== 'NA';
+}
+// Powder or capsule for a LOT, which is not always the same as its line. Capsules can't be
+// filled on Line #1/#4 and powders can't be filled on Line #2, but a run short of labels is
+// finished on whichever line is free when they arrive, so one lot can carry rows on both
+// kinds (9 lots in 2026). Its first row's line then decided the type, and a blank
+// placeholder row counted, so Womaness Active Glow (120cc bottle) and two creatine-capsule
+// lots read as powder. For a lot on both kinds of line:
+//   - any row names a bottle -> capsule (bottles are only ever capsules);
+//   - otherwise the line of its earliest row with units, i.e. the fill; the label-short
+//     finish always comes after. NOT "jar = powder": capsules ship in jars too
+//     (Multivitamin 180s, Sleep Caps, Creatine Capsules 200s: 33 Line #2 jar rows in 2026).
+// A lot on one kind of line is that line's type. `line` itself is left alone, so
+// per-line production totals still count each row where it ran.
+function _lotProductType(l) {
+  var types = (l._types || '').trim().split(' ').filter(Boolean);
+  if (types.length <= 1) return types[0] || _pmLineType(l.line);
+  if (l._bottle) return 'capsule';
+  return l._fillType || _pmLineType(l.line);
 }
 
 function lotDev(l) {
@@ -9775,7 +9807,7 @@ function _pmSizeForLot(lot, view) {
   if (view === 'powder')  return lot.jarSize    ? jarSizeKey(lot.jarSize) : null;
   if (view === 'capsule') return (lot.bottleSize||'').trim() || null;
   // 'all' — pick jar for powder lots, bottle for capsule lots
-  var t = _pmLineType(lot.line);
+  var t = lot.ptype || _pmLineType(lot.line);
   if (t === 'powder')  return lot.jarSize    ? jarSizeKey(lot.jarSize) : null;
   if (t === 'capsule') return (lot.bottleSize||'').trim() || null;
   return null;
@@ -9873,7 +9905,7 @@ function renderCoverCell(months) {
 function _pmComputeView(lots, view) {
   var filtered = lots.filter(function(l){
     if (view === 'all') return true;
-    return _pmLineType(l.line) === view;
+    return (l.ptype || _pmLineType(l.line)) === view;
   });
   var container = {};
   var bucketCounts = {u1k:0, '1_2_5':0, '2_5_5':0, o5k:0};
