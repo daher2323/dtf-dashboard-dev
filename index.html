@@ -11646,6 +11646,19 @@ function generateSynopsis(safeId) {
       + (cd.ytdPct != null ? ', making up ' + cd.ytdPct + '% of our production YTD' : '') + '.');
   }
 
+  // ── Sentence 1b: recent pace, said in words where it contradicts the YTD figure ──
+  // The row shows both chips; this is where the two get reconciled rather than left
+  // for the reader to square. "But" only when they point opposite ways.
+  if (cd.pace) {
+    var pc = cd.pace, pUp = pc.chg > 0;
+    var against = (ytdChg !== null && ytdChg !== 0 && (ytdChg > 0) !== pUp) || (isNew && !pUp);
+    var pTxt = pc.last === 0
+      ? 'nothing has run in the last ' + PACE_WINDOW_DAYS + ' days, after ' + n(pc.prior) + ' units across ' + pc.priorLots + ' lots in the ' + PACE_WINDOW_DAYS + ' before'
+      : 'over the last ' + PACE_WINDOW_DAYS + ' days volume is ' + (pUp ? 'up ' : 'down ') + Math.round(Math.abs(pc.chg) * 100) + '% on the ' + PACE_WINDOW_DAYS + ' before ('
+        + n(pc.prior) + ' → ' + n(pc.last) + ' units, ' + pc.priorLots + ' → ' + pc.lastLots + ' lots)';
+    sentences.push((against ? 'But ' + pTxt : pTxt.charAt(0).toUpperCase() + pTxt.slice(1)) + '.');
+  }
+
   // ── Sentence 2: run size / lot count dynamic ──
   if (runChg !== null && Math.abs(runChg) > 4) {
     if (lotChg !== null && Math.abs(lotChg) > 4 && Math.sign(runChg) !== Math.sign(lotChg)) {
@@ -11720,6 +11733,57 @@ function safeid(s) {
   return s.replace(/[^a-zA-Z0-9]/g, '_');
 }
 
+// Recent pace: the last PACE_WINDOW_DAYS against the PACE_WINDOW_DAYS before, on rolling
+// windows that both end at complete days, never calendar quarters. A quarter in progress
+// compared against a finished one reads as a collapse three weeks in; two rolling windows
+// mean the same thing on any date. It is deliberately a different question from the YTD
+// tag: Alpha Lion is up 13.6% on last year while its last 90 days are down 48% on the 90
+// before, and both are true. So it only shows when it says something (|change| >= 40%),
+// and never on thin evidence:
+//   - the window carrying the signal needs PACE_MIN_LOTS (the prior one for a drop, the
+//     recent one for a rise), or one run landing either side of the boundary fires it;
+//   - the customer's first-ever run must predate the prior window, or an onboarding ramp
+//     reads as acceleration (that's what the New tag is for);
+//   - a customer gone quiet (0 in the last 90 after a real prior window) is -100%: the
+//     strongest slowdown signal there is, not a missing value.
+var PACE_WINDOW_DAYS = 90;
+var PACE_THRESHOLD = 0.40;
+var PACE_MIN_LOTS = 4;
+function _custPaceWindows(now) {
+  var t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var lastStart = new Date(t0); lastStart.setDate(t0.getDate() - (PACE_WINDOW_DAYS - 1));
+  var priorStart = new Date(lastStart); priorStart.setDate(lastStart.getDate() - PACE_WINDOW_DAYS);
+  var priorEnd = new Date(lastStart); priorEnd.setDate(lastStart.getDate() - 1);
+  var end = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate(), 23, 59, 59);
+  return { lastStart: lastStart, end: end, priorStart: priorStart, priorEnd: priorEnd };
+}
+// p: {last, prior, lastLots, priorLots, first} -> the pace object the row and synopsis
+// read, or null when there is nothing worth saying.
+function _custPace(p, w) {
+  if (!p || !(p.prior > 0) || !p.first || p.first >= w.priorStart) return null;
+  var chg = (p.last - p.prior) / p.prior;
+  if (Math.abs(chg) < PACE_THRESHOLD) return null;
+  if ((chg < 0 ? p.priorLots : p.lastLots) < PACE_MIN_LOTS) return null;
+  return { chg: chg, last: p.last, prior: p.prior, lastLots: p.lastLots, priorLots: p.priorLots };
+}
+function _custPaceRange(a, b) {
+  var o = { month: 'short', day: 'numeric' };
+  return a.toLocaleDateString('en-US', o) + ' – ' + b.toLocaleDateString('en-US', o);
+}
+// Outlined, so it can't be read as the filled YTD tag beside it; amber slowing, teal
+// picking up, again not the tag's red/green. Carries its window on its face.
+function _custPaceChipHTML(pace) {
+  if (!pace) return '';
+  var w = _custPaceWindows(new Date()), up = pace.chg > 0;
+  var tip = 'Last ' + PACE_WINDOW_DAYS + ' days (' + _custPaceRange(w.lastStart, w.end) + '): ' + pace.last.toLocaleString() + ' units, ' + pace.lastLots + ' lots\n'
+    + 'Prior ' + PACE_WINDOW_DAYS + ' days (' + _custPaceRange(w.priorStart, w.priorEnd) + '): ' + pace.prior.toLocaleString() + ' units, ' + pace.priorLots + ' lots\n\n'
+    + 'Recent momentum. Shown when the change is ' + Math.round(PACE_THRESHOLD * 100) + '% or more. '
+    + 'The tag beside it compares the year to date with last year; this compares the last ' + PACE_WINDOW_DAYS + ' days with the ' + PACE_WINDOW_DAYS + ' before.';
+  var col = up ? '#5DCAA5' : '#C9A227', bd = up ? '#0F6E56' : '#6b5514';
+  return '<span title="' + esc(tip) + '" style="display:inline-block;font-size:10px;font-weight:500;padding:1px 6px;border-radius:5px;border:0.5px solid ' + bd + ';color:' + col + ';font-variant-numeric:tabular-nums;cursor:help;white-space:nowrap;">'
+    + (up ? '&#x2191; ' : '&#x2193; ') + Math.round(Math.abs(pace.chg) * 100) + '% &middot; ' + PACE_WINDOW_DAYS + 'd</span>';
+}
+
 function computeCustomerData() {
   var allRowsCombined = allRows.concat(allRows25);
   var now = new Date();
@@ -11741,6 +11805,8 @@ function computeCustomerData() {
   var ytd25cutoffAll = new Date(nowYr-1, now.getMonth(), now.getDate(), 23, 59, 59);
   var ytd25startAll  = new Date(nowYr-1, 0, 1);
   var ytdStartAll    = new Date(nowYr, 0, 1);
+  var paceW = _custPaceWindows(now);
+  var custPaceRaw = {};  // cust -> {last, prior, lastLots:Set, priorLots:Set, first}
   allRowsCombined.forEach(function(r) {
     var prod = (r['Product']||'').trim(); if (!prod) return;
     var cust = prod.split('-')[0].trim(); if (!cust) return;
@@ -11760,6 +11826,10 @@ function computeCustomerData() {
     var mk = _custMonthKey(dt);
     if (!custMon[cust]) custMon[cust] = {};
     custMon[cust][mk] = (custMon[cust][mk] || 0) + num(r['Final Units']);
+    var pr0 = custPaceRaw[cust] || (custPaceRaw[cust] = { last: 0, prior: 0, lastLots: new Set(), priorLots: new Set(), first: null });
+    if (!pr0.first || dt < pr0.first) pr0.first = dt;
+    if (dt >= paceW.lastStart && dt <= paceW.end) { pr0.last += num(r['Final Units']); if (lot) pr0.lastLots.add(lot); }
+    else if (dt >= paceW.priorStart && dt < paceW.lastStart) { pr0.prior += num(r['Final Units']); if (lot) pr0.priorLots.add(lot); }
 
     // Per-product totals, accumulated in this same pass rather than per customer on demand:
     // the drill-down markup is built for EVERY customer (hidden until expanded, like Open
@@ -11898,7 +11968,9 @@ function computeCustomerData() {
     var mmap = custMon[cust] || {};
     var months = displayMonths.map(function(mk) { return { key: mk, units: mmap[mk] || 0 }; });
 
-    results.push({cust:cust, qtrs:qtrs, months:months, tag:tag, ytd:ytd, ytd25:ytd25, ytdLots:ytdLots, ytdLots25:ytdLots25, ytdPct:ytdPct, ytdPct25:ytdPct25, annuals:annuals, withData:withData, products:products});
+    var pr1 = custPaceRaw[cust];
+    var pace = pr1 ? _custPace({ last: pr1.last, prior: pr1.prior, lastLots: pr1.lastLots.size, priorLots: pr1.priorLots.size, first: pr1.first }, paceW) : null;
+    results.push({cust:cust, qtrs:qtrs, months:months, tag:tag, pace:pace, ytd:ytd, ytd25:ytd25, ytdLots:ytdLots, ytdLots25:ytdLots25, ytdPct:ytdPct, ytdPct25:ytdPct25, annuals:annuals, withData:withData, products:products});
   });
 
   // Sort by YTD units descending
@@ -12314,7 +12386,7 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       // Customer
       +'<div style="min-width:0;">'
         +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(cd.cust)+'">'+esc(cd.cust)+'</div>'
-        +'<div style="margin-top:4px;">'+tagBadge+'</div>'
+        +'<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;">'+tagBadge+_custPaceChipHTML(cd.pace)+'</div>'
       +'</div>'
       // Bar comparison (2025 / 2026)
       +barsCell
@@ -12421,7 +12493,7 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       + subtotalRow('2026 YTD', 'YTD', cd.ytd, cd.ytdLots, ytdAvgRun, cd.ytdPct);
 
     var custDataObj = {
-      name: cd.cust, tag: cd.tag,
+      name: cd.cust, tag: cd.tag, pace: cd.pace,
       ytd: cd.ytd, ytd25: cd.ytd25,
       ytdLots: cd.ytdLots, ytdLots25: cd.ytdLots25,
       ytdPct: cd.ytdPct, ytdPct25: cd.ytdPct25,
