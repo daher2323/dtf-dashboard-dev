@@ -2179,8 +2179,10 @@ function jarSizeKey(j) {
 // Avg deviation's own badge. deltaTag can't express it: deviation is signed and the target
 // is ZERO, so "lower is better" read -0.4% against -0.9% as a worsening (it moved 0.5 pts
 // closer to zero) and its whole-number rounding printed that half point as "+1%". Judged on
-// distance from zero, in points to one decimal, and grey inside DEV_DELTA_NOISE_PTS: a
-// half-point move in an average over ~1,500 lots is noise, not a result.
+// distance from zero, to one decimal, and grey inside DEV_DELTA_NOISE_PTS: a half-point
+// move in an average over ~1,500 lots is noise, not a result. The move is in percentage
+// points but labelled "%", like every other badge on the dashboard (Completion rate's
+// "0% vs 2025" is points too); the "2025: -0.9%" line above it makes the basis plain.
 var DEV_DELTA_NOISE_PTS = 1;
 function devDeltaTag(vCur, vComp, compYearLabel) {
   if (!vComp && vComp !== 0) return '';
@@ -2190,13 +2192,13 @@ function devDeltaTag(vCur, vComp, compYearLabel) {
   var bg, txt, label;
   if (Math.abs(move) < DEV_DELTA_NOISE_PTS) {
     bg = '#2c2c2a'; txt = '#888780';
-    label = (pts === '0.0' ? 'no change' : pts + ' pts ' + (move > 0 ? 'closer' : 'further')) + ' vs ' + vsLabel;
+    label = (pts === '0.0' ? 'no change' : pts + '% ' + (move > 0 ? 'closer' : 'further')) + ' vs ' + vsLabel;
   } else if (move > 0) {
-    bg = '#085041'; txt = '#9FE1CB'; label = pts + ' pts closer vs ' + vsLabel;
+    bg = '#085041'; txt = '#9FE1CB'; label = pts + '% closer vs ' + vsLabel;
   } else {
-    bg = '#791F1F'; txt = '#F09595'; label = pts + ' pts further vs ' + vsLabel;
+    bg = '#791F1F'; txt = '#F09595'; label = pts + '% further vs ' + vsLabel;
   }
-  var tip = 'Distance of the average lot deviation from zero, this period vs. ' + vsLabel + '. Moves under ' + DEV_DELTA_NOISE_PTS + ' pt stay grey.';
+  var tip = 'Distance of the average lot deviation from zero, this period vs. ' + vsLabel + '. Moves under ' + DEV_DELTA_NOISE_PTS + '% stay grey.';
   return '<div style="font-size:10px;color:#5f5e5a;margin-bottom:3px">' + vsLabel + ': ' + (vComp > 0 ? '+' : '') + vComp.toFixed(1) + '%</div>'
        + '<span title="' + esc(tip) + '" style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:' + bg + ';color:' + txt + '">' + label + '</span>';
 }
