@@ -10005,7 +10005,11 @@ function renderProductMix() {
           return '<div'+onClick+' style="border:'+borderWidth+' solid '+s.border+';border-radius:6px;padding:'+(isOpen?'11px 9px':'12px 10px')+';text-align:center;cursor:'+cursor+';transition:background .12s;background:'+bg+';opacity:'+opacity+';">'
             + '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'+b.label+'</div>'
             + '<div style="font-size:20px;font-weight:500;color:'+s.value+';font-variant-numeric:tabular-nums;line-height:1.1;">'+count.toLocaleString()+'</div>'
-            + '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;">lot'+(count===1?'':'s')+'</div>'
+            // Share of the view's lots (All / Powder / Capsule, via the toggle above). Every lot
+            // lands in exactly one bucket, so lotCount is the denominator and the four sum to 100.
+            + '<div style="font-size:10px;color:#5f5e5a;margin-top:2px;font-variant-numeric:tabular-nums;">'
+              + (data.lotCount ? '<span style="color:#888780;">'+(count / data.lotCount * 100).toFixed(1)+'%</span> of lots' : 'lot'+(count===1?'':'s'))
+            + '</div>'
           + '</div>';
         }).join('')
       + '</div>'
