@@ -4909,6 +4909,37 @@ var LOGI_COL = {
   priceQuoted:14, pricePaid:15, broker:16, bol:17, tracking:18, eta:19, status:20,
   boxCost:22, palletCost:23, laborCost:24, total:25
 };
+// The positions above are the sheet WITHOUT a Ship Mode column. When one is inserted
+// (planned right after Carrier), every column from that point on moves one place
+// right. So the map is resolved per fetch from the header row: find Ship Mode, shift
+// everything at or past it, then check the columns we key on still carry their
+// headers. That means the sheet can gain the column before or after this code
+// ships, with no window in which Broker/BOL/Tracking/Status read the wrong cells.
+// A header mismatch warns in the console; it doesn't guess a new layout.
+function _logiColMap(header) {
+  function norm(v) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim().toUpperCase(); }
+  var map = {}, k, i, at = -1;
+  for (k in LOGI_COL) if (LOGI_COL.hasOwnProperty(k)) map[k] = LOGI_COL[k];
+  for (i = 0; header && i < header.length; i++) if (norm(header[i]) === 'SHIP MODE') { at = i; break; }
+  if (at !== -1) {
+    for (k in map) if (map.hasOwnProperty(k) && map[k] >= at) map[k]++;
+    map.shipMode = at;
+  }
+  var expect = { date: 'DATE', carrier: 'CARRIER', broker: 'BROKER', bol: 'BOL', tracking: 'TRACKING', status: 'STATUS' };
+  for (k in expect) {
+    if (expect.hasOwnProperty(k) && header && norm(header[map[k]]) !== expect[k]) {
+      console.warn('[logistics] column ' + map[k] + ' should be "' + expect[k] + '" but reads "' + (header[map[k]] || '') + '". The sheet layout changed; update LOGI_COL.');
+    }
+  }
+  return map;
+}
+// A Ship Mode cell -> 'freight' | 'parcel' | 'courier', or '' when blank or unrecognised
+// (an unrecognised value falls back to the carrier rule rather than being guessed at).
+function _logiNormShipMode(v) {
+  var t = String(v == null ? '' : v).trim().toUpperCase();
+  if (t === 'FREIGHT' || t === 'PARCEL' || t === 'COURIER') return t.toLowerCase();
+  return '';
+}
 
 /* Dates DTF is closed. Excluded from business-day denominators.
    Format 'YYYY-MM-DD'. Update annually.
@@ -4985,16 +5016,17 @@ function parseLogistics(text) {
     if (!grid || grid.length < 3) return null;
     function cell(cells, idx){ return (cells && cells[idx] != null) ? String(cells[idx]).trim() : ''; }
     var out = [], lastDate = null, idx = 0;
+    var C = _logiColMap(grid[1]);
     for (var i = 2; i < grid.length; i++) {   // row 0 = junk, row 1 = header
       var cells = grid[i];
       if (!cells) continue;
-      var d = parseLocalDate(cell(cells, LOGI_COL.date));
+      var d = parseLocalDate(cell(cells, C.date));
       // Reject typo'd/out-of-range years (e.g. a "3/1/206" missing a digit) so the
       // row forward-fills from the date above instead of creating a bogus bucket.
       if (d && (d.getFullYear() < 2020 || d.getFullYear() > 2035)) d = null;
       if (d) lastDate = d;
-      var product = cell(cells, LOGI_COL.product);
-      var lot = cell(cells, LOGI_COL.lot);
+      var product = cell(cells, C.product);
+      var lot = cell(cells, C.lot);
       if (!product && !lot) continue;         // skip trailing/blank formula rows
       // Product follows the app-wide "Customer - Product" convention.
       var customer = product.indexOf('-') !== -1 ? product.split('-')[0].trim() : product;
@@ -5004,22 +5036,23 @@ function parseLogistics(text) {
         product: product,
         lot: lot,
         customer: customer,
-        goingTo: cell(cells, LOGI_COL.goingTo),
-        boxes: num(cell(cells, LOGI_COL.boxes)),
-        boxesRaw: cell(cells, LOGI_COL.boxes),  // kept so a blank Boxes cell reads as "not recorded", not 0
-        units: num(cell(cells, LOGI_COL.units)),
-        pallets: num(cell(cells, LOGI_COL.pallets)),
-        carrier: cell(cells, LOGI_COL.carrier),
-        broker: cell(cells, LOGI_COL.broker),
-        freight: num(cell(cells, LOGI_COL.pricePaid)),
-        bol: cell(cells, LOGI_COL.bol),
-        tracking: cell(cells, LOGI_COL.tracking),
-        eta: cell(cells, LOGI_COL.eta),
-        status: cell(cells, LOGI_COL.status),
-        boxCost: num(cell(cells, LOGI_COL.boxCost)),
-        palletCost: num(cell(cells, LOGI_COL.palletCost)),
-        laborCost: num(cell(cells, LOGI_COL.laborCost)),
-        total: num(cell(cells, LOGI_COL.total))
+        goingTo: cell(cells, C.goingTo),
+        boxes: num(cell(cells, C.boxes)),
+        boxesRaw: cell(cells, C.boxes),  // kept so a blank Boxes cell reads as "not recorded", not 0
+        units: num(cell(cells, C.units)),
+        pallets: num(cell(cells, C.pallets)),
+        carrier: cell(cells, C.carrier),
+        shipMode: C.shipMode != null ? _logiNormShipMode(cell(cells, C.shipMode)) : '',
+        broker: cell(cells, C.broker),
+        freight: num(cell(cells, C.pricePaid)),
+        bol: cell(cells, C.bol),
+        tracking: cell(cells, C.tracking),
+        eta: cell(cells, C.eta),
+        status: cell(cells, C.status),
+        boxCost: num(cell(cells, C.boxCost)),
+        palletCost: num(cell(cells, C.palletCost)),
+        laborCost: num(cell(cells, C.laborCost)),
+        total: num(cell(cells, C.total))
       });
     }
     return out;
@@ -6869,6 +6902,7 @@ function _logiBuildShipment(bucket) {
   var carrier = '', reference = '', referenceKind = '', eta = '', lots = [], firstStatus = '';
   var anyPickup = false, firstParcel = false, firstFreight = false;
   var modeRow = null, brokerRow = null;   // the row that decides _logiShipMode
+  var sheetMode = '';                     // Ship Mode as recorded on the sheet, if any row has it
   var inTransit = false, pendingPickup = false, canceled = false, i;
   // Every distinct reference in the bucket, so a grouped row never silently hides
   // one. Outbound days still legitimately group several parcels/BOLs under one
@@ -6898,6 +6932,7 @@ function _logiBuildShipment(bucket) {
     var lineIds = _logiLineIds(lotKey(r));
     lineCount += (lineIds.length || 1);
     lots.push({ lotNo: lotKey(r), ids: lineIds, product: r.product, boxes: r.boxes || 0, pallets: r.pallets || 0, units: u, stick: stick, serving: bulk });
+    if (!sheetMode && r.shipMode) sheetMode = r.shipMode;
     if (!modeRow && String(r.carrier || '').trim()) modeRow = r;
     if (!brokerRow && String(r.broker || '').trim()) brokerRow = r;
     var cc = carrierClass(r.carrier, r.broker);
@@ -6907,19 +6942,21 @@ function _logiBuildShipment(bucket) {
   }
   var klass = anyPickup ? 'pickup' : (firstParcel ? 'parcel' : (firstFreight ? 'freight' : 'none'));
   var mr = modeRow || brokerRow;
-  var mode = mr ? _logiShipMode(mr.carrier, mr.broker, (mr.tracking || '') + ' ' + (mr.bol || '')) : 'none';
+  // The sheet's Ship Mode, when filled, is a fact and wins. The carrier rule is the
+  // fallback for history and for rows nobody has filled in yet.
+  var mode = sheetMode || (mr ? _logiShipMode(mr.carrier, mr.broker, (mr.tracking || '') + ' ' + (mr.bol || '')) : 'none');
   // Representative status: surface an in-progress state (In Transit / Pending
   // Pickup) if any member line has one; otherwise fall back to the first status.
   var status = inTransit ? 'In Transit' : pendingPickup ? 'Pending Pickup' : (firstStatus || (canceled ? 'Canceled' : ''));
   return { key: bucket.key, date: bucket.date, customer: bucket.customer, lots: lots, lineCount: lineCount,
     boxes: boxes, pallets: pallets, units: units, stickUnits: stickUnits, servingUnits: servingUnits, boxesRecorded: boxesRecorded,
-    carrier: carrier, carrierClass: klass, mode: mode, reference: reference, referenceKind: referenceKind, references: refs, eta: eta, status: status };
+    carrier: carrier, carrierClass: klass, mode: mode, modeRecorded: !!sheetMode, reference: reference, referenceKind: referenceKind, references: refs, eta: eta, status: status };
 }
 
 // 3.1 — throughput over shipments within bounds.
 function computeThroughput(shipments, bounds) {
   var n = 0, lots = 0, boxes = 0, pallets = 0, units = 0, stickUnits = 0, servingUnits = 0, pickup = 0, i, entSet = {};
-  var modes = { freight: 0, parcel: 0, courier: 0, pickup: 0, none: 0 };
+  var modes = { freight: 0, parcel: 0, courier: 0, pickup: 0, none: 0 }, modeRecorded = 0;
   for (i = 0; i < shipments.length; i++) {
     var s = shipments[i];
     if (!s.date || s.date < bounds.start || s.date > bounds.end) continue;
@@ -6927,6 +6964,7 @@ function computeThroughput(shipments, bounds) {
     units += (s.units || 0); stickUnits += (s.stickUnits || 0); servingUnits += (s.servingUnits || 0);
     if (s.carrierClass === 'pickup') pickup++;
     modes[s.mode || 'none'] = (modes[s.mode || 'none'] || 0) + 1;
+    if (s.modeRecorded) modeRecorded++;
     entSet[(s.customer || '').toUpperCase()] = true;
   }
   var entities = 0, ek; for (ek in entSet) if (entSet.hasOwnProperty(ek)) entities++;
@@ -6939,7 +6977,7 @@ function computeThroughput(shipments, bounds) {
     boxesPerDay: bd ? (boxes / bd) : 0,
     unitsPerDay: bd ? (units / bd) : 0,
     pickupShipments: pickup,
-    modes: modes,
+    modes: modes, modeRecorded: modeRecorded,
     pickupPct: n ? (pickup / n * 100) : 0 };
 }
 function _logiAggRange(shipments, start, end) {
@@ -7039,10 +7077,14 @@ function _logiModeBits(m, num, skipZero) {
   if (oN) bits.push('<span title="' + esc(other.join('\n')) + '" style="cursor:help;border-bottom:1px dotted #444441;">' + _logiInt(oN) + ' other</span>');
   return bits;
 }
-// Second line of the Shipments tile.
-function _logiModeSplitHTML(m) {
+// Second line of the Shipments tile. Its tooltip says how much of the split is
+// recorded on the sheet (Ship Mode) and how much is still inferred from Carrier.
+function _logiModeSplitHTML(m, recorded, total) {
   function num(v) { return '<span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + _logiInt(v) + '</span>'; }
-  return '<div style="margin-top:3px;color:#888780;">' + _logiModeBits(m, num).join(' · ') + '</div>';
+  var src = !recorded ? 'Inferred from the Carrier column.'
+    : recorded >= total ? 'From the Ship Mode column.'
+    : 'Ship Mode recorded on ' + recorded + ' of ' + total + ' shipments; the rest inferred from Carrier.';
+  return '<div title="' + esc(src) + '" style="margin-top:3px;color:#888780;">' + _logiModeBits(m, num).join(' · ') + '</div>';
 }
 function _logiTilesHTML(cur, prev, prior) {
   var L = _logiLabels();
@@ -7057,7 +7099,7 @@ function _logiTilesHTML(cur, prev, prior) {
     ? '<span style="color:#C9A227;">' + exNotes.join(' · ') + '</span> excluded'
     : '<span style="color:#888780;">' + _logiInt(cur.unitsPerShipment) + ' units per shipment</span>';
   var shipSub = _logiDelta(cur.shipments, prev.shipments, priorHas, prior.label);
-  if (L.showModeSplit && cur.shipments) shipSub += _logiModeSplitHTML(cur.modes);
+  if (L.showModeSplit && cur.shipments) shipSub += _logiModeSplitHTML(cur.modes, cur.modeRecorded, cur.shipments);
   var unitsTile = L.showUnits ? _ordersCard('Units', _logiInt(cur.units), unitsSub, '#85B7EB') : '';
   var row1 = '<div style="' + GRID + 'margin-bottom:10px;">'
     + _ordersCard(L.unit, _logiInt(cur.shipments), shipSub)
