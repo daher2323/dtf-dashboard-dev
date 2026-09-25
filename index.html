@@ -2176,6 +2176,31 @@ function jarSizeKey(j) {
   return j;
 }
 
+// Avg deviation's own badge. deltaTag can't express it: deviation is signed and the target
+// is ZERO, so "lower is better" read -0.4% against -0.9% as a worsening (it moved 0.5 pts
+// closer to zero) and its whole-number rounding printed that half point as "+1%". Judged on
+// distance from zero, in points to one decimal, and grey inside DEV_DELTA_NOISE_PTS: a
+// half-point move in an average over ~1,500 lots is noise, not a result.
+var DEV_DELTA_NOISE_PTS = 1;
+function devDeltaTag(vCur, vComp, compYearLabel) {
+  if (!vComp && vComp !== 0) return '';
+  var vsLabel = compYearLabel || String(PRIOR_YEAR);
+  var move = Math.abs(vComp) - Math.abs(vCur);   // > 0: closer to zero
+  var pts = Math.abs(move).toFixed(1);
+  var bg, txt, label;
+  if (Math.abs(move) < DEV_DELTA_NOISE_PTS) {
+    bg = '#2c2c2a'; txt = '#888780';
+    label = (pts === '0.0' ? 'no change' : pts + ' pts ' + (move > 0 ? 'closer' : 'further')) + ' vs ' + vsLabel;
+  } else if (move > 0) {
+    bg = '#085041'; txt = '#9FE1CB'; label = pts + ' pts closer vs ' + vsLabel;
+  } else {
+    bg = '#791F1F'; txt = '#F09595'; label = pts + ' pts further vs ' + vsLabel;
+  }
+  var tip = 'Distance of the average lot deviation from zero, this period vs. ' + vsLabel + '. Moves under ' + DEV_DELTA_NOISE_PTS + ' pt stay grey.';
+  return '<div style="font-size:10px;color:#5f5e5a;margin-bottom:3px">' + vsLabel + ': ' + (vComp > 0 ? '+' : '') + vComp.toFixed(1) + '%</div>'
+       + '<span title="' + esc(tip) + '" style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:' + bg + ';color:' + txt + '">' + label + '</span>';
+}
+
 function deltaTag(vCur, vComp, isHigherBetter, fmt, compLabel, compYearLabel) {
   if (!vComp && vComp !== 0) return '';
   var diff = vCur - vComp, pctDiff = vComp ? ((diff/Math.abs(vComp))*100) : 0;
@@ -10264,7 +10289,7 @@ function renderPerformance() {
     +'<div class="metric"><div class="label">Avg units / day</div><div class="value">'+avgPerDay.toLocaleString()+'</div><div class="sub">'+uniqDays+' production days</div><div class="yoy">'+deltaTag(avgPerDay,avg25perDay,true,'pct',avg25perDay.toLocaleString(),compYearLabel)+'</div></div>'
     +'<div class="metric"><div class="label">Total lots</div><div class="value">'+totalLots.toLocaleString()+'</div><div class="sub">'+completeLots.length+' complete \u00b7 '+partialLots.length+' partial</div><div class="yoy">'+deltaTag(totalLots,total25lots,true,'pct',total25lots.toLocaleString(),compYearLabel)+'</div></div>'
     +'<div class="metric good"><div class="label">Completion rate</div><div class="value">'+compPct+'%</div><div class="sub">'+completeLots.length+' of '+totalLots+' lots</div><div class="yoy">'+deltaTag(compPct,comp25pct,true,'numPct',comp25pct+'%',compYearLabel)+'</div></div>'
-    +'<div class="metric '+devClass+'"><div class="label">Avg deviation</div><div class="value" style="color:'+devColor+'">'+(avgDev>0?'+':'')+avgDev.toFixed(1)+'%</div><div class="sub">'+highDevCount+' lots >5% under</div><div class="yoy">'+deltaTag(avgDev,avgDev25,false,'numPct',(avgDev25>0?'+':'')+avgDev25.toFixed(1)+'%',compYearLabel)+'</div></div>'
+    +'<div class="metric '+devClass+'"><div class="label">Avg deviation</div><div class="value" style="color:'+devColor+'">'+(avgDev>0?'+':'')+avgDev.toFixed(1)+'%</div><div class="sub">'+highDevCount+' lots >5% under</div><div class="yoy">'+devDeltaTag(avgDev,avgDev25,compYearLabel)+'</div></div>'
     +'<div class="metric"><div class="label">Unique products</div><div class="value">'+uniqueProds+'</div><div class="sub">across all lots</div><div class="yoy">'+deltaTag(uniqueProds,prods25,true,'pct',prods25.toLocaleString(),compYearLabel)+'</div></div>'
     +'<div class="metric"><div class="label">Unique customers</div><div class="value">'+uniqueCusts+'</div><div class="sub">across all lots</div><div class="yoy">'+deltaTag(uniqueCusts,custs25,true,'pct',custs25.toLocaleString(),compYearLabel)+'</div></div>';
 
