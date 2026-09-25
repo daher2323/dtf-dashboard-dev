@@ -1391,11 +1391,39 @@ function explainMaterialsDriftNow() { explainMaterialsDrift(MS_RECONCILE_DAYS, 1
 // and only with a copy of the destination sheet saved.
 function reconcileMaterialsForceNow() { reconcileMaterials(MS_RECONCILE_DAYS, true); }
 
+// ── Quiet hours ────────────────────────────────────────────────────────────
+// The trigger does nothing overnight. Two findings, both measured:
+//   - No pick has ever been logged between 5 PM and 5 AM: 0 of 17,533 timestamped rows,
+//     Jan 15 to Sep 25 2026. Picking runs 5 AM to about 4 PM, so an overnight run has
+//     nothing to copy.
+//   - On the nights of Sep 22 and Sep 23 the source workbook answered values.get with
+//     "The service is currently unavailable" from ~9:30 PM to ~6 AM, each call waiting
+//     ~3 min first. That was 33-35 alert emails a night for runs that could not have found
+//     a row. Cause unconfirmed: something scheduled on or around 0 DTF Logistics overnight.
+//     Look in its version history and Apps Script triggers, not here.
+// Nothing is lost by skipping: the sweep resumes from its pointer, so a pick logged late
+// still copies on the first run of the day, and onMaterialsFormSubmit (the instant path)
+// is not gated at all. The first run is 4:30, half an hour before the earliest pick.
+// This HIDES the overnight fault rather than fixing it; that is accepted because the
+// fault costs nothing while no one is picking. Only the trigger entry point is gated:
+// syncMaterials / reconcileMaterials run from the editor at any hour.
+var MS_QUIET_FROM = 18 * 60;         // 6:00 PM, minutes past midnight, script timezone
+var MS_QUIET_UNTIL = 4 * 60 + 30;    // 4:30 AM
+function _msInQuietHours(d) {
+  var tz = Session.getScriptTimeZone();
+  var m = parseInt(Utilities.formatDate(d, tz, 'H'), 10) * 60 + parseInt(Utilities.formatDate(d, tz, 'm'), 10);
+  return m >= MS_QUIET_FROM || m < MS_QUIET_UNTIL;
+}
+
 // Point the time-based trigger at this instead of syncMaterials: copy new rows, then repair the
 // last few days. The short window keeps it to two narrow reads when nothing has drifted, which
 // is almost always.
 function syncMaterialsAndReconcile() {
   var t0 = Date.now();
+  if (_msInQuietHours(new Date(t0))) {
+    console.log('Quiet hours (6:00 PM to 4:30 AM): no picks are logged overnight, so this run does nothing.');
+    return;
+  }
   syncMaterials();
   // The sweep is allowed to run to 4.5 minutes. Starting a reconcile after one of those walks
   // straight into the 6-minute wall and loses both. A backlog run gets the sweep to itself; the
