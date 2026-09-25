@@ -45,6 +45,10 @@
   .main-tab:not(.on) .main-tab-name { color: #5f5e5a; }
   .app-bar-right { display: flex; align-items: center; gap: 8px; padding-left: 16px; border-left: 0.5px solid #2c2c2a; margin-left: auto; flex-shrink: 0; }
   .sub-bar-outer { background: #0d1118; border-bottom: 0.5px solid #1a2030; position: sticky; top: 68px; z-index: 99; }
+  /* Phone-only copy of the Last 90 days chip, under the tag (shown by the <=768px block). */
+  .cust-pace-inline { display: none; }
+  /* Phone-only "· YoY" on the Growing / Declining / Flat tag, where the chip stacks beneath it. */
+  .cust-yoy-sfx { display: none; }
   .cust-col-header-outer { background: #0d0f10; border-bottom: 0.5px solid #2c2c2a; position: sticky; top: 108px; z-index: 98; display: none; }
   .sub-divider { width: 0.5px; height: 20px; background: #2c2c2a; flex-shrink: 0; }
 
@@ -427,7 +431,10 @@
     .customer-row > :nth-child(3),
     .customer-row > :nth-child(5),
     .customer-row > :nth-child(6),
-    .customer-row > :nth-child(8) { display: none !important; }
+    .customer-row > :nth-child(8),
+    .customer-row > :nth-child(9) { display: none !important; }
+    .cust-pace-inline { display: block; margin-top: 3px; }
+    .cust-yoy-sfx { display: inline; }
 
     /* Open Orders → Summary: the two "on the books" cards stack; the aging
        bucket tiles wrap 2-up instead of overflowing off-screen. */
@@ -11795,7 +11802,9 @@ var _PACE_REASON = {
   'restarted': ['restarted', 'Nothing ran in the prior ' + PACE_WINDOW_DAYS + ' days, so there is no base for a percentage.'],
   'idle':      ['no runs',   'Nothing ran in either window.']
 };
-function _custPaceChipHTML(pace) {
+// withWindow: append "· 90d". The Last 90 days column's header already names the window,
+// so only the phone copy under the tag, which has no header above it, carries it.
+function _custPaceChipHTML(pace, withWindow) {
   if (!pace) return '';
   var w = _custPaceWindows(new Date());
   var tip = 'Last ' + PACE_WINDOW_DAYS + ' days (' + _custPaceRange(w.lastStart, w.end) + '): ' + pace.last.toLocaleString() + ' units, ' + pace.lastLots + ' lots\n'
@@ -11811,10 +11820,10 @@ function _custPaceChipHTML(pace) {
     label = (flat ? '&#x2192; ' : up ? '&#x2191; ' : '&#x2193; ') + Math.round(Math.abs(pace.chg) * 100) + '%';
     if (pace.state === 'signal') { col = up ? '#5DCAA5' : '#C9A227'; bd = up ? '#0F6E56' : '#6b5514'; }
     tip += 'Recent momentum: the last ' + PACE_WINDOW_DAYS + ' days against the ' + PACE_WINDOW_DAYS + ' before. Coloured at '
-      + Math.round(PACE_THRESHOLD * 100) + '% or more, grey below. The tag above compares the year to date with last year.';
+      + Math.round(PACE_THRESHOLD * 100) + '% or more, grey below. The Growing / Declining tag compares the year to date with last year.';
   }
   return '<span title="' + esc(tip) + '" style="display:inline-block;font-size:10px;font-weight:500;padding:1px 6px;border-radius:5px;border:0.5px solid ' + bd + ';color:' + col + ';font-variant-numeric:tabular-nums;cursor:help;white-space:nowrap;">'
-    + label + ' &middot; ' + PACE_WINDOW_DAYS + 'd</span>';
+    + label + (withWindow ? ' &middot; ' + PACE_WINDOW_DAYS + 'd' : '') + '</span>';
 }
 
 function computeCustomerData() {
@@ -12212,8 +12221,8 @@ function renderCustomerOverview(healthData) {
   }
 
   // ── Column header row (sticky directly under the sub-bar: 68 + 40 = 108) ─
-  // Shared 8-column grid template: rank | customer | bars | units | lots | avg | %prod | sparkline.
-  var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px';
+  // Shared 9-column grid template: rank | customer | bars | units | lots | avg | %prod | sparkline | last 90 days.
+  var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px 84px';
   var _thStyle  = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;';
   var columnHeaderHTML = '<div class="customer-row cust-col-inline-hdr" style="position:sticky;top:108px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;">'
     +'<div></div>'
@@ -12224,6 +12233,7 @@ function renderCustomerOverview(healthData) {
     +'<div style="'+_thStyle+'text-align:right;">Avg run</div>'
     +'<div style="'+_thStyle+'text-align:right;">% prod</div>'
     +'<div></div>'
+    +'<div style="'+_thStyle+'text-align:right;" title="The last '+PACE_WINDOW_DAYS+' days compared to the '+PACE_WINDOW_DAYS+' days before">Last '+PACE_WINDOW_DAYS+' days</div>'
   +'</div>';
 
   // YoY badge for row metrics: green/red/gray with ±2% steady threshold.
@@ -12368,15 +12378,16 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
     var rank = cd.rank || (idx + 1);
 
     // Words, not a number: the YoY % is already on the row, in the Units YTD column beside
-    // the figure it describes, and printing it twice was redundant. "· YoY" names the window,
-    // matching the pace chip's "· 90d" beneath it, so "Growing" over "↓ 48%" reads as two
-    // windows rather than a contradiction. "New" has no prior year, so it carries no window.
+    // the figure it describes, and printing it twice was redundant. "· YoY" (.cust-yoy-sfx)
+    // shows on phones only: there the pace chip stacks right under the tag, and "Growing"
+    // over "↓ 48% · 90d" read as a contradiction. On desktop the chip has its own column,
+    // under its own header, so the suffix was just noise. "New" has no prior year and no suffix.
     var tagBadge = cd.tag==='growing'
-      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#085041;color:#9FE1CB;">&#x2191; Growing &middot; YoY</span>'
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#085041;color:#9FE1CB;">&#x2191; Growing<span class="cust-yoy-sfx"> &middot; YoY</span></span>'
       : cd.tag==='declining'
-      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#791F1F;color:#F09595;">&#x2193; Declining &middot; YoY</span>'
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#791F1F;color:#F09595;">&#x2193; Declining<span class="cust-yoy-sfx"> &middot; YoY</span></span>'
       : cd.tag==='flat'
-      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#2c2c2a;color:#888780;">&#x2192; Flat &middot; YoY</span>'
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#2c2c2a;color:#888780;">&#x2192; Flat<span class="cust-yoy-sfx"> &middot; YoY</span></span>'
       : '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#0C447C;color:#85B7EB;">New</span>';
 
     var ytdAvgRun   = cd.ytdLots   > 0 ? Math.round(cd.ytd   / cd.ytdLots)   : 0;
@@ -12423,9 +12434,10 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       // Customer
       +'<div style="min-width:0;">'
         +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(cd.cust)+'">'+esc(cd.cust)+'</div>'
-        // Stacked, always: YTD tag on top, 90-day pace beneath. Wrapping on width made the
-        // layout depend on how long the tag's text happened to be.
-        +'<div style="margin-top:4px;display:flex;flex-direction:column;align-items:flex-start;gap:3px;">'+tagBadge+_custPaceChipHTML(cd.pace)+'</div>'
+        +'<div style="margin-top:4px;">'+tagBadge+'</div>'
+        // Phones only: the Last 90 days column is hidden there (the row keeps four tracks),
+        // so the chip rides under the tag instead, with its window spelled out.
+        +'<div class="cust-pace-inline">'+_custPaceChipHTML(cd.pace, true)+'</div>'
       +'</div>'
       // Bar comparison (2025 / 2026)
       +barsCell
@@ -12451,6 +12463,9 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       +'</div>'
       // Sparkline
       +sparklineHTML
+      // Last 90 days: its own column, so the name cell stays two lines and the header names
+      // the window (the chip then doesn't have to).
+      +'<div style="text-align:right;">'+_custPaceChipHTML(cd.pace)+'</div>'
     +'</div>';
 
     // Expandable quarterly detail. Each row is now clickable when it has
