@@ -34,8 +34,10 @@ var DEST_SHEET_ID = '1PouHBkH48hJ6XT8mIQ2djixJ8rxBqtdohVJupy3Hp9Q';
 // deployed by pasting it over the editor's copy, which would otherwise blank the constant on
 // every deploy and drop the sync back to the bind with nothing but a log line to notice it by.
 // A value here always wins, so it stays the way to point the sync somewhere else.
+// Committed since 2026-09-25 (0 DTF Logistics) so a full-file paste carries it and nothing hangs
+// on the remembered property. An id alone grants nothing; access is the workbook's sharing.
 var PROP_SOURCE_ID = 'materialsSync.sourceId';
-var SOURCE_SS_ID = '';
+var SOURCE_SS_ID = '180zyGjc-0jwymURcCJxxxLLQO5D6RrdCzWxBk7EOvgk';
 var SOURCE_SHEET_NAME = 'Materials';
 var KEY_HEADERS = ['Order Lot #', 'Part #'];
 
