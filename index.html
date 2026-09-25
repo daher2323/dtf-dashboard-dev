@@ -7024,18 +7024,25 @@ function _logiDelta(curVal, prevVal, priorHasData, label) {
   var up = p > 0, col = up ? '#9FE1CB' : '#F09595', arrow = up ? '▲' : '▼';
   return '<span style="color:' + col + ';">' + arrow + ' ' + (up ? '+' : '') + p.toFixed(1) + '%</span> <span style="color:#5f5e5a;">' + esc(label) + '</span>';
 }
-// Second line of the Shipments tile: freight · parcel, then whatever the Carrier
-// column can't classify as one "other" figure, itemised in its tooltip.
-function _logiModeSplitHTML(m) {
+// Freight, parcel, then whatever the Carrier column can't classify as one "other"
+// figure, itemised in its tooltip. Shared by the Shipments tile and the log's day
+// headers; num() styles the figures for the surface they sit on. skipZero drops an
+// empty freight/parcel figure: a day header reads "(2 freight)", while the tile
+// keeps both, since a period with no parcel at all is itself worth seeing.
+function _logiModeBits(m, num, skipZero) {
   var bits = [], other = [], oN = 0;
-  function num(v) { return '<span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + _logiInt(v) + '</span>'; }
-  bits.push(num(m.freight) + ' freight');
-  bits.push(num(m.parcel) + ' parcel');
+  if (m.freight || !skipZero) bits.push(num(m.freight) + ' freight');
+  if (m.parcel || !skipZero) bits.push(num(m.parcel) + ' parcel');
   if (m.courier) { oN += m.courier; other.push(m.courier + ' local courier'); }
   if (m.pickup) { oN += m.pickup; other.push(m.pickup + ' customer pickup, carrier not recorded'); }
   if (m.none) { oN += m.none; other.push(m.none + ' carrier not recorded'); }
   if (oN) bits.push('<span title="' + esc(other.join('\n')) + '" style="cursor:help;border-bottom:1px dotted #444441;">' + _logiInt(oN) + ' other</span>');
-  return '<div style="margin-top:3px;color:#888780;">' + bits.join(' · ') + '</div>';
+  return bits;
+}
+// Second line of the Shipments tile.
+function _logiModeSplitHTML(m) {
+  function num(v) { return '<span style="color:#cfcdc7;font-variant-numeric:tabular-nums;">' + _logiInt(v) + '</span>'; }
+  return '<div style="margin-top:3px;color:#888780;">' + _logiModeBits(m, num).join(' · ') + '</div>';
 }
 function _logiTilesHTML(cur, prev, prior) {
   var L = _logiLabels();
@@ -7574,10 +7581,11 @@ function _logiLogHTML(shipments, bounds) {
   var days = [], dmap = {};
   for (i = 0; i < inRange.length; i++) {
     var sp = inRange[i], dk = _logiYMD(sp.date);
-    if (!dmap[dk]) { dmap[dk] = { date: sp.date, list: [], ships: 0, lots: 0, boxes: 0, pallets: 0, units: 0, stick: 0, serving: 0, unrec: 0 }; days.push(dmap[dk]); }
+    if (!dmap[dk]) { dmap[dk] = { date: sp.date, list: [], ships: 0, lots: 0, boxes: 0, pallets: 0, units: 0, stick: 0, serving: 0, unrec: 0, modes: { freight: 0, parcel: 0, courier: 0, pickup: 0, none: 0 } }; days.push(dmap[dk]); }
     var g = dmap[dk];
     g.list.push(sp); g.ships++; g.lots += _logiLineCount(sp); g.pallets += sp.pallets; g.units += (sp.units || 0); g.stick += (sp.stickUnits || 0); g.serving += (sp.servingUnits || 0);
     if (sp.boxesRecorded) g.boxes += sp.boxes; else g.unrec++;
+    g.modes[sp.mode || 'none'] = (g.modes[sp.mode || 'none'] || 0) + 1;
   }
   // Outbound adds a Units column; column headers keep the numeric triple unambiguous.
   var showU = L.showUnits;
@@ -7600,6 +7608,8 @@ function _logiLogHTML(shipments, bounds) {
     if (shown >= cap) { truncated = true; break; }
     var day = days[d];
     var hdrDate = day.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    // "11 shipments (2 freight, 9 parcel)": the tile's split, per day.
+    var modeNote = L.showModeSplit ? ' (' + _logiModeBits(day.modes, _logiInt, true).join(', ') + ')' : '';
     var unrecNote = (L.showBoxesNote && day.unrec) ? ' <span style="color:#5f5e5a;">(' + day.unrec + ' ' + (day.unrec === 1 ? L.unitOne : L.unitMany) + ', boxes not recorded)</span>' : '';
     var unitsSummary = showU ? (_logiInt(day.units) + ' units · '
       + (day.stick > 0 ? '<span style="color:#C9A227;">' + _logiInt(day.stick) + ' stick packs</span> · ' : '')
@@ -7607,7 +7617,7 @@ function _logiLogHTML(shipments, bounds) {
     html += '<div style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:10px;overflow:hidden;margin-bottom:12px;">'
       + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;padding:11px 16px;background:#141618;border-bottom:0.5px solid #2c2c2a;">'
       +   '<span style="font-size:15px;font-weight:500;color:#e8e6e0;">' + esc(hdrDate) + '</span>'
-      +   '<span style="font-size:11px;color:#888780;font-variant-numeric:tabular-nums;">' + day.ships + ' ' + (day.ships === 1 ? L.unitOne : L.unitMany) + ' · ' + unitsSummary + _logiInt(day.lots) + ' ' + L.lineShort.toLowerCase() + ' · ' + _logiInt(day.boxes) + ' boxes · ' + _logiInt(day.pallets) + ' pallets' + unrecNote + '</span>'
+      +   '<span style="font-size:11px;color:#888780;font-variant-numeric:tabular-nums;">' + day.ships + ' ' + (day.ships === 1 ? L.unitOne : L.unitMany) + modeNote + ' · ' + unitsSummary + _logiInt(day.lots) + ' ' + L.lineShort.toLowerCase() + ' · ' + _logiInt(day.boxes) + ' boxes · ' + _logiInt(day.pallets) + ' pallets' + unrecNote + '</span>'
       + '</div>'
       + colHeader;
     for (k = 0; k < day.list.length; k++) {
