@@ -12222,7 +12222,7 @@ function renderCustomerOverview(healthData) {
 
   // ── Column header row (sticky directly under the sub-bar: 68 + 40 = 108) ─
   // Shared 9-column grid template: rank | customer | bars | units | lots | avg | %prod | sparkline | last 90 days.
-  var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px 84px';
+  var _gridCols = '28px 140px 1fr 80px 80px 80px 60px 40px 68px';
   var _thStyle  = 'font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;';
   var columnHeaderHTML = '<div class="customer-row cust-col-inline-hdr" style="position:sticky;top:108px;z-index:9;background:#141618;border-bottom:0.5px solid #2c2c2a;display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:14px 16px;">'
     +'<div></div>'
@@ -12233,7 +12233,10 @@ function renderCustomerOverview(healthData) {
     +'<div style="'+_thStyle+'text-align:right;">Avg run</div>'
     +'<div style="'+_thStyle+'text-align:right;">% prod</div>'
     +'<div></div>'
-    +'<div style="'+_thStyle+'text-align:right;" title="The last '+PACE_WINDOW_DAYS+' days compared to the '+PACE_WINDOW_DAYS+' days before">Last '+PACE_WINDOW_DAYS+' days</div>'
+    // justify-self:end + nowrap: the label is wider than its 68px track, and sized to its own
+    // text it overhangs LEFT into the empty header space above the sparkline. Sizing the track
+    // to the label instead left a wide gap between the sparkline and the figures beneath it.
+    +'<div style="'+_thStyle+'text-align:right;justify-self:end;white-space:nowrap;" title="The last '+PACE_WINDOW_DAYS+' days compared to the '+PACE_WINDOW_DAYS+' days before">Last '+PACE_WINDOW_DAYS+' days</div>'
   +'</div>';
 
   // YoY badge for row metrics: green/red/gray with ±2% steady threshold.
@@ -12464,8 +12467,12 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       // Sparkline
       +sparklineHTML
       // Last 90 days: its own column, so the name cell stays two lines and the header names
-      // the window (the chip then doesn't have to).
-      +'<div style="text-align:right;">'+_custPaceChipHTML(cd.pace)+'</div>'
+      // the window (the chip then doesn't have to). Same shape as the columns beside it: the
+      // figure on top (units in the window), its comparison beneath.
+      +'<div style="text-align:right;">'
+        +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;" title="Units in the last '+PACE_WINDOW_DAYS+' days">'+(cd.pace && cd.pace.last ? cd.pace.last.toLocaleString() : '&#x2014;')+'</div>'
+        +'<div style="margin-top:2px;">'+_custPaceChipHTML(cd.pace)+'</div>'
+      +'</div>'
     +'</div>';
 
     // Expandable quarterly detail. Each row is now clickable when it has
