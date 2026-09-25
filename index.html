@@ -11649,12 +11649,13 @@ function generateSynopsis(safeId) {
   // ── Sentence 1b: recent pace, said in words where it contradicts the YTD figure ──
   // The row shows both chips; this is where the two get reconciled rather than left
   // for the reader to square. "But" only when they point opposite ways.
-  if (cd.pace) {
+  // Only the signal tier earns a sentence; a grey chip is context, not news.
+  if (cd.pace && cd.pace.state === 'signal') {
     var pc = cd.pace, pUp = pc.chg > 0;
     var against = (ytdChg !== null && ytdChg !== 0 && (ytdChg > 0) !== pUp) || (isNew && !pUp);
     var pTxt = pc.last === 0
-      ? 'nothing has run in the last ' + PACE_WINDOW_DAYS + ' days, after ' + n(pc.prior) + ' units across ' + pc.priorLots + ' lots in the ' + PACE_WINDOW_DAYS + ' before'
-      : 'over the last ' + PACE_WINDOW_DAYS + ' days volume is ' + (pUp ? 'up ' : 'down ') + Math.round(Math.abs(pc.chg) * 100) + '% on the ' + PACE_WINDOW_DAYS + ' before ('
+      ? 'nothing has run in the last ' + PACE_WINDOW_DAYS + ' days, after ' + n(pc.prior) + ' units across ' + pc.priorLots + ' lots in the ' + PACE_WINDOW_DAYS + ' days before'
+      : 'over the last ' + PACE_WINDOW_DAYS + ' days volume is ' + (pUp ? 'up ' : 'down ') + Math.round(Math.abs(pc.chg) * 100) + '% compared to the ' + PACE_WINDOW_DAYS + ' days before ('
         + n(pc.prior) + ' → ' + n(pc.last) + ' units, ' + pc.priorLots + ' → ' + pc.lastLots + ' lots)';
     sentences.push((against ? 'But ' + pTxt : pTxt.charAt(0).toUpperCase() + pTxt.slice(1)) + '.');
   }
@@ -11738,8 +11739,11 @@ function safeid(s) {
 // compared against a finished one reads as a collapse three weeks in; two rolling windows
 // mean the same thing on any date. It is deliberately a different question from the YTD
 // tag: Alpha Lion is up 13.6% on last year while its last 90 days are down 48% on the 90
-// before, and both are true. So it only shows when it says something (|change| >= 40%),
-// and never on thin evidence:
+// before, and both are true. Every row carries a chip, in two strengths: coloured at
+// |change| >= PACE_THRESHOLD (the "worth a call" tier), grey below it, so +39% and -39%
+// still read differently from nothing, without every row shouting. Within PACE_FLAT the
+// arrow goes sideways. A number is only printed on real evidence; otherwise the chip
+// states why there isn't one (new / few lots / restarted / no runs):
 //   - the window carrying the signal needs PACE_MIN_LOTS (the prior one for a drop, the
 //     recent one for a rise), or one run landing either side of the boundary fires it;
 //   - the customer's first-ever run must predate the prior window, or an onboarding ramp
@@ -11749,6 +11753,7 @@ function safeid(s) {
 var PACE_WINDOW_DAYS = 90;
 var PACE_THRESHOLD = 0.40;
 var PACE_MIN_LOTS = 4;
+var PACE_FLAT = 0.10;
 function _custPaceWindows(now) {
   var t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   var lastStart = new Date(t0); lastStart.setDate(t0.getDate() - (PACE_WINDOW_DAYS - 1));
@@ -11758,30 +11763,58 @@ function _custPaceWindows(now) {
   return { lastStart: lastStart, end: end, priorStart: priorStart, priorEnd: priorEnd };
 }
 // p: {last, prior, lastLots, priorLots, first} -> the pace object the row and synopsis
-// read, or null when there is nothing worth saying.
+// read. state is one of:
+//   'signal'    |change| >= PACE_THRESHOLD on enough lots: coloured, and the synopsis says it
+//   'muted'     a real number below the threshold: grey
+//   'new'       first-ever run inside the comparison window: a ramp, not a trend
+//   'thin'      under PACE_MIN_LOTS in the window carrying the change: one run would decide it
+//   'restarted' nothing in the prior window, runs in the last: no base for a percentage
+//   'idle'      nothing in either window
+// chg is set only for 'signal' and 'muted'.
 function _custPace(p, w) {
-  if (!p || !(p.prior > 0) || !p.first || p.first >= w.priorStart) return null;
+  var base = { state: 'idle', chg: null, last: p ? p.last : 0, prior: p ? p.prior : 0, lastLots: p ? p.lastLots : 0, priorLots: p ? p.priorLots : 0 };
+  if (!p || (!(p.last > 0) && !(p.prior > 0))) return base;
+  if (!p.first || p.first >= w.priorStart) { base.state = 'new'; return base; }
+  if (!(p.prior > 0)) { base.state = 'restarted'; return base; }
   var chg = (p.last - p.prior) / p.prior;
-  if (Math.abs(chg) < PACE_THRESHOLD) return null;
-  if ((chg < 0 ? p.priorLots : p.lastLots) < PACE_MIN_LOTS) return null;
-  return { chg: chg, last: p.last, prior: p.prior, lastLots: p.lastLots, priorLots: p.priorLots };
+  if ((chg < 0 ? p.priorLots : p.lastLots) < PACE_MIN_LOTS) { base.state = 'thin'; return base; }
+  base.chg = chg;
+  base.state = Math.abs(chg) >= PACE_THRESHOLD ? 'signal' : 'muted';
+  return base;
 }
 function _custPaceRange(a, b) {
   var o = { month: 'short', day: 'numeric' };
   return a.toLocaleDateString('en-US', o) + ' – ' + b.toLocaleDateString('en-US', o);
 }
-// Outlined, so it can't be read as the filled YTD tag beside it; amber slowing, teal
-// picking up, again not the tag's red/green. Carries its window on its face.
+// Outlined, so it can't be read as the filled YTD tag above it; amber slowing, teal picking
+// up, again not the tag's red/green, and only at the signal tier. Everything below that is
+// grey. Carries its window on its face.
+var _PACE_REASON = {
+  'new':       ['new',       'First run falls inside the comparison window, so this would measure onboarding, not a trend.'],
+  'thin':      ['few lots',  'Fewer than ' + PACE_MIN_LOTS + ' lots in the window carrying the change, so a single run would decide the percentage.'],
+  'restarted': ['restarted', 'Nothing ran in the prior ' + PACE_WINDOW_DAYS + ' days, so there is no base for a percentage.'],
+  'idle':      ['no runs',   'Nothing ran in either window.']
+};
 function _custPaceChipHTML(pace) {
   if (!pace) return '';
-  var w = _custPaceWindows(new Date()), up = pace.chg > 0;
+  var w = _custPaceWindows(new Date());
   var tip = 'Last ' + PACE_WINDOW_DAYS + ' days (' + _custPaceRange(w.lastStart, w.end) + '): ' + pace.last.toLocaleString() + ' units, ' + pace.lastLots + ' lots\n'
-    + 'Prior ' + PACE_WINDOW_DAYS + ' days (' + _custPaceRange(w.priorStart, w.priorEnd) + '): ' + pace.prior.toLocaleString() + ' units, ' + pace.priorLots + ' lots\n\n'
-    + 'Recent momentum. Shown when the change is ' + Math.round(PACE_THRESHOLD * 100) + '% or more. '
-    + 'The tag beside it compares the year to date with last year; this compares the last ' + PACE_WINDOW_DAYS + ' days with the ' + PACE_WINDOW_DAYS + ' before.';
-  var col = up ? '#5DCAA5' : '#C9A227', bd = up ? '#0F6E56' : '#6b5514';
+    + 'Prior ' + PACE_WINDOW_DAYS + ' days (' + _custPaceRange(w.priorStart, w.priorEnd) + '): ' + pace.prior.toLocaleString() + ' units, ' + pace.priorLots + ' lots\n\n';
+  var label, col = '#888780', bd = '#444441';
+  if (pace.chg === null) {
+    var rsn = _PACE_REASON[pace.state] || _PACE_REASON.idle;
+    label = rsn[0];
+    col = '#5f5e5a'; bd = '#2c2c2a';
+    tip += rsn[1];
+  } else {
+    var up = pace.chg > 0, flat = Math.abs(pace.chg) < PACE_FLAT;
+    label = (flat ? '&#x2192; ' : up ? '&#x2191; ' : '&#x2193; ') + Math.round(Math.abs(pace.chg) * 100) + '%';
+    if (pace.state === 'signal') { col = up ? '#5DCAA5' : '#C9A227'; bd = up ? '#0F6E56' : '#6b5514'; }
+    tip += 'Recent momentum: the last ' + PACE_WINDOW_DAYS + ' days against the ' + PACE_WINDOW_DAYS + ' before. Coloured at '
+      + Math.round(PACE_THRESHOLD * 100) + '% or more, grey below. The tag above compares the year to date with last year.';
+  }
   return '<span title="' + esc(tip) + '" style="display:inline-block;font-size:10px;font-weight:500;padding:1px 6px;border-radius:5px;border:0.5px solid ' + bd + ';color:' + col + ';font-variant-numeric:tabular-nums;cursor:help;white-space:nowrap;">'
-    + (up ? '&#x2191; ' : '&#x2193; ') + Math.round(Math.abs(pace.chg) * 100) + '% &middot; ' + PACE_WINDOW_DAYS + 'd</span>';
+    + label + ' &middot; ' + PACE_WINDOW_DAYS + 'd</span>';
 }
 
 function computeCustomerData() {
@@ -11969,7 +12002,7 @@ function computeCustomerData() {
     var months = displayMonths.map(function(mk) { return { key: mk, units: mmap[mk] || 0 }; });
 
     var pr1 = custPaceRaw[cust];
-    var pace = pr1 ? _custPace({ last: pr1.last, prior: pr1.prior, lastLots: pr1.lastLots.size, priorLots: pr1.priorLots.size, first: pr1.first }, paceW) : null;
+    var pace = _custPace(pr1 ? { last: pr1.last, prior: pr1.prior, lastLots: pr1.lastLots.size, priorLots: pr1.priorLots.size, first: pr1.first } : null, paceW);
     results.push({cust:cust, qtrs:qtrs, months:months, tag:tag, pace:pace, ytd:ytd, ytd25:ytd25, ytdLots:ytdLots, ytdLots25:ytdLots25, ytdPct:ytdPct, ytdPct25:ytdPct25, annuals:annuals, withData:withData, products:products});
   });
 
@@ -12334,13 +12367,17 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
     var expanded = !!_chExpanded[sid];
     var rank = cd.rank || (idx + 1);
 
+    // Words, not a number: the YoY % is already on the row, in the Units YTD column beside
+    // the figure it describes, and printing it twice was redundant. "· YoY" names the window,
+    // matching the pace chip's "· 90d" beneath it, so "Growing" over "↓ 48%" reads as two
+    // windows rather than a contradiction. "New" has no prior year, so it carries no window.
     var tagBadge = cd.tag==='growing'
-      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;">&#x2191; Growing</span>'
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#085041;color:#9FE1CB;">&#x2191; Growing &middot; YoY</span>'
       : cd.tag==='declining'
-      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;">&#x2193; Declining</span>'
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#791F1F;color:#F09595;">&#x2193; Declining &middot; YoY</span>'
       : cd.tag==='flat'
-      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2c2c2a;color:#888780;">&#x2192; Flat</span>'
-      : '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#0C447C;color:#85B7EB;">New</span>';
+      ? '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#2c2c2a;color:#888780;">&#x2192; Flat &middot; YoY</span>'
+      : '<span style="display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;white-space:nowrap;background:#0C447C;color:#85B7EB;">New</span>';
 
     var ytdAvgRun   = cd.ytdLots   > 0 ? Math.round(cd.ytd   / cd.ytdLots)   : 0;
     var ytdAvgRun25 = cd.ytdLots25 > 0 ? Math.round(cd.ytd25 / cd.ytdLots25) : 0;
@@ -12386,7 +12423,9 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       // Customer
       +'<div style="min-width:0;">'
         +'<div style="font-size:13px;font-weight:500;color:#e8e6e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(cd.cust)+'">'+esc(cd.cust)+'</div>'
-        +'<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;">'+tagBadge+_custPaceChipHTML(cd.pace)+'</div>'
+        // Stacked, always: YTD tag on top, 90-day pace beneath. Wrapping on width made the
+        // layout depend on how long the tag's text happened to be.
+        +'<div style="margin-top:4px;display:flex;flex-direction:column;align-items:flex-start;gap:3px;">'+tagBadge+_custPaceChipHTML(cd.pace)+'</div>'
       +'</div>'
       // Bar comparison (2025 / 2026)
       +barsCell
