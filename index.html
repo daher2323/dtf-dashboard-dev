@@ -13217,6 +13217,10 @@ function matUnit(name) { return isSoftgel(name) ? 'softgels' : 'kg'; }
 // wherever there is room to spell it: the purple row badge, tooltips, the expanded
 // panel, and the export.
 function matUnitShort(name) { return isSoftgel(name) ? 'sg' : 'kg'; }
+// Committed of nothing. Printed as a figure, not an em dash: "—" reads as "not tracked" or a
+// failed join, when it means nothing on the books needs this material. Softgels are counted
+// in whole units, so only kg carries the decimal.
+function fmtZeroQty(u) { return (u === 'kg' ? '0.0' : '0') + ' ' + u; }
 
 // Largest-remainder apportionment: shares that sum to EXACTLY 100 at the given
 // decimal precision. Rounding each share independently can total 100.1% on a skewed
@@ -15035,7 +15039,7 @@ function renderMatInline(m, idx) {
         + '<td style="padding:5px 10px;font-size:11px;font-weight:500;color:#e8e6e0;white-space:nowrap;">'+esc(pb.partNum)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;color:#888780;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(invMat)+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#85B7EB;white-space:nowrap;">'+fmtStockI(pb.stock)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?fmtStockQty(pb.demand)+' '+unit:'—')+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?fmtStockQty(pb.demand)+' '+unit:fmtZeroQty(unit))+'</td>'
         + '<td style="padding:5px 14px;font-size:11px;text-align:right;color:#888780;">'+pb.lotCount+'</td>'
         + '</tr>';
     }).join('');
@@ -15046,7 +15050,7 @@ function renderMatInline(m, idx) {
             + '<div style="font-size:15px;font-weight:500;color:#85B7EB;font-family:system-ui;">'+fmtStockI(m.stock)+'</div></div>'
           + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
           + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Committed</div>'
-            + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?fmtStockQty(m.demand)+' '+unit:'—')+'</div></div>'
+            + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?fmtStockQty(m.demand)+' '+unit:fmtZeroQty(unit))+'</div></div>'
           + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
           + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Available</div>'
             + '<div style="font-size:15px;font-weight:500;color:'+aftNCol+';font-family:system-ui;">'+aftNTxt+'</div></div>'
@@ -15115,7 +15119,7 @@ function renderMatInline(m, idx) {
         + '<td style="padding:5px 10px;font-size:11px;color:'+(dim?'#5f5e5a':'#888780')+';max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(matLabel)
           +(dim?' <span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#2c2c2a;color:#888780;">no usage</span>':'')+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#85B7EB;white-space:nowrap;">'+fmtStockI(pb.stock)+'</td>'
-        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?fmtStockQty(pb.demand)+' '+unit:'—')+'</td>'
+        + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(pb.demand>0?fmtStockQty(pb.demand)+' '+unit:fmtZeroQty(unit))+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:'+(dim?'#5f5e5a':'#e8e6e0')+';white-space:nowrap;">'+(dim?'—':fmt(pb.lastMonth))+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.avg3))+'</td>'
         + '<td style="padding:5px 10px;font-size:11px;text-align:right;color:#888780;white-space:nowrap;">'+(dim?'—':fmt(pb.totalKg))+'</td>'
@@ -15168,7 +15172,7 @@ function renderMatInline(m, idx) {
           + '<div style="font-size:15px;font-weight:500;color:#85B7EB;font-family:system-ui;">'+fmtStockI(m.stock)+'</div></div>'
         + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
         + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Committed</div>'
-          + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?fmtStockQty(m.demand)+' '+unit:'—')+'</div></div>'
+          + '<div style="font-size:15px;font-weight:500;color:#e8e6e0;font-family:system-ui;">'+(m.demand>0?fmtStockQty(m.demand)+' '+unit:fmtZeroQty(unit))+'</div></div>'
         + '<div style="width:0.5px;background:#2c2c2a;height:28px;"></div>'
         + '<div><div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:2px;">Available</div>'
           + '<div style="font-size:15px;font-weight:500;color:'+aftCol+';font-family:system-ui;">'+aftTxt+'</div></div>'
@@ -15679,7 +15683,7 @@ function renderMaterialsImpl() {
   }
   // Forthcoming demand cell: 0 = nothing on the books ("—"), else the exact qty.
   function fmtDemand(v, u){
-    return v > 0 ? fmtStockQty(v)+' '+u : '<span style="color:#5f5e5a;">—</span>';
+    return v > 0 ? fmtStockQty(v)+' '+u : '<span style="color:#5f5e5a;">'+fmtZeroQty(u)+'</span>';
   }
   // Available badge: net = on-hand − committed. "Surplus" (green) when >= 0,
   // "Short" (red) when negative — the word carries the sign, so the value is shown
