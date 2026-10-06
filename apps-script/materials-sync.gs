@@ -251,12 +251,11 @@ function _msSubmitFromEvent(e) {
     // The destination's own header row is the write template: it is ~200 ms away, and it is the
     // shape the destination actually has, which is the shape this append has to match. Reading
     // it under the lock also means getLastRow() below cannot be a value the sweep has already
-    // moved past. If the form has since gained a column, the sweep sees the header mismatch and
-    // rebuilds the sheet from the source, so a row written to the older shape is not a dead end.
+    // moved past. If the form has since gained a column at the end, the sweep extends the header
+    // row and the reconcile replaces this row with the source's full-width one.
     var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
     if (dest.getLastRow() < 1) return false;    // no header row yet; let the sweep build it
-    var width = dest.getLastColumn();
-    var headers = dest.getRange(1, 1, 1, width).getValues()[0], names = [], i;
+    var headers = _msDestHeaders(dest), width = headers.length, names = [], i;
     for (i = 0; i < width; i++) names.push(_msTrim(headers[i]));
     var keyAt = [names.indexOf(KEY_HEADERS[0]), names.indexOf(KEY_HEADERS[1])];
     if (keyAt[0] === -1 || keyAt[1] === -1) return false;
@@ -306,7 +305,7 @@ function _msSubmitFromSource(e) {
   if (!lock.tryLock(20000)) return;                    // sweep is mid-write; let it carry the row
   try {
     var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
-    if (!_msHeadersMatch(dest, headers)) { _msSetPointer(0); return; }   // let the sweep rebuild
+    if (!_msHeadersMatch(dest, headers)) return;   // the sweep reports it; never write a misshapen row
     dest.getRange(dest.getLastRow() + 1, 1, 1, headers.length).setValues(values);
   } finally {
     lock.releaseLock();
@@ -315,10 +314,55 @@ function _msSubmitFromSource(e) {
 
 function _msHeadersMatch(dest, srcHeaders) {
   if (dest.getLastRow() < 1) return false;
-  var destHeaders = dest.getRange(1, 1, 1, dest.getLastColumn()).getValues()[0];
+  var destHeaders = _msDestHeaders(dest);
   if (destHeaders.length !== srcHeaders.length) return false;
   for (var i = 0; i < srcHeaders.length; i++) if (destHeaders[i] !== srcHeaders[i]) return false;
   return true;
+}
+// The mirror's header row, minus trailing columns that are only a Sheets table's padding.
+//
+// The mirror is a table (Table1), and a table will not hold a blank header: a column with none
+// is named "Column <its position>". The source's 20th column has a blank header, which the REST
+// read drops (Values.get trims trailing empties), so the source reported 19 headers while the
+// mirror reported 20, ending "Column 20". The old sweep read that as a changed form and cleared
+// the mirror, on every run, since the table renamed the blank header straight back. That is
+// what cut the mirror to 3/4/2026 on 2026-10-06. Only TRAILING auto-names are dropped, and only
+// when the name matches the column's own position, so the source's real "Column 1" is safe.
+function _msDestHeaders(dest) {
+  if (dest.getLastRow() < 1) return [];
+  var h = dest.getRange(1, 1, 1, dest.getLastColumn()).getValues()[0];
+  while (h.length && (_msTrim(h[h.length - 1]) === '' || _msTrim(h[h.length - 1]) === 'Column ' + h.length)) h.pop();
+  return h;
+}
+// True when `had` is a strict leading run of `now`: every old column still where it was.
+function _msIsHeaderPrefix(had, now) {
+  if (!had.length || had.length >= now.length) return false;
+  for (var i = 0; i < had.length; i++) if (_msTrim(had[i]) !== _msTrim(now[i])) return false;
+  return true;
+}
+
+// Manual only. Wipes the mirror and re-copies the source from row 2 — the old automatic
+// behaviour on any header change. One execution copies ~11,500 rows before the sweep's budget
+// stops it, so until later runs finish the job (call runSyncNow() until the log stops saying
+// "Stopped at the ... mark") the dashboard reads a truncated feed. It also drops every mirror
+// row the source no longer holds, including original picks someone deleted after a re-pick.
+function rebuildMaterialsMirror() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) { console.log('Sync is mid-write; try again in a minute.'); return; }
+  try {
+    var dest = SpreadsheetApp.openById(DEST_SHEET_ID).getSheets()[0];
+    var source = _msSourceReader(dest);
+    if (!source) throw new Error('Source sheet "' + SOURCE_SHEET_NAME + '" not found');
+    var srcHeaders = source.headers();
+    _msKeyIdx(srcHeaders);                       // refuse before wiping if a key column is gone
+    dest.clear();
+    dest.getRange(1, 1, 1, srcHeaders.length).setValues([srcHeaders]);
+    _msSetPointer(0);
+    console.log('Mirror cleared; header row written. Copying now.');
+  } finally {
+    lock.releaseLock();
+  }
+  syncMaterials();
 }
 
 
@@ -586,14 +630,31 @@ function syncMaterials() {
     var srcHeaders = source.headers();
     var keyIdx = _msKeyIdx(srcHeaders);
 
-    // Headers changed (a column added to the form) — the only case that justifies rewriting
-    // everything, because every existing row is now shaped wrong.
-    var rebuilt = false;
+    // Headers changed. This used to clear the destination and re-copy the source from row 2,
+    // which is how the mirror lost seven months on 2026-10-06: the mirror's table padding
+    // ("Column 20", see _msDestHeaders) made every run see a mismatch, so every run wiped all
+    // ~25k rows and re-copied as far as its 3.5 min budget reached (23 chunks of 500, up to
+    // 3/4/2026, on the run that was noticed), and the dashboard published the half-built sheet.
+    // Nothing failed, so nothing alerted. A rebuild that spans several executions guts the published feed for all
+    // of them, and it also deletes every mirror row the source no longer holds.
+    //
+    // So: columns ADDED AT THE END only extend the header row. Existing rows are still shaped
+    // right (the dashboard reads them by position), they just have blanks in the new cells. Any
+    // other change — a column inserted, removed or renamed — stops the sweep with an error so
+    // the trigger reports a failure, and leaves the mirror as it is. Rebuilding is then a
+    // deliberate act: rebuildMaterialsMirror().
     if (!_msHeadersMatch(dest, srcHeaders)) {
-      dest.clear();
-      dest.getRange(1, 1, 1, srcHeaders.length).setValues([srcHeaders]);
-      _msSetPointer(0);
-      rebuilt = true;
+      var had = _msDestHeaders(dest);
+      if (_msIsHeaderPrefix(had, srcHeaders)) {
+        dest.getRange(1, 1, 1, srcHeaders.length).setValues([srcHeaders]);
+        console.log('Source gained column(s) at the end: "' + srcHeaders.slice(had.length).join('", "')
+          + '". Header row extended; existing rows untouched.');
+      } else {
+        throw new Error('Source headers no longer match the mirror, and not by columns added at the '
+          + 'end. Mirror left untouched. Source: [' + srcHeaders.join(' | ') + ']  Mirror: ['
+          + had.join(' | ') + ']. If the change is intended, check the dashboard\'s positional parse '
+          + '(PICK_SLOT_IDX) first, then run rebuildMaterialsMirror().');
+      }
     }
 
     var pointer = _msGetPointer();
@@ -611,21 +672,19 @@ function syncMaterials() {
     if (startRow > srcLastRow) return;          // nothing new
 
     // Key set from the destination, so a stale pointer cannot double-append. Two column reads
-    // rather than the whole sheet. Skipped right after a rebuild, when the sheet is empty.
+    // rather than the whole sheet; empty right after rebuildMaterialsMirror(), which is correct.
     var seen = {};
-    if (!rebuilt) {
-      var destLastRow = dest.getLastRow();
-      if (destLastRow > 1) {
-        var destHeaders = dest.getRange(1, 1, 1, dest.getLastColumn()).getValues()[0];
-        var d1 = destHeaders.indexOf(KEY_HEADERS[0]) + 1;
-        var d2 = destHeaders.indexOf(KEY_HEADERS[1]) + 1;
-        var ks = dest.getRange(2, 1, destLastRow - 1, 1).getValues();     // timestamp column
-        var k1 = dest.getRange(2, d1, destLastRow - 1, 1).getValues();
-        var k2 = dest.getRange(2, d2, destLastRow - 1, 1).getValues();
-        for (var i = 0; i < k1.length; i++) {
-          seen[_msStamp(ks[i][0]) + '||' + String(k1[i][0] || '').trim()
-               + '||' + String(k2[i][0] || '').trim()] = true;
-        }
+    var destLastRow = dest.getLastRow();
+    if (destLastRow > 1) {
+      var destHeaders = dest.getRange(1, 1, 1, dest.getLastColumn()).getValues()[0];
+      var d1 = destHeaders.indexOf(KEY_HEADERS[0]) + 1;
+      var d2 = destHeaders.indexOf(KEY_HEADERS[1]) + 1;
+      var ks = dest.getRange(2, 1, destLastRow - 1, 1).getValues();     // timestamp column
+      var k1 = dest.getRange(2, d1, destLastRow - 1, 1).getValues();
+      var k2 = dest.getRange(2, d2, destLastRow - 1, 1).getValues();
+      for (var i = 0; i < k1.length; i++) {
+        seen[_msStamp(ks[i][0]) + '||' + String(k1[i][0] || '').trim()
+             + '||' + String(k2[i][0] || '').trim()] = true;
       }
     }
 
