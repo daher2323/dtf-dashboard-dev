@@ -5565,6 +5565,25 @@ function parseMaterials(text) {
     var rows = parseCSV(text);
     var keys = rows[0] ? Object.keys(rows[0]) : [];
     var dateCol = keys[0]; // Google Forms: first column is always the timestamp
+    // A pick written by the sync's live submit path arrives with Material Name blank: the source
+    // fills that column itself, so it is not among the form answers, and the full row only
+    // replaces it at the next scheduled sync (15-30 min). Dropping it hid the morning's picks
+    // from usage until then. The name is a function of the Part #, so take it from the latest
+    // pick of the same part, else from inventory. Pick history first, because grouping is by
+    // name and the inventory sheet does not always spell it the same way. Still dropped when
+    // neither knows the part: inventing a name is worse than waiting for the sync.
+    var nameByPart = {};
+    rows.forEach(function(r){
+      var pn = (r['Part #']||'').trim(), nm = (r['Material Name']||'').trim();
+      if (pn && nm) nameByPart[pn] = nm;
+    });
+    rows.forEach(function(r){
+      if ((r['Material Name']||'').trim()) return;
+      var pn = (r['Part #']||'').trim();
+      if (!pn) return;
+      var nm = nameByPart[pn] || (inventoryByPart[pn] && inventoryByPart[pn].material) || '';
+      if (nm) r['Material Name'] = nm;
+    });
     var out = rows.filter(function(r){
       return (r['Order Lot #']||'').trim() && (r['Material Name']||'').trim() && parseFloat(r['Qty Needed']||0) > 0;
     }).map(function(r){
@@ -13482,6 +13501,38 @@ function matDataSpan() {
            has12mo: (Date.now() - mn) >= 1000 * 60 * 60 * 24 * 365 };
 }
 
+// The longest stretch with no pick logged, if it reaches into [windowStart, now] and runs
+// MAT_FEED_GAP_DAYS or more. The pick feed has no version stamp, so a hole in its dates is the
+// only sign that rows went missing upstream: on 2026-10-06 the mirror sheet was cut back to
+// 3/4/2026, every material read as "zero usage", and the default view went blank. Picking runs
+// every weekday, so two weeks of silence is never a quiet spell. `to` is the first pick after the
+// hole, or null when the feed simply stops.
+var MAT_FEED_GAP_DAYS = 14;
+function matFeedGap(windowStart) {
+  var seen = {}, days = [], i, d, t;
+  for (i = 0; i < materialsData.length; i++) {
+    d = materialsData[i].date; if (!d) continue;
+    t = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    if (!seen[t]) { seen[t] = 1; days.push(t); }
+  }
+  if (!days.length) return null;
+  days.sort(function(a, b) { return a - b; });
+  days.push(Date.now());
+  var best = null, lo = windowStart.getTime(), gap;
+  for (i = 1; i < days.length; i++) {
+    if (days[i] < lo) continue;
+    // Clipped to the window: rows before MATERIALS_TRACKING_START are dated to the 1st of each
+    // month, so Sep 1 -> Oct 6 2025 is a month apart by construction, not missing data.
+    gap = (days[i] - Math.max(days[i - 1], lo)) / 86400000;
+    if (gap >= MAT_FEED_GAP_DAYS && (!best || gap > best.inWindow)) {
+      // `days` is the whole hole, as the message prints both of its ends.
+      best = { from: new Date(days[i - 1]), to: i === days.length - 1 ? null : new Date(days[i]),
+               days: Math.floor((days[i] - days[i - 1]) / 86400000), inWindow: gap };
+    }
+  }
+  return best;
+}
+
 // The consumption window, rendered into the Procurement sub-bar beside the Materials /
 // Jars / Bottles tabs rather than inside the page. It is set once and left alone, so a
 // row of its own in the content pushed the table down for a control nobody touches.
@@ -15542,7 +15593,12 @@ function renderMaterialsImpl() {
     }).sort(function(a,b){ return b.stock - a.stock; });
   })();
   var zeroUsageCount = zeroUsageList.length;
-  if (matShowZeroUsage) matList = matList.concat(zeroUsageList);
+  // With a hole in the pick feed, "zero usage" means "no data", and hiding those rows by
+  // default blanked the whole stock view. Stock never depended on picks; show it regardless
+  // and leave the consumption cells empty.
+  var feedGap = matFeedGap(windowStart);
+  var forceZeroUsage = !!feedGap || !filteredRows.length;
+  if (matShowZeroUsage || forceZeroUsage) matList = matList.concat(zeroUsageList);
 
   window._matList=matList;
   window._matMonthKeys=monthKeys;
@@ -15738,7 +15794,8 @@ function renderMaterialsImpl() {
   // Zero-usage checkbox \u2014 same architecture as showZeroDes on Jars/Bottles/etc.
   // Shown when there are zero-usage ingredients to reveal, when already on, or while
   // inventory is still loading (so it doesn't pop in late once the count is known).
-  var zeroUsageCheckbox = (zeroUsageCount > 0 || matShowZeroUsage || !inventoryLoaded)
+  var zeroUsageCheckbox = forceZeroUsage ? ''
+    : (zeroUsageCount > 0 || matShowZeroUsage || !inventoryLoaded)
     ? '<label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#5f5e5a;cursor:pointer;user-select:none;">'
         +'<input type="checkbox" onchange="matShowZeroUsage=this.checked;window._selectedMaterial=null;renderMaterials();" '+(matShowZeroUsage?'checked':'')+' style="accent-color:#378ADD;cursor:pointer;">'
         +'Show materials with zero usage'+(!inventoryLoaded ? ' (\u2026)' : (zeroUsageCount > 0 && !matShowZeroUsage ? ' ('+zeroUsageCount+')' : ''))
@@ -15918,7 +15975,18 @@ function renderMaterialsImpl() {
       + '<span>' + _scBits.join(' <span style="color:#3a3a38;">&middot;</span> ') + '</span>'
       + '</div>'
     : '';
-  var _overHTML = _overAlert + (_stockOveragesOpen ? stockOveragePanelHTML() : '')
+  var _gapLine = '';
+  if (feedGap) {
+    var _gf = function(d) { return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' }); };
+    _gapLine = '<div style="margin:-4px 0 12px;padding:8px 12px;border:0.5px solid #5a4a1e;border-radius:8px;background:rgba(239,159,39,0.08);font-size:12px;color:#e8e6e0;font-family:system-ui;line-height:1.5;">'
+      + '<span style="color:#EF9F27;font-weight:500;">No picks recorded ' + (feedGap.to
+          ? 'between ' + _gf(feedGap.from) + ' and ' + _gf(feedGap.to)
+          : 'since ' + _gf(feedGap.from)) + '</span> (' + feedGap.days + ' days). '
+      + 'Picking runs every weekday, so rows are missing from the pick feed: usage in this window is under-counted. '
+      + 'Every material with stock is listed whether or not it was drawn.'
+      + '</div>';
+  }
+  var _overHTML = _gapLine + _overAlert + (_stockOveragesOpen ? stockOveragePanelHTML() : '')
     + _blindLine + (_stockBlindOpen ? stockBlindPanelHTML() : '');
   if (matView === 'lothealth' && materialsFefoOnly) {
     content.innerHTML = pickerHTML + _overHTML + _covHTML + expiryExposurePanelHTML()
