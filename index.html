@@ -15769,7 +15769,7 @@ function renderMaterialsImpl() {
       +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.avg6)+'</td>'
       +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;">'+vsBadge(m.vsPct)+'</td>'
       +'<td class="mat-c-hist" style="text-align:right;padding:8px 10px;font-size:12px;color:#888780;white-space:nowrap;">'+fmt(m.totalKg)+'</td>'
-      +'<td class="mat-c-hist" style="padding:8px 10px;text-align:center;width:110px;">'+(m.spark&&m.spark.length?sparkSVG(m.spark,m.trend,m.sparkLabels,unit):'<span style="color:#5f5e5a;font-size:12px;">—</span>')+'</td>'
+      +'<td class="mat-c-hist" style="padding:8px 10px;text-align:center;">'+(m.spark&&m.spark.length?sparkSVG(m.spark,m.trend,m.sparkLabels,unit):'<span style="color:#5f5e5a;font-size:12px;">—</span>')+'</td>'
       +'</tr>'
       +'<tr id="mat-inline-row-'+i+'" style="display:'+(isSelected?'':'none')+';">'
         // width:0 + min-width:100% keeps the expanded panel OUT of the table's width
@@ -16018,8 +16018,11 @@ function renderMaterialsImpl() {
     +'<col style="width:88px;">'      // 3-mo avg
     +'<col style="width:88px;">'      // 6-mo avg
     +'<col style="width:88px;">'      // 3 vs 6 mo
-    +'<col style="width:92px;">'      // 6-mo total
-    +'<col style="width:92px;">'      // 6-mo trend
+    // Total widens on All time for its date-range subline (~106px at 9px caps).
+    +'<col style="width:'+(matWindow===0?128:92)+'px;">'      // 6-mo total
+    // The sparkline SVG is 100px + 20px cell padding. As the last column it is clipped
+    // at the card edge rather than spilling into a neighbour, so it needs the full width.
+    +'<col style="width:122px;">'     // 6-mo trend
     +'</colgroup>'
     +'<thead>'
     // Group row: Material spans both rows; the two cluster labels span their columns.
@@ -16040,7 +16043,7 @@ function renderMaterialsImpl() {
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">3-mo avg</th>'
       +'<th style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;">6-mo avg</th>'
       +'<th data-tip="Last 3 months\' average compared with the 6-month average: (3-mo avg minus 6-mo avg) divided by the 6-mo avg. \u2191 means usage has picked up lately, \u2193 that it has slowed. Within 5% either way reads as flat." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;white-space:nowrap;cursor:help;"><span style="text-decoration:underline dotted #5f5e5a;text-underline-offset:2px;">3 vs 6 mo</span></th>'
-      +'<th data-tip="Total usage across the whole window, including the current in-progress month — so it won\'t equal the monthly average times the number of months." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;line-height:1.4;cursor:help;">'+(matWindow===0?('<span style="text-decoration:underline dotted #5f5e5a;text-underline-offset:2px;">All time total</span>'+(allTimeLabel?'<br><span style="font-size:9px;font-weight:400;color:#5f5e5a;">('+allTimeLabel+')</span>':'')):'<span style="text-decoration:underline dotted #5f5e5a;text-underline-offset:2px;">'+matWindow+' mo total</span>')+'</th>'
+      +'<th data-tip="Total usage across the whole window, including the current in-progress month — so it won\'t equal the monthly average times the number of months." onmouseenter="showColTip(this)" onmouseleave="hideColTip()" style="text-align:right;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;line-height:1.4;cursor:help;">'+(matWindow===0?('<span style="text-decoration:underline dotted #5f5e5a;text-underline-offset:2px;">All time total</span>'+(allTimeLabel?'<br><span style="font-size:9px;font-weight:400;color:#5f5e5a;white-space:nowrap;">('+allTimeLabel+')</span>':'')):'<span style="text-decoration:underline dotted #5f5e5a;text-underline-offset:2px;">'+matWindow+' mo total</span>')+'</th>'
       +'<th style="text-align:center;padding:8px 10px;font-size:10px;color:#888780;font-weight:500;">6-mo trend</th>'
     +'</tr>'
     +'</thead><tbody>'+tableRows+'</tbody></table></div></div>';
