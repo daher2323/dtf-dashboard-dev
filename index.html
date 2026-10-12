@@ -2231,7 +2231,7 @@ function devDeltaTag(vCur, vComp, compYearLabel) {
   } else {
     bg = '#791F1F'; txt = '#F09595'; label = pts + '% further vs ' + vsLabel;
   }
-  var tip = 'Distance of the average lot deviation from zero, this period vs. ' + vsLabel + '. Moves under ' + DEV_DELTA_NOISE_PTS + '% stay grey.';
+  var tip = 'Distance of the average lot deviation from zero, this period vs. ' + vsLabel + '. Moves under ' + DEV_DELTA_NOISE_PTS + '% stay gray.';
   return '<div style="font-size:10px;color:#5f5e5a;margin-bottom:3px">' + vsLabel + ': ' + (vComp > 0 ? '+' : '') + vComp.toFixed(1) + '%</div>'
        + '<span title="' + esc(tip) + '" style="display:inline-block;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:500;background:' + bg + ';color:' + txt + '">' + label + '</span>';
 }
@@ -11903,8 +11903,8 @@ function _custPaceChipHTML(pace, withWindow) {
     var up = pace.chg > 0, flat = Math.abs(pace.chg) < PACE_FLAT;
     label = (flat ? '&#x2192; ' : up ? '&#x2191; ' : '&#x2193; ') + Math.round(Math.abs(pace.chg) * 100) + '%';
     if (pace.state === 'signal') { col = up ? '#5DCAA5' : '#C9A227'; bd = up ? '#0F6E56' : '#6b5514'; }
-    tip += 'Recent momentum: the last ' + PACE_WINDOW_DAYS + ' days against the ' + PACE_WINDOW_DAYS + ' before. Coloured at '
-      + Math.round(PACE_THRESHOLD * 100) + '% or more, grey below. The Growing / Declining tag compares the year to date with last year.';
+    tip += 'Recent momentum: the last ' + PACE_WINDOW_DAYS + ' days against the ' + PACE_WINDOW_DAYS + ' before. Colored at '
+      + Math.round(PACE_THRESHOLD * 100) + '% or more, gray below. The Growing / Declining tag compares the year to date with last year.';
   }
   return '<span title="' + esc(tip) + '" style="display:inline-block;font-size:10px;font-weight:500;padding:1px 6px;border-radius:5px;border:0.5px solid ' + bd + ';color:' + col + ';font-variant-numeric:tabular-nums;cursor:help;white-space:nowrap;">'
     + label + (withWindow ? ' &middot; ' + PACE_WINDOW_DAYS + 'd' : '') + '</span>';
@@ -14376,7 +14376,7 @@ function matLotTableHTML(m, unit) {
     if (missMatters) {
       var lastTxt = miss.lastSkip ? _matExpDateStr(miss.lastSkip) : '';
       missTag = ' <span title="Passed over on ' + miss.skips + ' run' + (miss.skips===1?'':'s')
-        + ' in favour of ' + miss.altLots + ' later-expiring lot' + (miss.altLots===1?'':'s')
+        + ' in favor of ' + miss.altLots + ' later-expiring lot' + (miss.altLots===1?'':'s')
         + (lastTxt ? ', most recently ' + lastTxt : '')
         + '. Reconstructed from the pick sheet — legitimate reasons exist (allergen segregation, a customer-specific lot, a hold), so treat it as a prompt to look, not a verdict."'
         + ' onclick="event.stopPropagation();toggleFefoDetail(' + jsStr(L.lot) + ')"'
