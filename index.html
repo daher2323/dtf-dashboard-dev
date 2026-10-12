@@ -11832,9 +11832,11 @@ function safeid(s) {
 // tag: Alpha Lion is up 13.6% on last year while its last 90 days are down 48% on the 90
 // before, and both are true. Every row carries a chip, in two strengths: coloured at
 // |change| >= PACE_THRESHOLD (the "worth a call" tier), grey below it, so +39% and -39%
-// still read differently from nothing, without every row shouting. Within PACE_FLAT the
-// arrow goes sideways. A number is only printed on real evidence; otherwise the chip
-// states why there isn't one (new / few lots / restarted / no runs):
+// still read differently from nothing, without every row shouting. Every number keeps its
+// up/down arrow, however small: gray already says "minor", and a sideways arrow on +9% hid
+// the direction behind the tooltip. Only a change that rounds to 0% goes sideways. A
+// number is only printed on real evidence; otherwise the chip states why there isn't one
+// (new / few lots / restarted / no runs):
 //   - the window carrying the signal needs PACE_MIN_LOTS (the prior one for a drop, the
 //     recent one for a rise), or one run landing either side of the boundary fires it;
 //   - the customer's first-ever run must predate the prior window, or an onboarding ramp
@@ -11844,7 +11846,6 @@ function safeid(s) {
 var PACE_WINDOW_DAYS = 90;
 var PACE_THRESHOLD = 0.40;
 var PACE_MIN_LOTS = 4;
-var PACE_FLAT = 0.10;
 function _custPaceWindows(now) {
   var t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   var lastStart = new Date(t0); lastStart.setDate(t0.getDate() - (PACE_WINDOW_DAYS - 1));
@@ -11900,8 +11901,8 @@ function _custPaceChipHTML(pace, withWindow) {
     col = '#5f5e5a'; bd = '#2c2c2a';
     tip += rsn[1];
   } else {
-    var up = pace.chg > 0, flat = Math.abs(pace.chg) < PACE_FLAT;
-    label = (flat ? '&#x2192; ' : up ? '&#x2191; ' : '&#x2193; ') + Math.round(Math.abs(pace.chg) * 100) + '%';
+    var up = pace.chg > 0, pct = Math.round(Math.abs(pace.chg) * 100);
+    label = (pct === 0 ? '&#x2192; ' : up ? '&#x2191; ' : '&#x2193; ') + pct + '%';
     if (pace.state === 'signal') { col = up ? '#5DCAA5' : '#C9A227'; bd = up ? '#0F6E56' : '#6b5514'; }
     tip += 'Recent momentum: the last ' + PACE_WINDOW_DAYS + ' days against the ' + PACE_WINDOW_DAYS + ' before. Colored at '
       + Math.round(PACE_THRESHOLD * 100) + '% or more, gray below. The Growing / Declining tag compares the year to date with last year.';
