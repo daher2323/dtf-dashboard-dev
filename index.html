@@ -5466,9 +5466,10 @@ function fetchStickProductionIfNeeded(force) {
 // Units produced for a lot, and where the number came from. Three tiers:
 //   'production' - Final Units off a production feed (main line or stick/sample line)
 //   'planned'    - no production row anywhere, so the Lot # sheet's Amt: what the lot was
-//                  written up for. Bulk and gusset-bag runs never go down a line, so this
-//                  is the only figure that exists for them and every surface must say so
-//                  rather than passing it off as a finished run.
+//                  written up for. Bulk and gusset-bag runs never go down a line, and a lot
+//                  blended but not yet filled hasn't yet, so this is the only figure that
+//                  exists for them and every surface must say so rather than passing it off
+//                  as a finished run. An unfilled lot flips to 'production' once it runs.
 //   null         - nothing to show. Render "-", never 0.
 function lotUnitsInfo(lot, unitsByLot) {
   var s = stickProdByLot[lot];
@@ -5501,14 +5502,14 @@ function lotUnitsInfo(lot, unitsByLot) {
 // the treatment stick/sample packs already get in Logistics. The footnote carries the
 // explanation — see plannedNote, which every table showing one of these must render.
 function plannedTag() {
-  return '<span style="color:#EF9F27;font-weight:600;padding-left:3px;" title="No production data available for this Lot # \u2014 most likely a bulk or sample-pack run. Quantity is the Amt from the Lot # sheet.">*</span>';
+  return '<span style="color:#EF9F27;font-weight:600;padding-left:3px;" title="No production data available for this Lot # \u2014 either blended but not filled yet, or a bulk or sample-pack run that never goes down a line. Quantity is the Amt from the Lot # sheet.">*</span>';
 }
 // Footnote for any table that ended up showing at least one asterisked figure.
 function plannedNote() {
   return '<div style="padding:6px 10px 2px;font-size:10px;color:#5f5e5a;font-family:system-ui;line-height:1.5;">'
     + '<span style="color:#EF9F27;font-weight:600;">*</span> No production data available for this Lot # \u2014 '
-    + 'most likely a bulk or sample-pack run that never went down a line. '
-    + 'Quantity shown is the Amt from the Lot # sheet.'
+    + 'either blended but not filled yet, or a bulk or sample-pack run that never goes down a line. '
+    + 'Quantity shown is the Amt from the Lot # sheet; a lot still waiting to fill switches to its real units once it runs.'
     + '</div>';
 }
 
@@ -20034,7 +20035,7 @@ function exportPartUsage() {
   });
   if (res.plannedAny) {
     rows.push([]);
-    rows.push(['Some unit figures come from the Lot # sheet\'s Amt rather than a production run (bulk or sample-pack lots that never went down a line) — those are what the lot was written up for, not what it produced.']);
+    rows.push(['Some unit figures come from the Lot # sheet\'s Amt rather than a production run (lots blended but not filled yet, or bulk and sample-pack lots that never go down a line) — those are what the lot was written up for, not what it produced.']);
   }
   if (res.nonProd.length) {
     rows.push([]);
