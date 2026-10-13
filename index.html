@@ -8922,6 +8922,16 @@ function _specClean(v) {
   v = (v||'').trim();
   return v && !/^(n\/a|none)(\s+(n\/a|none))*$/i.test(v) ? v : '';
 }
+// A row's lid SKU for the Procurement Lids tab. A row whose lid fields are all N/A has
+// no lid (gusset bags, 89 rows) and is not a lid SKU: it used to list as "N/A N/A N/A"
+// and took a share of lid usage. Those bags already count on the Jars tab, under
+// Gusset Bag. A lid that is only partly N/A is left as written, since that is a typo to
+// see rather than hide ("NONE White Smooth" on one 19oz bottle).
+function _lidSku(r) {
+  var f = [r['Lid Size'], r['Lid Color'], r['Lid Profile']].map(function(v){ return (v||'').trim(); }).filter(Boolean);
+  if (!f.some(function(v){ return _specClean(v); })) return '';
+  return normMatName(f.join(' '));
+}
 function lotSpecHTML(l) {
   var lid = normMatName([l.lidSize,l.lidColor,l.lidProfile].map(_specClean).filter(Boolean).join(' '));
   // Container is deliberately not run through _specClean: Jar/Bottle Size never
@@ -12938,7 +12948,7 @@ function exportProcurement() {
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
 
   function getSku(r) {
-    if (procView === 'lids') return normMatName([r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' '));
+    if (procView === 'lids') return _lidSku(r);
     if (isDes)  { var dv=(r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv)?'':dv; }
     if (isNeck) { var nv=(r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv)?'':nv; }
     // Scoops read like neckbands — an identity column with None/N/A for products that
@@ -17302,10 +17312,7 @@ function renderProcurement() {
   var isScoop = procView === 'scoops';
 
   function getSku(r) {
-    if (procView === 'lids') {
-      var parts = [r['Lid Size'], r['Lid Color'], r['Lid Profile']].map(function(v){ return (v||'').trim(); }).filter(Boolean);
-      return normMatName(parts.join(' '));
-    }
+    if (procView === 'lids') return _lidSku(r);
     if (isDes)  { var dv = (r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv) ? '' : dv; }
     if (isNeck) { var nv = (r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv) ? '' : nv; }
     if (isScoop) { var sv = (r['Scoop']||'').trim(); return /^(none|n\/a)$/i.test(sv) ? '' : sv; }
@@ -18037,7 +18044,7 @@ function toggleProcExportPopover(e) {
   var ytdStart = new Date(now.getFullYear(),0,1);
   var allRowsCombined = allRows.concat(allRows25);
   function getSku2(r) {
-    if (procView==='lids') return normMatName([r['Lid Size'],r['Lid Color'],r['Lid Profile']].map(function(v){return(v||'').trim();}).filter(Boolean).join(' '));
+    if (procView==='lids') return _lidSku(r);
     if (isDes)  { var dv=(r['Desiccant']||'').trim(); return /^(none|n\/a)$/i.test(dv)?'':dv; }
     if (procView==='neckbands') { var nv=(r['Neckband Used']||'').trim(); return /^(none|n\/a)$/i.test(nv)?'':nv; }
     if (procView==='scoops') { var sv=(r['Scoop']||'').trim(); return /^(none|n\/a)$/i.test(sv)?'':sv; }
