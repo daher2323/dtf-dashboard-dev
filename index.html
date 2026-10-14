@@ -11713,7 +11713,7 @@ function generateSynopsis(safeId) {
   var ytdAvgRun   = cd.ytdLots   > 0 ? Math.round(cd.ytd   / cd.ytdLots)   : 0;
   var ytdAvgRun25 = cd.ytdLots25 > 0 ? Math.round(cd.ytd25 / cd.ytdLots25) : 0;
   var ytdChg  = cd.ytd25  > 0 ? (cd.ytd  - cd.ytd25)  / cd.ytd25  * 100 : null;
-  var runChg  = ytdAvgRun25 > 0 ? (ytdAvgRun - ytdAvgRun25) / ytdAvgRun25 * 100 : null;
+  var runChg  = ytdAvgRun25 > 0 && cd.ytdLots25 >= YOY_MIN_LOTS ? (ytdAvgRun - ytdAvgRun25) / ytdAvgRun25 * 100 : null;
   var lotChg  = cd.ytdLots25 > 0 ? (cd.ytdLots - cd.ytdLots25) / cd.ytdLots25 * 100 : null;
   var pctChg  = cd.ytdPct25  > 0 ? (cd.ytdPct  - cd.ytdPct25) : null;
 
@@ -11856,6 +11856,13 @@ function safeid(s) {
 var PACE_WINDOW_DAYS = 90;
 var PACE_THRESHOLD = 0.40;
 var PACE_MIN_LOTS = 4;
+// The Customer Breakdown's Avg Run and % Prod compare year to date with the same window
+// last year. A customer who started late last year has only their first few lots in that
+// window: Dragon Pharma began 10/6/2025, so it held 3 lots (one ~30k-unit run) and their
+// 3,961 average read as -66.9% against an 11,963 that was never their real average (Q4
+// 2025 ran 54 lots at 3,360). Under YOY_MIN_LOTS last-year lots, the row shows last year's
+// figure as a gray "was", like the Lots column, and the synopsis skips the run-size sentence.
+var YOY_MIN_LOTS = 10;
 function _custPaceWindows(now) {
   var t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   var lastStart = new Date(t0); lastStart.setDate(t0.getDate() - (PACE_WINDOW_DAYS - 1));
@@ -12522,8 +12529,14 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
     // % production change — neutral-gray pill badge to match Avg Run (direction
     // isn't inherently good/bad). Uses relative % change for style consistency
     // with Units YTD / Avg Run, not pp change.
+    var thinYoy = cd.ytdLots25 < YOY_MIN_LOTS;
+    var thinTip = esc('Same period last year had only ' + cd.ytdLots25 + ' lot' + (cd.ytdLots25 === 1 ? '' : 's')
+      + ', too few to compare as a percentage.');
+    function _wasHTML(txt) {
+      return '<div title="' + thinTip + '" style="font-size:10px;color:#5f5e5a;margin-top:2px;cursor:help;">was ' + txt + '</div>';
+    }
     var pctProdSub = (cd.ytdPct!==null && cd.ytdPct25)
-      ? '<div style="margin-top:2px;">'+_neutralBadge(cd.ytdPct, cd.ytdPct25)+'</div>'
+      ? (thinYoy ? _wasHTML(cd.ytdPct25 + '%') : '<div style="margin-top:2px;">'+_neutralBadge(cd.ytdPct, cd.ytdPct25)+'</div>')
       : '';
 
     var summaryRow = '<div onclick="toggleCH(\''+sid+'\', '+jsStr(cd.cust)+')" class="customer-row" style="display:grid;grid-template-columns:'+_gridCols+';gap:12px;align-items:center;padding:8px 16px;background:#1a1d20;border-bottom:0.5px solid #1e2124;cursor:pointer;transition:background .12s;" onmouseover="this.style.background=\'#1e2124\'" onmouseout="this.style.background=\'#1a1d20\'">'
@@ -12552,7 +12565,7 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       // Avg run
       +'<div style="text-align:right;">'
         +'<div style="font-size:12px;font-weight:500;color:#e8e6e0;font-variant-numeric:tabular-nums;">'+(ytdAvgRun?ytdAvgRun.toLocaleString():'&#x2014;')+'</div>'
-        +(ytdAvgRun&&ytdAvgRun25?'<div style="margin-top:2px;">'+_yoyBadge(ytdAvgRun, ytdAvgRun25)+'</div>':'')
+        +(ytdAvgRun&&ytdAvgRun25?(thinYoy?_wasHTML(ytdAvgRun25.toLocaleString()):'<div style="margin-top:2px;">'+_yoyBadge(ytdAvgRun, ytdAvgRun25)+'</div>'):'')
       +'</div>'
       // % of production
       +'<div style="text-align:right;">'
