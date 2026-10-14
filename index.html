@@ -2030,6 +2030,34 @@ function todayRowCounts(rawRows, validRows) {
   return { raw: raw, kept: kept, dropped: raw - kept };
 }
 
+// The repair can only name a lot the index already holds, and on Production the index is
+// read once at page load (refreshStockFeeds only runs on Procurement/Quality, or from the
+// Live button). So a lot written up on the Lots sheet after the page opened, whose first
+// row arrives stuck at "Loading...", stayed dropped on every 60s refresh until someone
+// clicked Live. When today has such a row, re-read the index; its landing handler repairs
+// and repaints. Today only, so an old permanently-stuck row can't trigger it forever, and
+// rate-limited, because a lot that is genuinely not on the Lots sheet (mis-keyed, or run
+// before it was written up) would otherwise re-read the index every minute all day.
+var LOT_INDEX_UNKNOWN_REFETCH_MS = 5 * 60 * 1000;
+var _lotIdxUnknownRefetchAt = 0;
+function refetchLotIndexForUnknownToday(rawRows) {
+  if (!lotIndexLoaded || !rawRows || !rawRows.length) return;
+  if (Date.now() - _lotIdxUnknownRefetchAt < LOT_INDEX_UNKNOWN_REFETCH_MS) return;
+  var today = getTodayStr();
+  for (var i = 0; i < rawRows.length; i++) {
+    var r = rawRows[i];
+    if (!r || !anyPartSentinel(r['Product'])) continue;
+    var lot = (r['Lot Number'] || '').trim();
+    if (!lot || _sentinelRe.test(lot) || lotIndex[lot]) continue;
+    var dt = parseLocalDate(r['Date']);
+    if (!dt || (dt.getMonth()+1)+'/'+dt.getDate()+'/'+dt.getFullYear() !== today) continue;
+    _lotIdxUnknownRefetchAt = Date.now();
+    console.warn('[DTF] Today\'s lot ' + lot + ' is mid-recalculation and not in the lot index — re-reading the index.');
+    fetchLotIndexIfNeeded(true);
+    return;
+  }
+}
+
 // Cells whose entire trimmed value is a Google Sheets error sentinel. (A substring
 // match here once rejected any product name containing 'loading'.) The trailing class
 // must include "." and "\u2026" — Sheets renders "Loading..." while async formulas
@@ -5820,6 +5848,7 @@ function applyFreshData(res) {
   _resetSkipStats();
   var rawNew = parseCSV(res[0]);
   repairSentinelRows(rawNew);
+  refetchLotIndexForUnknownToday(rawNew);
   var newRows = rawNew.filter(isValid);
   var newRows25 = parseCSV(res[1]).filter(isValid);
   var newTargets = parseTargets(res[2]);
