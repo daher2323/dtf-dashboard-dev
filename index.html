@@ -1270,7 +1270,7 @@ function agingFilterState(agingOrders) {
   return 'filtered';
 }
 // Builds the status filter bar: a segmented control (All statuses / Actionable
-// only / No action needed) over a two-row aligned grid — Needs attention on top,
+// only / No action needed) over a two-row aligned grid — Unplanned on top,
 // In motion below — sharing chip columns so counts line up on a clean right edge.
 // Chip counts reflect the full aging population (independent of active toggles).
 // Purely presentational; filtering logic lives in the helpers above.
@@ -1307,12 +1307,12 @@ function renderAgingStatusBar(agingOrders) {
   var h = '';
   h += '<div class="agf-seg">';
   h +=   segBtn('all', 'All statuses', 'showAllStatuses');
-  h +=   segBtn('actionable', 'Needs attention', 'setActionableOnly');
+  h +=   segBtn('actionable', 'Unplanned', 'setActionableOnly');
   h +=   segBtn('noaction', 'In motion', 'setNoActionOnly');
   h += '</div>';
 
   h += '<div class="agf-grid" style="grid-template-columns:120px repeat(' + maxCols + ',max-content);">';
-  h +=   '<span class="agf-glabel att">Needs attention</span>';
+  h +=   '<span class="agf-glabel att">Unplanned</span>';
   for (i = 0; i < attention.length; i++) h += chipHTML(attention[i], 'att');
   h +=   '<span class="agf-glabel mot">In motion</span>';
   for (i = 0; i < motion.length; i++) h += chipHTML(motion[i], 'mot');
@@ -17307,7 +17307,7 @@ function renderOrdersSummary() {
     : agingTotalCount + ' order' + (agingTotalCount===1?'':'s') + ' · ' + agingTotalUnits.toLocaleString() + ' units on the books';
 
   var _afState = agingFilterState(agingRowsAll);
-  var agingHeaderSuffix = _afState === 'all' ? 'All Statuses' : _afState === 'actionable' ? 'Needs Attention' : _afState === 'noaction' ? 'In Motion' : 'Filtered';
+  var agingHeaderSuffix = _afState === 'all' ? 'All Statuses' : _afState === 'actionable' ? 'Unplanned' : _afState === 'noaction' ? 'In Motion' : 'Filtered';
   var agingStatusBar = renderAgingStatusBar(agingRowsAll);
 
   var agingHTML = '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
