@@ -202,6 +202,11 @@
      Flex-wrap rather than a fixed grid, because these are inventory quantities:
      a track too narrow for "4,439.79 kg" would clip or ellipsize a number someone
      is about to act on. Content-sized items wrap to another line instead. */
+  /* Open Orders → Summary: the four stats under each "on the books" card. Padding and
+     dividers live here rather than inline so the phone rule can re-flow them 2 x 2. */
+  .ob-stats { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .ob-stat { padding: 0 14px; border-left: 0.5px solid #2c2c2a; min-width: 0; }
+  .ob-stat:first-child { padding-left: 0; border-left: none; }
   @media (max-width: 768px) and (orientation: portrait) {
     /* Every selector below uses child combinators, NOT descendants. The expanded
        panel sits in a <td> of this same table, so `.mat-table thead` or
@@ -440,6 +445,8 @@
     /* Open Orders → Summary: the two "on the books" cards stack; the aging
        bucket tiles wrap 2-up instead of overflowing off-screen. */
     .onbooks-row { flex-direction: column; }
+    .ob-stats { grid-template-columns: 1fr 1fr; row-gap: 12px; }
+    .ob-stat:nth-child(odd) { padding-left: 0; border-left: none; }
     .aging-tiles { flex-wrap: wrap; }
     .aging-tiles > div { flex: 1 1 44% !important; }
 
@@ -16534,6 +16541,25 @@ function renderOrdersSummary() {
   function _labelsReadyClr(pct){ return pct >= 70 ? '#1D9E75' : pct >= 50 ? '#EF9F27' : '#E24B4A'; }
   var pLabelsReady = _labelsReady(pProd, pBlocked);
   var cLabelsReady = _labelsReady(cProd, cBlocked);
+  // Unplanned: production units on the books that nobody has started planning yet.
+  // Scheduled is upcoming and Packaging Pulled / Process are under way, so those count as
+  // in motion; Hold and a blank status are in neither group and only sit in the total.
+  // Same production-units basis as Labels ready, so Not Enough Labels is in both.
+  var UNPLANNED_STATUSES = ['Ready to be Planned', 'Not Enough Labels', 'Customer Driven'];
+  function _unplanned(prodBucket, prod) {
+    var units = 0, tip = [];
+    UNPLANNED_STATUSES.forEach(function(st){
+      var u = prodBucket[st] || 0;
+      units += u;
+      tip.push(st + ': ' + u.toLocaleString() + ' units');
+    });
+    var pct = prod > 0 ? Math.round(units / prod * 100) : 0;
+    tip.unshift(units.toLocaleString() + ' of ' + prod.toLocaleString() + ' production units on the books are not planned yet:');
+    tip.push('Scheduled, Packaging Pulled and Process count as in motion. Samples and bulk are excluded, as in Labels ready.');
+    return { units: units, pct: pct, tip: tip.join('\n') };
+  }
+  var pUnplanned = _unplanned(pProdBucket, pProd);
+  var cUnplanned = _unplanned(cProdBucket, cProd);
 
   var POWDER_WEEKS_MAX  = 20;
   var CAPSULE_WEEKS_MAX = 24;
@@ -16567,22 +16593,27 @@ function renderOrdersSummary() {
       + '</div>'
       // Divider
       + '<div style="height:0.5px;background:#2c2c2a;margin-bottom:14px;"></div>'
-      // 3 stats in equal columns with vertical dividers
-      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;">'
-      +   '<div style="padding-right:14px;border-right:0.5px solid #2c2c2a;">'
+      // 4 stats in equal columns with vertical dividers (.ob-stats; 2 x 2 on phones)
+      + '<div class="ob-stats">'
+      +   '<div class="ob-stat">'
       +     '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Orders</div>'
       +     '<div style="font-size:16px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+cfg.orders.toLocaleString()+'</div>'
       +     '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">'+cfg.ordersSub+'</div>'
       +   '</div>'
-      +   '<div style="padding:0 14px;border-right:0.5px solid #2c2c2a;">'
+      +   '<div class="ob-stat">'
       +     '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Brands</div>'
       +     '<div style="font-size:16px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+cfg.brands.toLocaleString()+'</div>'
       +     '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">distinct brands</div>'
       +   '</div>'
-      +   '<div style="padding-left:14px;">'
+      +   '<div class="ob-stat">'
       +     '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Labels ready</div>'
       +     '<div style="font-size:16px;color:'+_labelsReadyClr(cfg.labelsReadyPct)+';font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+cfg.labelsReadyPct+'%</div>'
       +     '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">'+cfg.blockedUnits.toLocaleString()+' units blocked</div>'
+      +   '</div>'
+      +   '<div class="ob-stat" title="'+esc(cfg.unplanned.tip)+'" style="cursor:help;">'
+      +     '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">Unplanned</div>'
+      +     '<div style="font-size:16px;color:#e8e6e0;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;">'+cfg.unplanned.pct+'%</div>'
+      +     '<div style="font-size:10px;color:#5f5e5a;margin-top:3px;">'+cfg.unplanned.units.toLocaleString()+' units</div>'
       +   '</div>'
       + '</div>'
       + '</div>';
@@ -16594,7 +16625,8 @@ function renderOrdersSummary() {
         units: pProd, dailyRate: avg.powderAvg,
         orders: stats.powderBooksCount, ordersSub: 'powder orders',
         brands: powderBrands,
-        labelsReadyPct: pLabelsReady, blockedUnits: pBlocked
+        labelsReadyPct: pLabelsReady, blockedUnits: pBlocked,
+        unplanned: pUnplanned
       })
     + typeCard({
         title: 'Capsule on the books', weeks: cWeeksBooks, maxWeeks: CAPSULE_WEEKS_MAX,
@@ -16602,7 +16634,8 @@ function renderOrdersSummary() {
         units: cProd, dailyRate: avg.capsuleAvg,
         orders: stats.capsuleBooksCount, ordersSub: 'capsule orders',
         brands: capsuleBrands,
-        labelsReadyPct: cLabelsReady, blockedUnits: cBlocked
+        labelsReadyPct: cLabelsReady, blockedUnits: cBlocked,
+        unplanned: cUnplanned
       })
     + '</div>';
 
