@@ -1020,7 +1020,11 @@ var CSV_MATERIALS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZP
 // rows excluded server-side) published from a SEPARATE lightweight spreadsheet that
 // IMPORTRANGEs the raw data. Isolating it from the heavy source doc cuts the cold
 // regeneration from ~50-150s to ~0.2-15s. Headers match, so parseInventory is unchanged.
-var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1449767280&single=true&output=csv';
+// 2026-10-21: repointed from RMI (gid 1449767280) to RMI_NEW, the replacement inventory
+// sheet. Differences that matter to the parser: `Category (1 Raw)(2 Flavor)` became
+// `Inventory Bucket` (Raw M / Flavor), and `Start Day Stock` is gone (stockAt falls back to
+// current stock, as it does for any pick older than today).
+var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=417291232&single=true&output=csv';
 // ARCHIVED lots — spent lots the live inventory QUERY filters out (Col21 = 'Yes'). Optional:
 // leave '' and everything below no-ops.
 //
@@ -1040,7 +1044,10 @@ var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZP
 // Current Stock, EXP. Date, Receiving Date, Status, Locations, Supplier/MFG, Lot / Batch.
 // Rows missing a part #, lot # or usable expiry date are skipped — an archived lot with no
 // expiry cannot serve as a FEFO comparison, so it is no loss.
-var CSV_INVENTORY_ARCHIVE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1775747917&single=true&output=csv';
+// 2026-10-21: repointed from RMIZeroStock (gid 1775747917) to RMIZeroStock_NEW. Its layout
+// differs (`On Hand` / `Unit` / `Reason`, no Receiving Date), and while its EXP. Date column
+// is blank every row is skipped, so FEFO falls back to live-sheet lots only.
+var CSV_INVENTORY_ARCHIVE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1591731440&single=true&output=csv';
 // Live inventory feed — the Apps Script web app in apps-script/feed-api.gs. Paste its /exec
 // URL here (no query string; the code appends ?feed=...) and the published CSVs above become
 // the FALLBACK rather than the source.
@@ -1055,6 +1062,11 @@ var CSV_INVENTORY_ARCHIVE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0
 //
 // Empty string = not deployed yet, and everything runs exactly as it did before.
 var CSV_INVENTORY_LIVE = 'https://script.google.com/macros/s/AKfycbxZeEvbwywfvxePBeYuQlbL_knP-n8gaixkTLnA_NHJPA3M0fLYN0HkAvJhs-cjKQwm/exec';
+// Which tab the web app serves, by its FEEDS key. While the new inventory sheet is tested,
+// the script serves both: 'inventory' is the old RMI tab (production still reads it),
+// 'inventory_new' is RMI_NEW. At cutover, repoint 'inventory' to RMI_NEW in the script and
+// set this back to 'inventory'.
+var CSV_INVENTORY_LIVE_FEED = 'inventory_new';
 // One consecutive failure parks the live feed rather than paying a doomed request on every
 // poll; it is retried after this long, so a transient Apps Script blip heals itself without
 // anyone editing code. A parked feed is a console.warn, never a silent downgrade — falling
@@ -1153,7 +1165,7 @@ var demandLoaded = false;    // true once a successful demand fetch has populate
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
-var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v9';  // v9: the audit carries blindLots, not just a count — a v8 payload would open an empty list; v8: carries the impossible-stock audit, which parseInventory does not re-run to rebuild on a cache hit; v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
+var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v10';  // v10: switched to the RMI_NEW sheet, so a payload cached from the old RMI tab is not shown for up to 10 min after the switch; v9: the audit carries blindLots, not just a count — a v8 payload would open an empty list; v8: carries the impossible-stock audit, which parseInventory does not re-run to rebuild on a cache hit; v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
 var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
@@ -2580,7 +2592,7 @@ function fetchInventoryCSV(fresh) {
   if (!_liveFeedUsable()) return pub();
   // Always cache-busted: the whole reason for this endpoint is that a cached answer is the
   // problem, and the web app does its own 15s de-duplication anyway.
-  return _readCSVUrl(bustUrl(CSV_INVENTORY_LIVE + '?feed=inventory', true)).catch(function(e){
+  return _readCSVUrl(bustUrl(CSV_INVENTORY_LIVE + '?feed=' + CSV_INVENTORY_LIVE_FEED, true)).catch(function(e){
     _liveFeedParkedAt = Date.now();
     console.warn('Live inventory feed failed (' + (e && e.message ? e.message : e)
       + '). Falling back to the published CSV for ' + Math.round(LIVE_FEED_RETRY_MS / 60000)
@@ -2662,7 +2674,12 @@ function parseInventory(text) {
       // cell cannot move a material between tabs. A tie resolves to flavour, which is the
       // right call on the only tied part today (20-751 Green Apple Flavor) — but these are
       // data-entry slips and belong fixed on the sheet, not arbitrated here.
+      // The new sheet names it `Inventory Bucket` and spells it out (Raw M / Flavor).
       var catRaw = (r['Category (1 Raw)(2 Flavor)'] || '').trim();
+      if (!catRaw) {
+        var bucket = (r['Inventory Bucket'] || '').trim().toLowerCase();
+        catRaw = /^flavou?r/.test(bucket) ? '2' : /^raw/.test(bucket) ? '1' : '';
+      }
       if (catRaw === '1' || catRaw === '2') {
         if (!_catTally[part]) _catTally[part] = { '1': 0, '2': 0 };
         _catTally[part][catRaw]++;
@@ -2835,7 +2852,7 @@ function mergeInventoryArchive(text) {
       if (xd == null) { skipped++; continue; }            // no date = useless as a comparison
       inventoryLotIndex[key] = {
         part: part,
-        qty: num(r['Current Stock']),                     // normally 0; only used by balanceAt
+        qty: num(r['Current Stock'] != null ? r['Current Stock'] : r['On Hand']),  // normally 0; only used by balanceAt
         exp: xd.getTime(),
         received: (r['Receiving Date'] || '').trim(),
         archived: true                                    // so callers can tell it is spent
