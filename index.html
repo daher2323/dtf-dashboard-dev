@@ -1045,8 +1045,9 @@ var CSV_INVENTORY = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZP
 // Rows missing a part #, lot # or usable expiry date are skipped — an archived lot with no
 // expiry cannot serve as a FEFO comparison, so it is no loss.
 // 2026-10-21: repointed from RMIZeroStock (gid 1775747917) to RMIZeroStock_NEW. Its layout
-// differs (`On Hand` / `Unit` / `Reason`, no Receiving Date), and while its EXP. Date column
-// is blank every row is skipped, so FEFO falls back to live-sheet lots only.
+// differs (`On Hand` / `Unit` / `Reason`, no Receiving Date). EXP. Date is filled on nearly
+// every row (1,429 of 1,445 on 2026-10-21); the few blanks are skipped as above. With no
+// Receiving Date, an archived lot never fails FEFO's "not received yet" test.
 var CSV_INVENTORY_ARCHIVE = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=1591731440&single=true&output=csv';
 // Live inventory feed — the Apps Script web app in apps-script/feed-api.gs. Paste its /exec
 // URL here (no query string; the code appends ?feed=...) and the published CSVs above become
