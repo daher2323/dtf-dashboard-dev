@@ -14279,19 +14279,90 @@ function setMatSummaryView(view) {
 // are at the front. The cap is stated, never silent.
 var MAT_LOT_CAP = 15;
 // A high-turnover lot can be spread over 20+ bins (one Creatine lot lists 26), so
-// the cell shows the first few and parks the rest in the tooltip. Truncating with
-// the count visible beats both wrapping the table apart and silently dropping bins.
+// the cell shows the first few and a `+N` that opens the full list in place, grouped
+// by rack. Truncating with the count visible beats both wrapping the table apart and
+// silently dropping bins. The tooltip alone was not enough: its text cannot be
+// selected or copied, and a phone or tablet has no hover at all.
 var MAT_LOC_SHOW = 3;
+// Lots whose full bin list is open, by upper-cased T# (or the raw location string
+// where a caller has no lot). Module state so the list survives the 60s refresh and
+// any re-render of the panel; toggling edits the DOM in place, so opening one never
+// rebuilds the table or moves the page.
+var _matLocOpen = {};
 // M/D/YYYY from an epoch ms, for the export and the lot table.
 function _matExpDateStr(ms) { var d = new Date(ms); return (d.getMonth()+1) + '/' + d.getDate() + '/' + d.getFullYear(); }
-function _matLocShort(loc) {
+// Bins grouped by rack: `2R-13-A, 2R-13-B` -> { rack: '2R-13', slots: ['A','B'] }.
+// The rack is everything before the last dash, which is how someone walks the aisle;
+// a bin with no dash (`Isle 01`) is its own group with no slots. Racks sort naturally
+// (2R-02 before 2R-14), slots alphabetically.
+function _matLocGroups(bins) {
+  var by = {}, order = [];
+  bins.forEach(function(b){
+    var i = b.lastIndexOf('-');
+    var rack = i > 0 ? b.slice(0, i) : b, slot = i > 0 ? b.slice(i + 1) : '';
+    if (!by[rack]) { by[rack] = []; order.push(rack); }
+    if (slot && by[rack].indexOf(slot) === -1) by[rack].push(slot);
+  });
+  function nat(a, b) {
+    var ax = a.toUpperCase().match(/\d+|\D+/g) || [], bx = b.toUpperCase().match(/\d+|\D+/g) || [];
+    for (var k = 0; k < Math.min(ax.length, bx.length); k++) {
+      if (ax[k] === bx[k]) continue;
+      var an = /^\d/.test(ax[k]), bn = /^\d/.test(bx[k]);
+      if (an && bn) return parseInt(ax[k], 10) - parseInt(bx[k], 10);
+      return ax[k] < bx[k] ? -1 : 1;
+    }
+    return ax.length - bx.length;
+  }
+  order.sort(nat);
+  return order.map(function(r){ return { rack: r, slots: by[r].sort(nat) }; });
+}
+// `lot` is optional; it keys the open state so the same lot listed in two panels
+// opens and closes together.
+function _matLocShort(loc, lot) {
   var raw = (loc == null ? '' : String(loc)).trim();
   if (!raw) return '<span style="color:#5f5e5a;">—</span>';
-  var bins = raw.split(/\s*,\s*/).filter(function(x){ return x !== ''; });
+  // De-duplicated: the sheet sometimes names a bin twice in one cell (T35658 lists 3R-24-C twice).
+  var seen = {}, bins = [];
+  raw.split(/\s*,\s*/).forEach(function(x){
+    var u = x.toUpperCase();
+    if (x !== '' && !seen[u]) { seen[u] = 1; bins.push(x); }
+  });
   if (bins.length <= MAT_LOC_SHOW) return esc(bins.join(', '));
-  return '<span title="' + esc(bins.join(', ')) + '" style="border-bottom:1px dotted #444441;cursor:help;">'
-    + esc(bins.slice(0, MAT_LOC_SHOW).join(', '))
-    + ' <span style="color:#5f5e5a;">+' + (bins.length - MAT_LOC_SHOW) + '</span></span>';
+  var key = String(lot || raw).toUpperCase(), open = !!_matLocOpen[key], all = bins.join(', ');
+  var btn = 'background:transparent;border:none;cursor:pointer;padding:0;font-family:inherit;font-size:inherit;';
+  var groups = _matLocGroups(bins).map(function(g){
+    return '<span style="color:#888780;">' + esc(g.rack) + '</span>'
+      + '<span style="color:#cfcdc7;">' + esc(g.slots.join(' ')) + '</span>';
+  }).join('');
+  return '<span class="mat-loc" data-loc-key="' + esc(key) + '">'
+    + '<span class="mat-loc-short" style="display:' + (open ? 'none' : 'inline') + ';">'
+      + '<span title="' + esc(all) + '">' + esc(bins.slice(0, MAT_LOC_SHOW).join(', ')) + '</span> '
+      + '<button type="button" onclick="toggleMatLoc(' + jsStr(key) + ',event)" title="Show all ' + bins.length + ' locations" style="' + btn + 'color:#85B7EB;">+' + (bins.length - MAT_LOC_SHOW) + ' ▾</button>'
+    + '</span>'
+    + '<span class="mat-loc-full" style="display:' + (open ? 'block' : 'none') + ';white-space:normal;">'
+      + '<span style="display:grid;grid-template-columns:max-content auto;column-gap:10px;row-gap:1px;user-select:text;-webkit-user-select:text;">' + groups + '</span>'
+      + '<span style="display:flex;gap:12px;margin-top:4px;font-size:11px;color:#5f5e5a;">'
+        + '<span>' + bins.length + ' bins</span>'
+        + '<button type="button" onclick="event.stopPropagation();_logiCopy(' + jsStr(all) + ',this)" title="Copy all locations" style="' + btn + 'color:#85B7EB;">Copy</button>'
+        + '<button type="button" onclick="toggleMatLoc(' + jsStr(key) + ',event)" style="' + btn + 'color:#85B7EB;">Hide ▴</button>'
+      + '</span>'
+    + '</span>'
+  + '</span>';
+}
+// In place, not through a render: every cell for this key flips (a lot can be listed
+// in the lot table and an exposure panel at once), and the state is kept for the next
+// render to read.
+function toggleMatLoc(key, ev) {
+  if (ev) ev.stopPropagation();
+  var open = !_matLocOpen[key];
+  if (open) _matLocOpen[key] = 1; else delete _matLocOpen[key];
+  var els = document.querySelectorAll('.mat-loc');
+  for (var i = 0; i < els.length; i++) {
+    if (els[i].getAttribute('data-loc-key') !== key) continue;
+    var s = els[i].querySelector('.mat-loc-short'), f = els[i].querySelector('.mat-loc-full');
+    if (s) s.style.display = open ? 'none' : 'inline';
+    if (f) f.style.display = open ? 'block' : 'none';
+  }
 }
 // Evidence for one "skipped N x" badge: every RUN that went past this lot, what was
 // pulled instead and when. One row per (day, production lot) — the same unit
@@ -14470,7 +14541,7 @@ function matLotTableHTML(m, unit) {
       + '<td style="' + td + 'text-align:right;color:#85B7EB;font-weight:500;">' + fmtStockQty(L.qty) + ' ' + unit + '</td>'
       + '<td style="' + td + 'text-align:right;">' + dateTxt + '</td>'
       + '<td style="' + td + 'text-align:right;">' + daysTxt + '</td>'
-      + '<td style="' + td + 'color:#cfcdc7;max-width:260px;overflow:hidden;text-overflow:ellipsis;">' + _matLocShort(L.loc) + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;max-width:260px;overflow:hidden;text-overflow:ellipsis;">' + _matLocShort(L.loc, L.lot) + '</td>'
       + '<td style="' + td + 'color:#888780;max-width:200px;overflow:hidden;text-overflow:ellipsis;">' + (L.supplier ? esc(L.supplier) : '') + (L.batch ? ' <span style="color:#5f5e5a;">' + esc(L.batch) + '</span>' : '') + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (L.received ? esc(L.received) : '—') + '</td>'
       + '</tr>'
@@ -14607,7 +14678,7 @@ function stockOveragePanelHTML() {
       + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + ' ' + u + '</td>'
       + '<td style="' + td + 'text-align:right;color:#F09595;font-weight:500;">+' + fmtStockQty(o.over) + ' ' + u
         + (mult ? ' <span style="font-size:9px;color:#a06060;font-weight:400;">' + mult.toFixed(2) + '×</span>' : '') + '</td>'
-      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc) + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc, o.lot) + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (o.received ? esc(o.received) : '—') + '</td>'
       + '</tr>';
   }).join('');
@@ -14718,7 +14789,7 @@ function stockBlindPanelHTML() {
       + '<td style="' + td + '">' + cell + '</td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + (o.start == null ? '\u2014' : fmtStockQty(o.start) + ' ' + u) + '</td>'
       + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(o.cur) + ' ' + u + '</td>'
-      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc) + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(o.loc, o.lot) + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (o.received ? esc(o.received) : '\u2014') + '</td>'
       + '</tr>';
   }).join('');
@@ -14780,7 +14851,7 @@ function expiryIssuesPanelHTML() {
       + '<td style="' + td + '">' + (r.raw
           ? '<span style="color:#F09595;font-weight:500;">' + esc(r.raw) + '</span> <span style="font-size:9px;color:#5f5e5a;">unreadable</span>'
           : '<span style="color:#5f5e5a;">(empty)</span> <span style="font-size:9px;color:#5f5e5a;">not recorded</span>') + '</td>'
-      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc) + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc, r.lot) + '</td>'
       + '<td style="' + td + 'padding-right:14px;text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
       + '</tr>';
   }).join('');
@@ -14961,7 +15032,7 @@ function expiryExposurePanelHTML() {
       + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.origQty == null ? '—'
           : fmtStockQty(r.origQty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span> ' + _expoFracTxt(r.fracLeft)) + '</td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + _expoLifeTxt(r.lifeAtReceipt) + '</td>'
-      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc) + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc, r.lot) + '</td>'
       + '<td style="' + td + 'padding-right:14px;color:#888780;max-width:220px;overflow:hidden;text-overflow:ellipsis;">' + (r.supplier ? esc(r.supplier) : '—') + '</td>'
       + '</tr>';
   }).join('');
