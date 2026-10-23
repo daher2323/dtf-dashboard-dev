@@ -2546,7 +2546,9 @@ function fetchMaterialsIfNeeded(force) {
       // Same raw text, parsed positionally for Recall Tracking (see parsePickRows).
       pickRows = parsedPicks;
       _fefoInvalidate();   // pick rows are half the FEFO input
-      if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+      // The sub-bar too: its window group reads matDataSpan(), so painted before the feed
+      // landed it has no span and drops "Past 12 months" until something repaints it.
+      if (mainSection === 'procurement' && procView === 'materials') { renderSubBar(); renderMaterials(); }
       // Route through render() (not renderRecall directly) so the wrapper preserves
       // focus + caret — otherwise finishing the pick-sheet fetch mid-typing wipes
       // the input. recallQuery is kept live via onRecallInput, so the value survives.
