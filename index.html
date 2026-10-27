@@ -1162,12 +1162,13 @@ var _stockBlindOpen = false;   // the lots with no usable Original Qty Received,
 var inventoryLoaded = false; // true once a successful inventory fetch has populated inventoryByPart
 var demandByPart = {};       // DTF Part # -> forthcoming demand in KG, summed across the demand sheet
 var demandLoaded = false;    // true once a successful demand fetch has populated demandByPart
+var demandLinesByPart = {};  // DTF Part # -> [{ units, servings, product, kg }], one per product block (parseDemand)
 // sessionStorage caches so On hand / Committed / Available / Cover render instantly
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
 var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v10';  // v10: switched to the RMI_NEW sheet, so a payload cached from the old RMI tab is not shown for up to 10 min after the switch; v9: the audit carries blindLots, not just a count — a v8 payload would open an empty list; v8: carries the impossible-stock audit, which parseInventory does not re-run to rebuild on a cache hit; v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
-var DEMAND_CACHE_KEY = 'dtf_demand_cache_v1';
+var DEMAND_CACHE_KEY = 'dtf_demand_cache_v2';  // v2: carries the per-product lines, so a v1 payload would open an empty Committed tab
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
 // In-flight guards for the four slow-moving feeds. The *Loaded flags above answer
@@ -3289,7 +3290,7 @@ var _expiryExposureView = '';
 var _expiryExposureSort = 'date';    // 'date' | 'qty'
 // Which section of an expanded material is showing. Sticky across materials on
 // purpose: auditing lots means opening five rows in a row and wanting Lots each time.
-var matInlineTab = 'usage';          // 'usage' | 'customers' | 'parts' | 'lots'
+var matInlineTab = 'usage';          // 'usage' | 'customers' | 'committed' | 'parts' | 'lots'
 var _fefoCache = null, _fefoCacheKey = '';
 // All three FEFO memos key on pick-row and lot COUNTS, which a corrected expiry date
 // leaves untouched — so a data refresh has to drop them by hand, together. Missing one
@@ -4876,11 +4877,31 @@ var DEMAND_FIRST_DATA_ROW = 0;
 // Scan the demand grid for part #s and accumulate KG (the cell two columns to the
 // right of each part #) into { part # -> total KG }. Validated to reproduce the
 // sheet's own indicator totals exactly.
+//
+// Also returns `lines`: which product each part's KG is committed to. Every block
+// opens with a header one column right of the part # column, in the shape
+// "<units> <brand + product>" ("550 First Class Labs Energize Orange Mango (10/19)",
+// "10.5k Halo Hydration ...", "10k Servings Magnat Labs ..."). The header is the
+// nearest row above with text in the name column and nothing in the part # or KG
+// columns: a block can carry part-less lines (salts, flavors), and those always have
+// a KG, so they never pass for a header. Measured 2026-10-27: 365 blocks, every one
+// opens with a unit count, and every part's lines sum exactly to its byPart total.
+// Brand and product are not split apart, since the sheet gives no way to tell
+// "Die Tryin Co." from "Kidney Support"; the header is shown as written.
+var DEMAND_HEAD_RE = /^(\d[\d,]*(?:\.\d+)?)(k)?(\s+servings)?\s+(.+)$/i;
+function _demandHead(h) {
+  var mt = DEMAND_HEAD_RE.exec(h);
+  if (!mt) return { units: null, servings: false, product: h };
+  var u = parseFloat(mt[1].replace(/,/g, '')) * (mt[2] ? 1000 : 1);
+  return { units: Math.round(u), servings: !!mt[3], product: mt[4].trim() };
+}
 function parseDemand(text) {
-  if (!text) return {};
+  var out = { byPart: {}, lines: {} };
+  if (!text) return out;
   try {
     var grid = parseCSVGrid(text);
-    var byPart = {};
+    var byPart = out.byPart, lines = out.lines, blockAt = {};
+    function cell(r, c) { return (grid[r] && grid[r][c] != null) ? String(grid[r][c]).trim() : ''; }
     for (var r = DEMAND_FIRST_DATA_ROW; r < grid.length; r++) {
       var cells = grid[r];
       if (!cells) continue;
@@ -4889,11 +4910,25 @@ function parseDemand(text) {
         if (DEMAND_PART_RE.test(v)) {
           var kg = c + 2 < cells.length ? num(cells[c+2]) : 0;
           byPart[v] = (byPart[v] || 0) + kg;
+          var rr = r - 1, head = '';
+          while (rr >= 0) {
+            if (cell(rr, c + 1) && !DEMAND_PART_RE.test(cell(rr, c)) && !cell(rr, c + 2)) { head = cell(rr, c + 1); break; }
+            rr--;
+          }
+          // No header above (never seen) still counts toward byPart; the line keeps
+          // the KG so the tab's total reconciles, under an explicit unknown product.
+          var key = v + '|' + rr + '|' + c;
+          if (!blockAt[key]) {
+            var hd = head ? _demandHead(head) : { units: null, servings: false, product: '' };
+            blockAt[key] = { units: hd.units, servings: hd.servings, product: hd.product, kg: 0 };
+            (lines[v] = lines[v] || []).push(blockAt[key]);
+          }
+          blockAt[key].kg += kg;
         }
       }
     }
-    return byPart;
-  } catch (e) { return {}; }
+    return out;
+  } catch (e) { return { byPart: {}, lines: {} }; }
 }
 
 function fetchDemandCSV(fresh) {
@@ -4915,10 +4950,11 @@ function fetchDemandIfNeeded(force) {
   fetchDemandCSV(!!force).then(function(t){
     _demandFetching = false;
     var parsed = parseDemand(t);
-    if (Object.keys(parsed).length > 0) {
-      demandByPart = parsed;
+    if (Object.keys(parsed.byPart).length > 0) {
+      demandByPart = parsed.byPart;
+      demandLinesByPart = parsed.lines;
       demandLoaded = true;
-      try { sessionStorage.setItem(DEMAND_CACHE_KEY, JSON.stringify({ byPart: parsed, ts: Date.now() })); } catch(e) {}
+      try { sessionStorage.setItem(DEMAND_CACHE_KEY, JSON.stringify({ byPart: parsed.byPart, lines: parsed.lines, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
     }
   }).catch(function(e){
@@ -4947,7 +4983,7 @@ function _loadStockCaches() {
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
-    if (rd) { var cd = JSON.parse(rd); if (cd && cd.byPart && (Date.now() - (cd.ts || 0)) < STOCK_CACHE_TTL) { demandByPart = cd.byPart; demandLoaded = true; _stockHydratedFromCache = true; } }
+    if (rd) { var cd = JSON.parse(rd); if (cd && cd.byPart && cd.lines && (Date.now() - (cd.ts || 0)) < STOCK_CACHE_TTL) { demandByPart = cd.byPart; demandLinesByPart = cd.lines; demandLoaded = true; _stockHydratedFromCache = true; } }
   } catch(e) {}
 }
 
@@ -14573,12 +14609,56 @@ function matLotTableHTML(m, unit) {
     + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">' + notes.join(' ') + '</div>'
     + '</div>';
 }
+// The products behind a material's Committed figure, from the demand sheet's
+// per-product blocks (parseDemand). Read over m.stockParts, the same roster the
+// Committed figure is summed over, so the tab's total always equals it.
+function _matCommittedLines(m) {
+  var parts = (m && (m.stockParts || m.partNums)) || [], out = [], i, j, ls;
+  for (i = 0; i < parts.length; i++) {
+    ls = demandLinesByPart[parts[i]] || [];
+    for (j = 0; j < ls.length; j++) if (ls[j].kg > 0) out.push({ part: parts[i], units: ls[j].units, servings: ls[j].servings, product: ls[j].product, kg: ls[j].kg });
+  }
+  out.sort(function(a, b){ return b.kg - a.kg || String(a.product).localeCompare(String(b.product)); });
+  return out;
+}
+function matCommittedHTML(m, unit) {
+  var lines = _matCommittedLines(m);
+  var multiPart = lines.some(function(l){ return l.part !== lines[0].part; });
+  var th = 'padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+  var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
+  var total = 0;
+  var rows = lines.map(function(l){
+    total += l.kg;
+    var u = l.units == null ? '\u2014' : (l.units.toLocaleString() + (l.servings ? ' servings' : ''));
+    return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">' + u + '</td>'
+      + '<td style="' + td + 'color:#c2c0b6;white-space:normal;">' + (l.product ? esc(l.product) : '<span style="color:#5f5e5a;">No product named on the sheet</span>') + '</td>'
+      + (multiPart ? '<td style="' + td + 'color:#888780;">' + esc(l.part) + '</td>' : '')
+      + '<td style="' + td + 'text-align:right;color:#e8e6e0;padding-right:14px;">' + fmtStockQty(l.kg) + ' ' + esc(unit) + '</td>'
+      + '</tr>';
+  }).join('');
+  return '<div>'
+    + '<div style="font-size:10px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:6px;">Committed to</div>'
+    + '<div class="pnl-sub-scroll" style="overflow-x:auto;"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr style="border-bottom:0.5px solid #2c2c2a;">'
+      + '<th style="' + th + 'text-align:right;width:1%;">Units</th>'
+      + '<th style="' + th + 'text-align:left;">Product</th>'
+      + (multiPart ? '<th style="' + th + 'text-align:left;width:1%;">Part #</th>' : '')
+      + '<th style="' + th + 'text-align:right;width:1%;padding-right:14px;">Committed</th>'
+    + '</tr></thead><tbody>' + rows
+      + '<tr><td style="' + td + 'text-align:right;color:#888780;font-weight:500;">Total</td><td></td>' + (multiPart ? '<td></td>' : '')
+      + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;padding-right:14px;">' + fmtStockQty(total) + ' ' + esc(unit) + '</td></tr>'
+    + '</tbody></table></div>'
+    + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">From the RMO demand sheet: each product\u2019s unit count and name as written there, and how much of this material it needs.</div>'
+    + '</div>';
+}
 // Which tab this material is showing. Parts only exists for grouped SKUs, so a
 // remembered 'parts' must fall back rather than render an empty panel.
 function _matTab(m) {
   var t = matInlineTab;
   if (t === 'parts' && !(m && m.isGroup)) return 'usage';
-  return (t === 'usage' || t === 'customers' || t === 'parts' || t === 'lots') ? t : 'usage';
+  if (t === 'committed' && !(m && m.demand > 0)) return 'usage';
+  return (t === 'usage' || t === 'customers' || t === 'committed' || t === 'parts' || t === 'lots') ? t : 'usage';
 }
 function setMatInlineTab(v) {
   matInlineTab = v;
@@ -15154,6 +15234,7 @@ function matInlineTabBar(m, idx) {
   var tabs = [
     { id:'usage',     label:'Usage' },
     { id:'customers', label:'Customers', count: custN },
+    { id:'committed', label:'Committed', count: _matCommittedLines(m).length, only: m.demand > 0 },
     { id:'parts',     label:'Parts',     count: partN, only: !!m.isGroup },
     { id:'lots',      label:'Lots',      count: lotN,  dot: risk, dotTip: riskTip }
   ];
@@ -15223,6 +15304,7 @@ function renderMatInline(m, idx) {
             + '<th style="text-align:right;padding:4px 14px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;">Lots</th>'
           + '</tr></thead><tbody>'+invRows+'</tbody></table></div>'
         + '</div>'
+        + (m.demand > 0 ? '<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;margin-top:10px;">' + matCommittedHTML(m, unit) + '</div>' : '')
         + matLotTableHTML(m, unit)
       + '</div>';
     return;   // no usage series here, so no tabs — the two tables are all there is
@@ -15353,6 +15435,7 @@ function renderMatInline(m, idx) {
             + summaryHTML
           : '')
       + (_matTab(m) === 'customers' ? summaryHTML : '')
+      + (_matTab(m) === 'committed' ? matCommittedHTML(m, unit) : '')
       + (_matTab(m) === 'parts' ? breakdownHTML : '')
       + (_matTab(m) === 'lots' ? matLotTableHTML(m, unit) : '')
     + '</div>';
