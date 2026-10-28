@@ -14359,7 +14359,10 @@ function _matLocGroups(bins) {
 }
 // `lot` is optional; it keys the open state so the same lot listed in two panels
 // opens and closes together.
-function _matLocShort(loc, lot) {
+// `show` overrides MAT_LOC_SHOW for a table that cannot spare the width (the exposure
+// panel shows one location, where Material is worth more than a third rack slot).
+function _matLocShort(loc, lot, show) {
+  var lim = show || MAT_LOC_SHOW;
   var raw = (loc == null ? '' : String(loc)).trim();
   if (!raw) return '<span style="color:#5f5e5a;">—</span>';
   // De-duplicated: the sheet sometimes names a bin twice in one cell (T35658 lists 3R-24-C twice).
@@ -14368,7 +14371,7 @@ function _matLocShort(loc, lot) {
     var u = x.toUpperCase();
     if (x !== '' && !seen[u]) { seen[u] = 1; bins.push(x); }
   });
-  if (bins.length <= MAT_LOC_SHOW) return esc(bins.join(', '));
+  if (bins.length <= lim) return esc(bins.join(', '));
   var key = String(lot || raw).toUpperCase(), open = !!_matLocOpen[key], all = bins.join(', ');
   var btn = 'background:transparent;border:none;cursor:pointer;padding:0;font-family:inherit;font-size:inherit;';
   var groups = _matLocGroups(bins).map(function(g){
@@ -14377,8 +14380,8 @@ function _matLocShort(loc, lot) {
   }).join('');
   return '<span class="mat-loc" data-loc-key="' + esc(key) + '">'
     + '<span class="mat-loc-short" style="display:' + (open ? 'none' : 'inline') + ';">'
-      + '<span title="' + esc(all) + '">' + esc(bins.slice(0, MAT_LOC_SHOW).join(', ')) + '</span> '
-      + '<button type="button" onclick="toggleMatLoc(' + jsStr(key) + ',event)" title="Show all ' + bins.length + ' locations" style="' + btn + 'color:#85B7EB;">+' + (bins.length - MAT_LOC_SHOW) + ' ▾</button>'
+      + '<span title="' + esc(all) + '">' + esc(bins.slice(0, lim).join(', ')) + '</span> '
+      + '<button type="button" onclick="toggleMatLoc(' + jsStr(key) + ',event)" title="Show all ' + bins.length + ' locations" style="' + btn + 'color:#85B7EB;">+' + (bins.length - lim) + ' ▾</button>'
     + '</span>'
     + '<span class="mat-loc-full" style="display:' + (open ? 'block' : 'none') + ';white-space:normal;">'
       + '<span style="display:grid;grid-template-columns:max-content auto;column-gap:10px;row-gap:1px;user-select:text;-webkit-user-select:text;">' + groups + '</span>'
@@ -15146,7 +15149,7 @@ function expiryExposurePanelHTML() {
       ? '<span style="color:#F09595;font-weight:500;">' + Math.abs(r.days).toLocaleString() + 'd ago</span>'
       : '<span style="color:' + (r.days <= 30 ? '#FAC775' : '#cfcdc7') + ';">' + r.days.toLocaleString() + 'd left</span>';
     return '<tr>'
-      + '<td title="' + esc(r.material || '') + '" style="' + td + 'color:#e8e6e0;max-width:220px;overflow:hidden;text-overflow:ellipsis;">' + esc(r.material || '—') + '</td>'
+      + '<td title="' + esc(r.material || '') + '" style="' + td + 'color:#e8e6e0;max-width:300px;overflow:hidden;text-overflow:ellipsis;">' + esc(r.material || '—') + '</td>'
       + '<td style="' + td + 'color:#888780;">' + esc(r.part) + '</td>'
       + '<td style="' + td + '">' + _blendCopyCell(r.lot) + '</td>'
       + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(r.qty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span></td>'
@@ -15159,8 +15162,8 @@ function expiryExposurePanelHTML() {
         + ' <span style="color:#888780;">\u00b7 ' + _expoLifeTxt(r.lifeAtReceipt) + '</span></td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.origQty == null ? '—'
           : fmtStockQty(r.origQty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span> ' + _expoFracTxt(r.fracLeft)) + '</td>'
-      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc, r.lot) + '</td>'
-      + '<td style="' + td + 'padding-right:14px;color:#888780;max-width:220px;overflow:hidden;text-overflow:ellipsis;">' + (r.supplier ? esc(r.supplier) : '—') + '</td>'
+      + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc, r.lot, 1) + '</td>'
+      + '<td title="' + esc(r.supplier || '') + '" style="' + td + 'padding-right:14px;color:#888780;max-width:140px;overflow:hidden;text-overflow:ellipsis;">' + (r.supplier ? esc(r.supplier) : '—') + '</td>'
       + '</tr>';
   }).join('');
 
