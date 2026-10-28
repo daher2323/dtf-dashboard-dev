@@ -13071,6 +13071,12 @@ function _drawProcChart(sid) {
     partial.push(isCur);
   }
   var noun = cd.noun || 'units';
+  // A month left open survives a re-render (background refresh, zero-usage checkbox), as
+  // long as it is still on screen.
+  var openIdx = -1;
+  for (i = 0; i < series.length; i++) if (series[i].key === _procDrill[sid]) openIdx = i;
+  if (openIdx === -1) delete _procDrill[sid];
+  for (i = 0; i < series.length; i++) if (i === openIdx) { bg[i] = CUST_BAR_EDGE; }
   // The customer chart's average line, by the same rule: completed months on screen only
   // (the current one is partial), starting at the SKU's first use if that falls inside the
   // window. A quiet month after that is a real zero and counts.
@@ -13096,8 +13102,26 @@ function _drawProcChart(sid) {
     options: { responsive: true, maintainAspectRatio: false, layout: { padding: { top: 20 } },
       plugins: { legend: { display: false },
         tooltip: { filter: function(c) { return c.datasetIndex === 0; }, callbacks: { label: function(c) {
-          return Math.round(c.raw).toLocaleString() + ' ' + noun + (partial[c.dataIndex] ? ' \u2014 month in progress' : '');
+          return Math.round(c.raw).toLocaleString() + ' ' + noun + (partial[c.dataIndex] ? ' \u2014 month in progress' : '') + ' \u2014 click to see products';
         } } } },
+      onClick: function(evt, els) {
+        var hit = (els || []).filter(function(e){ return e.datasetIndex === 0; })[0];
+        if (!hit) return;
+        var mk = series[hit.index].key;
+        if (_procDrill[sid] === mk) delete _procDrill[sid]; else _procDrill[sid] = mk;
+        var ch = charts[key];
+        if (ch) {
+          ch.data.datasets[0].backgroundColor = series.map(function(s, j){
+            return s.key === _procDrill[sid] ? CUST_BAR_EDGE : (partial[j] ? CUST_BAR_PART : CUST_BAR);
+          });
+          ch.update();
+        }
+        _procMonthDrill(sid);
+      },
+      onHover: function(event, els) {
+        var t = event.native ? event.native.target : event.target;
+        if (t) t.style.cursor = (els || []).some(function(e){ return e.datasetIndex === 0; }) ? 'pointer' : 'default';
+      },
       scales: {
         x: { ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, autoSkip: true, maxRotation: 0 }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } },
         y: { beginAtZero: true, ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, callback: function(v) { return Math.round(v).toLocaleString(); } }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } }
@@ -13106,6 +13130,67 @@ function _drawProcChart(sid) {
       colorFor: function(i) { return partial[i] ? BAR_LABEL_OFF : BAR_LABEL; },
       format: _custShortNum })]
   });
+  _procMonthDrill(sid);
+}
+
+// sid -> month key ('2026-08') whose product list is open under that SKU's chart.
+var _procDrill = {};
+// What used this SKU in the clicked month: one row per product (spelling variants merged
+// through prodKey, as the By customer tab does), with its lots, units and share of the
+// month. Rows with no Product name are kept as their own line, so the total always equals
+// the bar.
+function _procMonthDrill(sid) {
+  var el = document.getElementById('pdrill-' + sid);
+  if (!el) return;
+  var mk = _procDrill[sid], ctx = window._procMonthCtx;
+  var dataEl = document.getElementById('pdata-' + sid);
+  if (!mk || !ctx || !dataEl) { el.innerHTML = ''; return; }
+  var cd = JSON.parse(dataEl.textContent), noun = cd.noun || 'units';
+  var y = parseInt(mk.slice(0, 4), 10), m = parseInt(mk.slice(5), 10) - 1;
+  var from = new Date(y, m, 1), to = new Date(y, m + 1, 1);
+  var byP = {}, total = 0, lotsAll = {}, i;
+  for (i = 0; i < ctx.rows.length; i++) {
+    var r = ctx.rows[i];
+    var dt = new Date(r['Date']); if (isNaN(dt) || dt < ctx.cutoff || dt < from || dt >= to) continue;
+    var lot = (r['Lot Number'] || '').trim(); if (!lot) continue;
+    if (ctx.getSku(r) !== cd.sku) continue;
+    var u = ctx.getUnits(r), prod = (r['Product'] || '').trim();
+    var pk = prod ? prodKey(prod) : '\u0000none';
+    var p = byP[pk] || (byP[pk] = { names: {}, units: 0, lots: {} });
+    if (prod) p.names[prod] = (p.names[prod] || 0) + 1;
+    p.units += u; p.lots[lot] = 1; lotsAll[lot] = 1; total += u;
+  }
+  var list = Object.keys(byP).map(function(k){
+    var p = byP[k], best = '', n = -1;
+    Object.keys(p.names).forEach(function(nm){ if (p.names[nm] > n) { n = p.names[nm]; best = nm; } });
+    return { name: best, units: p.units, lots: Object.keys(p.lots) };
+  }).sort(function(a, b){ return b.units - a.units; });
+  var monthTxt = from.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  var head = '<div style="display:flex;align-items:center;gap:10px;margin:10px 0 6px;font-family:system-ui;">'
+    + '<span style="font-size:11px;font-weight:500;color:#e8e6e0;">' + esc(cd.sku) + ' \u00b7 ' + esc(monthTxt) + '</span>'
+    + '<span style="font-size:11px;color:#888780;">' + Math.round(total).toLocaleString() + ' ' + esc(noun) + ' across ' + list.length + ' product' + (list.length === 1 ? '' : 's')
+      + ' and ' + Object.keys(lotsAll).length + ' lot' + (Object.keys(lotsAll).length === 1 ? '' : 's') + '</span>'
+    + '<button onclick="delete _procDrill[' + jsStr(sid) + '];_drawProcChart(' + jsStr(sid) + ')" style="margin-left:auto;background:transparent;border:none;color:#85B7EB;font-size:11px;cursor:pointer;font-family:system-ui;padding:0;">Close</button>'
+  + '</div>';
+  if (!list.length) { el.innerHTML = head + '<div style="font-size:11px;color:#5f5e5a;padding:4px 0 6px;">No production used this ' + esc(cd.type || 'item') + ' in ' + esc(monthTxt) + '.</div>'; return; }
+  var th = 'padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;border-bottom:0.5px solid #2c2c2a;';
+  var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;border-bottom:0.5px solid #2c2c2a;';
+  var rows = list.map(function(p){
+    var pct = total > 0 ? p.units / total * 100 : 0;
+    return '<tr>'
+      + '<td style="' + td + 'color:#e8e6e0;white-space:normal;">' + (p.name ? esc(p.name) : '<span style="color:#5f5e5a;">No product name on the row</span>') + '</td>'
+      + '<td title="' + esc(p.lots.join(', ')) + '" style="' + td + 'text-align:right;color:#888780;cursor:help;">' + p.lots.length + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#e8e6e0;">' + Math.round(p.units).toLocaleString() + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#888780;">' + (pct < 0.5 && pct > 0 ? '&lt;1' : Math.round(pct)) + '%</td>'
+      + '<td class="pnl-bar-only" style="' + td + 'padding-right:14px;width:110px;"><div style="height:4px;background:#2c2c2a;border-radius:2px;overflow:hidden;"><div style="height:100%;width:' + pct.toFixed(1) + '%;background:#378ADD;border-radius:2px;"></div></div></td>'
+      + '</tr>';
+  }).join('');
+  el.innerHTML = head
+    + '<div class="pnl-sub-scroll" style="overflow-x:auto;max-height:320px;overflow-y:auto;" data-keep-scroll id="pdrill-scroll-' + sid + '"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr><th style="' + th + 'text-align:left;">Product</th><th style="' + th + 'text-align:right;">Lots</th>'
+      + '<th style="' + th + 'text-align:right;">' + esc(noun.charAt(0).toUpperCase() + noun.slice(1)) + '</th>'
+      + '<th style="' + th + 'text-align:right;">Share</th><th class="pnl-bar-only" style="' + th + 'padding-right:14px;"></th></tr></thead>'
+    + '<tbody>' + rows + '</tbody></table></div>';
 }
 
 function exportProcurement() {
@@ -17720,6 +17805,10 @@ function renderProcurement() {
   var totalQtrUnits = {};
   // For desiccants we also track final units per quarter to compute avg per unit
   var skuQtrFinalUnits = {};
+  // For the chart's month click-through (_procMonthDrill): the same rows, SKU key, unit
+  // count and cutoff the monthly bars are summed with, so the product list always adds up
+  // to the bar that was clicked.
+  window._procMonthCtx = { rows: allRowsCombined, getSku: getSku, getUnits: getUnits, cutoff: cutoff };
 
   allRowsCombined.forEach(function(r) {
     var dt = new Date(r['Date']); if (isNaN(dt) || dt < cutoff) return;
@@ -18345,6 +18434,7 @@ function renderProcurement() {
           +'<span style="text-transform:none;letter-spacing:0;color:#5f5e5a;margin-left:6px;">'+esc('last ' + Math.min(PROC_CHART_MONTHS, procMonthKeys.length) + ' month' + (Math.min(PROC_CHART_MONTHS, procMonthKeys.length)===1?'':'s') + ' \u00b7 ' + curMoLabel + ' in progress')+'</span>'
           +'<span id="pchart-avg-'+sid+'" style="float:right;text-transform:none;letter-spacing:0;"></span></div>'
         +'<div style="position:relative;height:160px;"><canvas id="pchart-'+sid+'" role="img" aria-label="Monthly '+esc(label)+' usage">Trend.</canvas></div>'
+        +'<div id="pdrill-'+sid+'"></div>'
       +'</div>'
       // flex-wrap so the bulk button drops to its own line on a phone rather than
       // squeezing the segmented control; margin-left:auto pins it right on desktop.
