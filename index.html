@@ -3288,6 +3288,9 @@ var _expiryIssuesOpen = false;       // the unreadable/missing-date list under t
 // longest-expired-first on the expired slice — the order a review works down.
 var _expiryExposureView = '';
 var _expiryExposureSort = 'date';    // 'date' | 'qty'
+// Hide lots whose Part # is committed on the RMO demand sheet. What is left of the Past
+// date slice is the disposal shortlist: expired, and no product on the books needs it.
+var _expiryExposureUncommitted = false;
 // Which section of an expanded material is showing. Sticky across materials on
 // purpose: auditing lots means opening five rows in a row and wanting Lots each time.
 var matInlineTab = 'usage';          // 'usage' | 'customers' | 'committed' | 'parts' | 'lots'
@@ -15074,6 +15077,10 @@ function _expoUsageByPart() {
   }
   return out;
 }
+function _expoScoped(all) {
+  if (!_expiryExposureUncommitted || !demandLoaded) return all;
+  return all.filter(function(r){ return !(demandByPart[r.part] > 0); });
+}
 function _expoSinceTxt() { return MATERIALS_TRACKING_START.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); }
 function _expoSorted(rows) {
   return rows.slice().sort(function(a, b){
@@ -15091,6 +15098,9 @@ function expiryExposurePanelHTML() {
   if (!view) return '';
   var all = _expiryExposureRows();
   if (!all.length) return '';
+  // Counts on the scope buttons follow the commitment filter, so they always agree with
+  // the rows and the total beside them.
+  all = _expoScoped(all);
   var shown = _expoSorted(all.filter(function(r){ return view === 'all' || r.scope === view; }));
   var T = _expoTotals(shown);
   var nExp = 0, nSoon = 0, i;
@@ -15110,7 +15120,7 @@ function expiryExposurePanelHTML() {
       + 'color:' + (on ? '#e8e6e0' : '#888780') + ';font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;">' + label + '</button>';
   };
 
-  // Fourteen columns and up to 447 rows inside a 420px box: the header cannot be allowed to
+  // Twelve columns and up to 447 rows inside a 420px box: the header cannot be allowed to
   // scroll away, because nobody memorises "Received" vs "Qty received" vs "Life at receipt"
   // from position alone. Sticky cells need border-collapse:separate to paint in WebKit (the
   // same trade .pnl-sub-table makes), and that mode drops row-level borders — so the header
@@ -15123,12 +15133,12 @@ function expiryExposurePanelHTML() {
   var rows = shown.map(function(r){
     var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;border-bottom:0.5px solid #2c2c2a;';
     var u = usage[r.part], unitS = matUnitShort(r.material), dem = demandByPart[r.part] || 0;
-    var lastTxt = !usageReady ? '<span style="color:#5f5e5a;">\u2026</span>'
-      : (u && u.last ? '<span style="color:#cfcdc7;">' + _matExpDateStr(u.last.getTime()) + '</span>'
-                     : '<span style="color:#5f5e5a;">None since ' + _expoSinceTxt() + '</span>');
-    var usedTxt = !usageReady ? '<span style="color:#5f5e5a;">\u2026</span>'
-      : (u && u.qty > 0 ? '<span style="color:#cfcdc7;">' + fmtStockQty(u.qty) + '</span> <span style="color:#5f5e5a;">' + unitS + '</span>'
-                        : '<span style="color:#5f5e5a;">\u2014</span>');
+    // One cell for both usage figures, quantity first: it is the one that answers "do we
+    // still use this", and the date beside it says how recently.
+    var useTxt = !usageReady ? '<span style="color:#5f5e5a;">\u2026</span>'
+      : (!(u && u.last) ? '<span style="color:#5f5e5a;">None since ' + _expoSinceTxt() + '</span>'
+        : (u.qty > 0 ? '<span style="color:#cfcdc7;">' + fmtStockQty(u.qty) + '</span> <span style="color:#5f5e5a;">' + unitS + '</span>' : '<span style="color:#5f5e5a;">\u2014</span>')
+          + ' <span style="color:#5f5e5a;">\u00b7 last ' + _matExpDateStr(u.last.getTime()) + '</span>');
     var demTxt = !demandLoaded ? '<span style="color:#5f5e5a;">\u2026</span>'
       : (dem > 0 ? '<span style="color:#cfcdc7;">' + fmtStockQty(dem) + '</span> <span style="color:#5f5e5a;">' + unitS + '</span>'
                  : '<span style="color:#5f5e5a;">\u2014</span>');
@@ -15140,10 +15150,8 @@ function expiryExposurePanelHTML() {
       + '<td style="' + td + 'color:#888780;">' + esc(r.part) + '</td>'
       + '<td style="' + td + '">' + _blendCopyCell(r.lot) + '</td>'
       + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(r.qty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span></td>'
-      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + _matExpDateStr(r.exp) + '</td>'
-      + '<td style="' + td + 'text-align:right;">' + state + '</td>'
-      + '<td style="' + td + 'text-align:right;">' + lastTxt + '</td>'
-      + '<td style="' + td + 'text-align:right;">' + usedTxt + '</td>'
+      + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + _matExpDateStr(r.exp) + ' <span style="font-size:10px;">' + state + '</span></td>'
+      + '<td style="' + td + 'text-align:right;">' + useTxt + '</td>'
       + '<td style="' + td + 'text-align:right;">' + demTxt + '</td>'
       + '<td style="' + td + 'text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.origQty == null ? '—'
@@ -15158,6 +15166,16 @@ function expiryExposurePanelHTML() {
     + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:#211d16;">'
       + '<span style="font-size:11px;font-weight:500;color:#FAC775;text-transform:uppercase;letter-spacing:.04em;">Expiration exposure</span>'
       + btn('expired', 'Past date', nExp) + btn('soon', 'Within ' + EXPIRY_SOON_DAYS + ' days', nSoon) + btn('all', 'Both', all.length)
+      + (function(){
+          var on = _expiryExposureUncommitted && demandLoaded;
+          return '<button onclick="toggleExpiryExposureUncommitted()"' + (demandLoaded ? '' : ' disabled')
+            + ' title="' + (demandLoaded ? 'Hide lots whose Part # is committed to an upcoming product on the RMO demand sheet.' : 'Waiting for the RMO demand sheet to load.') + '"'
+            + ' style="height:22px;padding:0 9px;border-radius:6px;cursor:' + (demandLoaded ? 'pointer' : 'default') + ';display:inline-flex;align-items:center;gap:5px;'
+            + 'border:0.5px solid ' + (on ? '#EF9F27' : '#3d3524') + ';background:' + (on ? '#2a2113' : 'transparent') + ';'
+            + 'color:' + (on ? '#FAC775' : '#888780') + ';opacity:' + (demandLoaded ? '1' : '.5') + ';font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;">'
+            + '<span style="width:9px;height:9px;border-radius:2px;display:inline-block;box-sizing:border-box;border:1px solid ' + (on ? '#EF9F27' : '#5f5e5a') + ';background:' + (on ? '#EF9F27' : 'transparent') + ';"></span>'
+            + 'No commitments</button>';
+        })()
       + '<span style="font-size:11px;color:#888780;font-family:system-ui;">'
         + '<span style="color:#cfcdc7;">' + _expoQtyTxt(T.kg, T.sg) + '</span> across ' + T.lots.toLocaleString() + ' lot' + (T.lots===1?'':'s')
       + '</span>'
@@ -15185,15 +15203,14 @@ function expiryExposurePanelHTML() {
       + 'Lots with a missing or unreadable date are listed separately on the coverage line. '
       + 'Life at receipt is the shelf life the lot arrived with (Receiving Date to EXP. Date) — a short one means we accepted short-dated material, a long one means it sat here. '
       + 'Qty received is the original receipt, so On hand beside it says how much of the drum is actually at stake. Both are blank where the sheet has no Receiving Date or receipt quantity. '
-      + 'Part last used, Used and Committed are for the Part # as a whole, not this lot: an expired lot of a part still in use or on the books may be worth re-certifying. Pick history starts ' + _expoSinceTxt() + ', so \u201cNone since\u201d means no draw since then, not never.'
+      + 'Part use and Committed are for the Part # as a whole, not this lot: an expired lot of a part still in use or on the books may be worth re-certifying. Pick history starts ' + _expoSinceTxt() + ', so \u201cNone since\u201d means no draw since then, not never.'
     + '</div>'
     + '<div id="expo-scroll" data-keep-scroll style="overflow-x:auto;max-height:420px;overflow-y:auto;">'
     + '<table style="width:100%;border-collapse:separate;border-spacing:0;background:#16150f;">'
     + '<thead><tr>'
       + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
-      + '<th style="' + thR + '">On hand</th><th style="' + thR + '">Expires</th><th style="' + thR + '">Status</th>'
-      + '<th style="' + thR + '" title="Most recent draw of this Part # on the pick sheet, which starts ' + _expoSinceTxt() + '.">Part last used</th>'
-      + '<th style="' + thR + '" title="Quantity of this Part # drawn in the past 12 months, across all lots.">Used, past 12 mo</th>'
+      + '<th style="' + thR + '">On hand</th><th style="' + thR + '">Expires</th>'
+      + '<th style="' + thR + '" title="Quantity of this Part # drawn in the past 12 months across all its lots, and the date of its most recent draw. Pick history starts ' + _expoSinceTxt() + '.">Part use, 12 mo</th>'
       + '<th style="' + thR + '" title="Quantity of this Part # committed to upcoming products on the RMO demand sheet.">Committed</th>'
       + '<th style="' + thR + '">Received</th><th style="' + thR + '">Qty received</th><th style="' + thR + '">Life at receipt</th>'
       + '<th style="' + th + '">Location</th><th style="' + th + 'padding-right:14px;">Supplier</th>'
@@ -15209,6 +15226,7 @@ function toggleExpiryExposure(view) {
 }
 function setExpiryExposureView(view) { _expiryExposureView = view; renderMaterials(); }
 function setExpiryExposureSort(sort) { _expiryExposureSort = sort; renderMaterials(); }
+function toggleExpiryExposureUncommitted() { _expiryExposureUncommitted = !_expiryExposureUncommitted; renderMaterials(); }
 
 // The table as shown, for a meeting. Mirrors the screen's scope and order deliberately —
 // this one is an internal working list, not a customer-facing document, so "what I was
@@ -15222,11 +15240,14 @@ function exportExpiryExposure() {
   var now = new Date();
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
   var usage = _expoUsageByPart(), usageReady = materialsData.length > 0;
+  var uncommitted = _expiryExposureUncommitted && demandLoaded;
+  shown = _expoScoped(shown); T = _expoTotals(shown);
+  if (!shown.length) return;
   var headers = ['Material','Part #','Lot #','On Hand','Unit','Expires','Days Left','Status',
                  'Part Last Used','Part Used Past 12 Mo','Part Committed',
                  'Received','Qty Received','% Of Receipt Left','Life At Receipt (days)','Location','Supplier','Supplier Batch'];
   var aoa = [
-    ['Expiration exposure — ' + _EXPO_SCOPES[view]],
+    ['Expiration exposure — ' + _EXPO_SCOPES[view] + (uncommitted ? ', no commitments (lots whose Part # is committed on the RMO demand sheet are left out)' : '')],
     ['Exported: ' + dateStr + ' · ' + T.lots.toLocaleString() + ' lot' + (T.lots===1?'':'s')
       + ' · ' + _expoQtyTxt(T.kg, T.sg)
       + ' · sorted ' + (_expiryExposureSort === 'qty' ? 'by quantity' : 'by expiration date')],
