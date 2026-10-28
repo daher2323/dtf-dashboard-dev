@@ -15120,18 +15120,18 @@ function expiryExposurePanelHTML() {
       + 'color:' + (on ? '#e8e6e0' : '#888780') + ';font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;">' + label + '</button>';
   };
 
-  // Twelve columns and up to 447 rows inside a 420px box: the header cannot be allowed to
+  // Eleven columns and up to 447 rows inside a 420px box: the header cannot be allowed to
   // scroll away, because nobody memorises "Received" vs "Qty received" vs "Life at receipt"
   // from position alone. Sticky cells need border-collapse:separate to paint in WebKit (the
   // same trade .pnl-sub-table makes), and that mode drops row-level borders — so the header
   // rule and the row dividers are restored per cell below. The background must be opaque and
   // match the panel's own header strip, or rows slide visibly under the labels.
   var th = 'position:sticky;top:0;z-index:3;background:#211d16;border-bottom:0.5px solid #3d3524;'
-    + 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
+    + 'text-align:left;padding:4px 8px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var thR = th.replace('text-align:left', 'text-align:right');
   var usage = _expoUsageByPart(), usageReady = materialsData.length > 0;
   var rows = shown.map(function(r){
-    var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;border-bottom:0.5px solid #2c2c2a;';
+    var td = 'padding:5px 8px;font-size:11px;white-space:nowrap;border-bottom:0.5px solid #2c2c2a;';
     var u = usage[r.part], unitS = matUnitShort(r.material), dem = demandByPart[r.part] || 0;
     // One cell for both usage figures, quantity first: it is the one that answers "do we
     // still use this", and the date beside it says how recently.
@@ -15146,17 +15146,19 @@ function expiryExposurePanelHTML() {
       ? '<span style="color:#F09595;font-weight:500;">' + Math.abs(r.days).toLocaleString() + 'd ago</span>'
       : '<span style="color:' + (r.days <= 30 ? '#FAC775' : '#cfcdc7') + ';">' + r.days.toLocaleString() + 'd left</span>';
     return '<tr>'
-      + '<td style="' + td + 'color:#e8e6e0;max-width:280px;overflow:hidden;text-overflow:ellipsis;">' + esc(r.material || '—') + '</td>'
+      + '<td title="' + esc(r.material || '') + '" style="' + td + 'color:#e8e6e0;max-width:220px;overflow:hidden;text-overflow:ellipsis;">' + esc(r.material || '—') + '</td>'
       + '<td style="' + td + 'color:#888780;">' + esc(r.part) + '</td>'
       + '<td style="' + td + '">' + _blendCopyCell(r.lot) + '</td>'
       + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(r.qty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span></td>'
       + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + _matExpDateStr(r.exp) + ' <span style="font-size:10px;">' + state + '</span></td>'
       + '<td style="' + td + 'text-align:right;">' + useTxt + '</td>'
       + '<td style="' + td + 'text-align:right;">' + demTxt + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
+      // Received and the shelf life it arrived with share a cell: the life is measured from
+      // that date, and as two columns they pushed Supplier off the right edge.
+      + '<td style="' + td + 'text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—')
+        + ' <span style="color:#888780;">\u00b7 ' + _expoLifeTxt(r.lifeAtReceipt) + '</span></td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.origQty == null ? '—'
           : fmtStockQty(r.origQty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span> ' + _expoFracTxt(r.fracLeft)) + '</td>'
-      + '<td style="' + td + 'text-align:right;color:#888780;">' + _expoLifeTxt(r.lifeAtReceipt) + '</td>'
       + '<td style="' + td + 'color:#cfcdc7;">' + _matLocShort(r.loc, r.lot) + '</td>'
       + '<td style="' + td + 'padding-right:14px;color:#888780;max-width:220px;overflow:hidden;text-overflow:ellipsis;">' + (r.supplier ? esc(r.supplier) : '—') + '</td>'
       + '</tr>';
@@ -15201,7 +15203,7 @@ function expiryExposurePanelHTML() {
     + '<div style="padding:0 14px 9px;font-size:10px;color:#5f5e5a;font-family:system-ui;line-height:1.5;">'
       + 'Every in-stock lot in the inventory feed carrying a readable EXP. Date — not affected by the filters or search above. '
       + 'Lots with a missing or unreadable date are listed separately on the coverage line. '
-      + 'Life at receipt is the shelf life the lot arrived with (Receiving Date to EXP. Date) — a short one means we accepted short-dated material, a long one means it sat here. '
+      + 'Life (beside Received) is the shelf life the lot arrived with (Receiving Date to EXP. Date) — a short one means we accepted short-dated material, a long one means it sat here. '
       + 'Qty received is the original receipt, so On hand beside it says how much of the drum is actually at stake. Both are blank where the sheet has no Receiving Date or receipt quantity. '
       + 'Part use and Committed are for the Part # as a whole, not this lot: an expired lot of a part still in use or on the books may be worth re-certifying. Pick history starts ' + _expoSinceTxt() + ', so \u201cNone since\u201d means no draw since then, not never.'
     + '</div>'
@@ -15212,7 +15214,7 @@ function expiryExposurePanelHTML() {
       + '<th style="' + thR + '">On hand</th><th style="' + thR + '">Expires</th>'
       + '<th style="' + thR + '" title="Quantity of this Part # drawn in the past 12 months across all its lots, and the date of its most recent draw. Pick history starts ' + _expoSinceTxt() + '.">Part use, 12 mo</th>'
       + '<th style="' + thR + '" title="Quantity of this Part # committed to upcoming products on the RMO demand sheet.">Committed</th>'
-      + '<th style="' + thR + '">Received</th><th style="' + thR + '">Qty received</th><th style="' + thR + '">Life at receipt</th>'
+      + '<th style="' + thR + '" title="Receiving Date, then the shelf life the lot arrived with (Receiving Date to EXP. Date). A negative life means the EXP. Date falls before the Receiving Date.">Received \u00b7 life</th><th style="' + thR + '">Qty received</th>'
       + '<th style="' + th + '">Location</th><th style="' + th + 'padding-right:14px;">Supplier</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
     + '</div>';
