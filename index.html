@@ -13040,7 +13040,51 @@ function toggleProc(sid, skuName) {
   if (window._procExpanded[sid]) {
     trackEvent('sku_drilldown_open', { sku_name: skuName || sid });
     generateProcSynopsis(sid);
+    _drawProcChart(sid);
   }
+}
+
+// The expanded SKU card's monthly bar chart, matching the Materials usage chart. Built only
+// once the card is open: Chart.js sizes a hidden canvas to zero width. renderProcurement is
+// also called directly (the zero-usage checkbox) without render()'s chart teardown, so the
+// previous instance on this key is destroyed here first.
+var PROC_CHART_MONTHS = 12;
+function _drawProcChart(sid) {
+  var cv = document.getElementById('pchart-' + sid);
+  var dataEl = document.getElementById('pdata-' + sid);
+  var key = 'proc_' + sid;
+  if (charts[key]) { try { charts[key].destroy(); } catch (e) {} delete charts[key]; }
+  if (!cv || !dataEl || typeof Chart === 'undefined') return;
+  var cd = JSON.parse(dataEl.textContent);
+  var series = cd.chartM || [];
+  if (!series.length) return;
+  var curKey = _custMonthKey(new Date());
+  var labels = [], data = [], bg = [], edge = [], partial = [], i;
+  for (i = 0; i < series.length; i++) {
+    var isCur = series[i].key === curKey;
+    labels.push(_custMonthLabel(series[i].key));
+    data.push(series[i].units);
+    bg.push(isCur ? CUST_BAR_PART : CUST_BAR);
+    edge.push(isCur ? CUST_BAR_PART_EDGE : CUST_BAR_EDGE);
+    partial.push(isCur);
+  }
+  var noun = cd.noun || 'units';
+  charts[key] = new Chart(cv, {
+    type: 'bar',
+    data: { labels: labels, datasets: [{ data: data, backgroundColor: bg, borderColor: edge, borderWidth: 1, borderRadius: 3, maxBarThickness: 48 }] },
+    options: { responsive: true, maintainAspectRatio: false, layout: { padding: { top: 20 } },
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: function(c) {
+          return Math.round(c.raw).toLocaleString() + ' ' + noun + (partial[c.dataIndex] ? ' \u2014 month in progress' : '');
+        } } } },
+      scales: {
+        x: { ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, autoSkip: true, maxRotation: 0 }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } },
+        y: { beginAtZero: true, ticks: { color: '#5f5e5a', font: { size: 10, family: 'system-ui' }, callback: function(v) { return Math.round(v).toLocaleString(); } }, grid: { color: '#1a1a1a' }, border: { color: '#2c2c2a' } }
+      } },
+    plugins: [barValueLabels({ id: 'procTrendLabels', halo: '#141618',
+      colorFor: function(i) { return partial[i] ? BAR_LABEL_OFF : BAR_LABEL; },
+      format: _custShortNum })]
+  });
 }
 
 function exportProcurement() {
@@ -18082,7 +18126,14 @@ function renderProcurement() {
       ytdPct: cd.ytdPct, ytdPct25: cd.ytdPct25,
       qtrs: cd.qtrs.filter(function(q){return q.units>0;}).map(function(q){
         return {key:q.key, label:quarterLabel(q.key), units:q.units, lots:q.lots, pctOfTotal:q.pctOfTotal};
-      })
+      }),
+      // Monthly chart: the last PROC_CHART_MONTHS months from the column's coverage start,
+      // empty months kept as zeros because a gap is part of the shape. The last key is the
+      // current month, drawn faded.
+      chartM: procMonthKeys.slice(-PROC_CHART_MONTHS).map(function(k){
+        return { key: k, units: Math.round((skuMonth[cd.sku] || {})[k] || 0) };
+      }),
+      noun: isDes ? 'desiccants' : isNeck ? 'neckbands' : isScoop ? 'scoops' : 'units'
     };
 
     // Customer + product breakdown HTML
@@ -18267,6 +18318,11 @@ function renderProcurement() {
       +'<script type="application/json" id="pdata-'+sid+'">'+JSON.stringify(procDataObj)+'<\/script>'
       +'<div id="psynopsis-'+sid+'" style="padding:12px 14px;border-bottom:0.5px solid #2c2c2a;background:#141618;min-height:44px;"></div>'
       +rateStrip
+      +'<div style="padding:10px 14px 8px;border-bottom:0.5px solid #2c2c2a;background:#141618;">'
+        +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:4px;">Monthly usage'
+          +'<span style="text-transform:none;letter-spacing:0;color:#5f5e5a;margin-left:6px;">'+esc('last ' + Math.min(PROC_CHART_MONTHS, procMonthKeys.length) + ' month' + (Math.min(PROC_CHART_MONTHS, procMonthKeys.length)===1?'':'s') + ' \u00b7 ' + curMoLabel + ' in progress')+'</span></div>'
+        +'<div style="position:relative;height:160px;"><canvas id="pchart-'+sid+'" role="img" aria-label="Monthly '+esc(label)+' usage">Trend.</canvas></div>'
+      +'</div>'
       // flex-wrap so the bulk button drops to its own line on a phone rather than
       // squeezing the segmented control; margin-left:auto pins it right on desktop.
       +'<div style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-bottom:0.5px solid #2c2c2a;background:#1a1d20;flex-wrap:wrap;">'
@@ -18335,7 +18391,7 @@ function renderProcurement() {
 
   // Re-fire synopses for already-expanded cards
   Object.keys(window._procExpanded || {}).forEach(function(sid) {
-    if (window._procExpanded[sid]) generateProcSynopsis(sid);
+    if (window._procExpanded[sid]) { generateProcSynopsis(sid); _drawProcChart(sid); }
   });
   // Re-apply search filter if one was active (e.g. after auto-refresh rebuilds the DOM)
   if (procSearch) filterProcurement();
