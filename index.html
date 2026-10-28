@@ -13056,7 +13056,9 @@ function _drawProcChart(sid) {
   if (charts[key]) { try { charts[key].destroy(); } catch (e) {} delete charts[key]; }
   if (!cv || !dataEl || typeof Chart === 'undefined') return;
   var cd = JSON.parse(dataEl.textContent);
-  var series = cd.chartM || [];
+  var full = cd.chartM || [];
+  var winStart = Math.max(0, full.length - PROC_CHART_MONTHS);
+  var series = full.slice(winStart);
   if (!series.length) return;
   var curKey = _custMonthKey(new Date());
   var labels = [], data = [], bg = [], edge = [], partial = [], i;
@@ -13069,12 +13071,31 @@ function _drawProcChart(sid) {
     partial.push(isCur);
   }
   var noun = cd.noun || 'units';
+  // The customer chart's average line, by the same rule: completed months on screen only
+  // (the current one is partial), starting at the SKU's first use if that falls inside the
+  // window. A quiet month after that is a real zero and counts.
+  var fullData = [], fullPart = [];
+  for (i = 0; i < full.length; i++) { fullData.push(full[i].units); fullPart.push(full[i].key === curKey); }
+  var av = _custAverage(fullData, fullPart, winStart);
+  var avgEl = document.getElementById('pchart-avg-' + sid);
+  if (avgEl) avgEl.innerHTML = av
+    ? '<span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:#5f5e5a;">'
+      + '<span style="display:inline-block;width:14px;border-top:1.5px dashed #EF9F27;"></span>'
+      + 'average <b style="color:#c9c7c1;font-weight:500;">' + _custShortNum(av.mean) + '</b> / month</span>'
+    : '';
+  // Bars stay dataset 0: barValueLabels labels dataset 0 only.
+  var datasets = [{ data: data, backgroundColor: bg, borderColor: edge, borderWidth: 1, borderRadius: 3, maxBarThickness: 48, order: 2 }];
+  if (av) {
+    var avg = [];
+    for (i = 0; i < data.length; i++) avg.push(i >= av.start ? av.mean : null);
+    datasets.push({ type: 'line', label: 'avg', data: avg, borderColor: '#EF9F27', borderWidth: 1.5, borderDash: [3, 3], pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0, order: 1 });
+  }
   charts[key] = new Chart(cv, {
     type: 'bar',
-    data: { labels: labels, datasets: [{ data: data, backgroundColor: bg, borderColor: edge, borderWidth: 1, borderRadius: 3, maxBarThickness: 48 }] },
+    data: { labels: labels, datasets: datasets },
     options: { responsive: true, maintainAspectRatio: false, layout: { padding: { top: 20 } },
       plugins: { legend: { display: false },
-        tooltip: { callbacks: { label: function(c) {
+        tooltip: { filter: function(c) { return c.datasetIndex === 0; }, callbacks: { label: function(c) {
           return Math.round(c.raw).toLocaleString() + ' ' + noun + (partial[c.dataIndex] ? ' \u2014 month in progress' : '');
         } } } },
       scales: {
@@ -18127,10 +18148,11 @@ function renderProcurement() {
       qtrs: cd.qtrs.filter(function(q){return q.units>0;}).map(function(q){
         return {key:q.key, label:quarterLabel(q.key), units:q.units, lots:q.lots, pctOfTotal:q.pctOfTotal};
       }),
-      // Monthly chart: the last PROC_CHART_MONTHS months from the column's coverage start,
-      // empty months kept as zeros because a gap is part of the shape. The last key is the
-      // current month, drawn faded.
-      chartM: procMonthKeys.slice(-PROC_CHART_MONTHS).map(function(k){
+      // Monthly chart: every month from the column's coverage start, empty months kept as
+      // zeros because a gap is part of the shape. The chart shows the last PROC_CHART_MONTHS;
+      // the rest is there so the average line can tell a SKU first used inside the window
+      // from one that merely had a quiet month. The last key is the current month.
+      chartM: procMonthKeys.map(function(k){
         return { key: k, units: Math.round((skuMonth[cd.sku] || {})[k] || 0) };
       }),
       noun: isDes ? 'desiccants' : isNeck ? 'neckbands' : isScoop ? 'scoops' : 'units'
@@ -18320,7 +18342,8 @@ function renderProcurement() {
       +rateStrip
       +'<div style="padding:10px 14px 8px;border-bottom:0.5px solid #2c2c2a;background:#141618;">'
         +'<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-family:system-ui;margin-bottom:4px;">Monthly usage'
-          +'<span style="text-transform:none;letter-spacing:0;color:#5f5e5a;margin-left:6px;">'+esc('last ' + Math.min(PROC_CHART_MONTHS, procMonthKeys.length) + ' month' + (Math.min(PROC_CHART_MONTHS, procMonthKeys.length)===1?'':'s') + ' \u00b7 ' + curMoLabel + ' in progress')+'</span></div>'
+          +'<span style="text-transform:none;letter-spacing:0;color:#5f5e5a;margin-left:6px;">'+esc('last ' + Math.min(PROC_CHART_MONTHS, procMonthKeys.length) + ' month' + (Math.min(PROC_CHART_MONTHS, procMonthKeys.length)===1?'':'s') + ' \u00b7 ' + curMoLabel + ' in progress')+'</span>'
+          +'<span id="pchart-avg-'+sid+'" style="float:right;text-transform:none;letter-spacing:0;"></span></div>'
         +'<div style="position:relative;height:160px;"><canvas id="pchart-'+sid+'" role="img" aria-label="Monthly '+esc(label)+' usage">Trend.</canvas></div>'
       +'</div>'
       // flex-wrap so the bulk button drops to its own line on a phone rather than
