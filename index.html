@@ -15054,6 +15054,27 @@ function _expoTotals(rows) {
   }
   return t;
 }
+// Is anyone still using this part? The re-certify-or-dispose call on an expired lot turns
+// on it: an expired lot of a part we draw every month is worth re-testing, one nobody has
+// drawn is probably waste. Per Part #, not per material, because the lot belongs to one
+// part. Read from materialsData (every draw, the same feed the Usage tab sums), which
+// starts at MATERIALS_TRACKING_START, so "no draw" can only ever mean "none since then",
+// never "never used" — the column says so rather than leaving the reader to assume it.
+// Committed rides alongside because it is the other half of the same question: a part
+// with no history but on the books for an upcoming run is not waste either.
+var EXPO_USAGE_DAYS = 365;
+function _expoUsageByPart() {
+  var out = {}, cut = Date.now() - EXPO_USAGE_DAYS * _EXPIRY_MS_PER_DAY, i, r, u;
+  for (i = 0; i < materialsData.length; i++) {
+    r = materialsData[i];
+    if (!r.partNum || !r.date) continue;
+    u = out[r.partNum] || (out[r.partNum] = { last: null, qty: 0 });
+    if (!u.last || r.date > u.last) u.last = r.date;
+    if (r.date.getTime() >= cut) u.qty += r.qty;
+  }
+  return out;
+}
+function _expoSinceTxt() { return MATERIALS_TRACKING_START.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); }
 function _expoSorted(rows) {
   return rows.slice().sort(function(a, b){
     // Quantity descending is offered but not the default: it ranks 1,500 softgels above
@@ -15089,7 +15110,7 @@ function expiryExposurePanelHTML() {
       + 'color:' + (on ? '#e8e6e0' : '#888780') + ';font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;">' + label + '</button>';
   };
 
-  // Eleven columns and up to 447 rows inside a 420px box: the header cannot be allowed to
+  // Fourteen columns and up to 447 rows inside a 420px box: the header cannot be allowed to
   // scroll away, because nobody memorises "Received" vs "Qty received" vs "Life at receipt"
   // from position alone. Sticky cells need border-collapse:separate to paint in WebKit (the
   // same trade .pnl-sub-table makes), and that mode drops row-level borders — so the header
@@ -15098,8 +15119,19 @@ function expiryExposurePanelHTML() {
   var th = 'position:sticky;top:0;z-index:3;background:#211d16;border-bottom:0.5px solid #3d3524;'
     + 'text-align:left;padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var thR = th.replace('text-align:left', 'text-align:right');
+  var usage = _expoUsageByPart(), usageReady = materialsData.length > 0;
   var rows = shown.map(function(r){
     var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;border-bottom:0.5px solid #2c2c2a;';
+    var u = usage[r.part], unitS = matUnitShort(r.material), dem = demandByPart[r.part] || 0;
+    var lastTxt = !usageReady ? '<span style="color:#5f5e5a;">\u2026</span>'
+      : (u && u.last ? '<span style="color:#cfcdc7;">' + _matExpDateStr(u.last.getTime()) + '</span>'
+                     : '<span style="color:#5f5e5a;">None since ' + _expoSinceTxt() + '</span>');
+    var usedTxt = !usageReady ? '<span style="color:#5f5e5a;">\u2026</span>'
+      : (u && u.qty > 0 ? '<span style="color:#cfcdc7;">' + fmtStockQty(u.qty) + '</span> <span style="color:#5f5e5a;">' + unitS + '</span>'
+                        : '<span style="color:#5f5e5a;">\u2014</span>');
+    var demTxt = !demandLoaded ? '<span style="color:#5f5e5a;">\u2026</span>'
+      : (dem > 0 ? '<span style="color:#cfcdc7;">' + fmtStockQty(dem) + '</span> <span style="color:#5f5e5a;">' + unitS + '</span>'
+                 : '<span style="color:#5f5e5a;">\u2014</span>');
     var state = r.days < 0
       ? '<span style="color:#F09595;font-weight:500;">' + Math.abs(r.days).toLocaleString() + 'd ago</span>'
       : '<span style="color:' + (r.days <= 30 ? '#FAC775' : '#cfcdc7') + ';">' + r.days.toLocaleString() + 'd left</span>';
@@ -15110,6 +15142,9 @@ function expiryExposurePanelHTML() {
       + '<td style="' + td + 'text-align:right;color:#85B7EB;">' + fmtStockQty(r.qty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span></td>'
       + '<td style="' + td + 'text-align:right;color:#cfcdc7;">' + _matExpDateStr(r.exp) + '</td>'
       + '<td style="' + td + 'text-align:right;">' + state + '</td>'
+      + '<td style="' + td + 'text-align:right;">' + lastTxt + '</td>'
+      + '<td style="' + td + 'text-align:right;">' + usedTxt + '</td>'
+      + '<td style="' + td + 'text-align:right;">' + demTxt + '</td>'
       + '<td style="' + td + 'text-align:right;color:#5f5e5a;">' + (r.received ? esc(r.received) : '—') + '</td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + (r.origQty == null ? '—'
           : fmtStockQty(r.origQty) + ' <span style="color:#5f5e5a;">' + matUnitShort(r.material) + '</span> ' + _expoFracTxt(r.fracLeft)) + '</td>'
@@ -15149,13 +15184,17 @@ function expiryExposurePanelHTML() {
       + 'Every in-stock lot in the inventory feed carrying a readable EXP. Date — not affected by the filters or search above. '
       + 'Lots with a missing or unreadable date are listed separately on the coverage line. '
       + 'Life at receipt is the shelf life the lot arrived with (Receiving Date to EXP. Date) — a short one means we accepted short-dated material, a long one means it sat here. '
-      + 'Qty received is the original receipt, so On hand beside it says how much of the drum is actually at stake. Both are blank where the sheet has no Receiving Date or receipt quantity.'
+      + 'Qty received is the original receipt, so On hand beside it says how much of the drum is actually at stake. Both are blank where the sheet has no Receiving Date or receipt quantity. '
+      + 'Part last used, Used and Committed are for the Part # as a whole, not this lot: an expired lot of a part still in use or on the books may be worth re-certifying. Pick history starts ' + _expoSinceTxt() + ', so \u201cNone since\u201d means no draw since then, not never.'
     + '</div>'
     + '<div id="expo-scroll" data-keep-scroll style="overflow-x:auto;max-height:420px;overflow-y:auto;">'
     + '<table style="width:100%;border-collapse:separate;border-spacing:0;background:#16150f;">'
     + '<thead><tr>'
       + '<th style="' + th + '">Material</th><th style="' + th + '">Part #</th><th style="' + th + '">Lot #</th>'
       + '<th style="' + thR + '">On hand</th><th style="' + thR + '">Expires</th><th style="' + thR + '">Status</th>'
+      + '<th style="' + thR + '" title="Most recent draw of this Part # on the pick sheet, which starts ' + _expoSinceTxt() + '.">Part last used</th>'
+      + '<th style="' + thR + '" title="Quantity of this Part # drawn in the past 12 months, across all lots.">Used, past 12 mo</th>'
+      + '<th style="' + thR + '" title="Quantity of this Part # committed to upcoming products on the RMO demand sheet.">Committed</th>'
       + '<th style="' + thR + '">Received</th><th style="' + thR + '">Qty received</th><th style="' + thR + '">Life at receipt</th>'
       + '<th style="' + th + '">Location</th><th style="' + th + 'padding-right:14px;">Supplier</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
@@ -15182,7 +15221,9 @@ function exportExpiryExposure() {
   var T = _expoTotals(shown);
   var now = new Date();
   var dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+  var usage = _expoUsageByPart(), usageReady = materialsData.length > 0;
   var headers = ['Material','Part #','Lot #','On Hand','Unit','Expires','Days Left','Status',
+                 'Part Last Used','Part Used Past 12 Mo','Part Committed',
                  'Received','Qty Received','% Of Receipt Left','Life At Receipt (days)','Location','Supplier','Supplier Batch'];
   var aoa = [
     ['Expiration exposure — ' + _EXPO_SCOPES[view]],
@@ -15195,6 +15236,7 @@ function exportExpiryExposure() {
     ['Days Left is measured from the export date; a negative figure is days PAST the expiration date. Life At Receipt is Receiving Date to EXP. Date — the shelf life the lot arrived with — and is blank where Receiving Date is empty. Days held needs no column: it is Life At Receipt minus Days Left.'],
     ['A NEGATIVE Life At Receipt means the lot’s EXP. Date falls before its Receiving Date — it was received already expired, or one of the two dates is wrong on the sheet. Worth checking before treating the row as an ordinary expiration.'],
     ['Qty Received is the sheet’s Original Qty Received, so On Hand against it shows how much of the drum is actually at stake: the dust at the bottom of a 500 kg receipt and an untouched 25 kg bag both read as "expired" without it. Blank where that cell is empty or still calculating; above 100% means the lot holds more than its recorded receipt, which is a sheet correction rather than a finding.'],
+    ['Part Last Used, Part Used Past 12 Mo and Part Committed describe the Part # as a whole, not the lot: an expired lot of a part still in use or committed to an upcoming product may be worth re-certifying. Pick history starts ' + _expoSinceTxt() + ', so a blank Part Last Used means no draw since then, not never.' + (usageReady ? '' : ' The pick sheet had not loaded at export time, so these usage columns are empty.') + (demandLoaded ? '' : ' The RMO demand sheet had not loaded at export time, so Part Committed is empty.')],
     ['Expired stock listed here is still on the shelf in the feed — it has not been written off or dispositioned. Review before acting: a lot may be on hold, reserved for a customer, or already scheduled for destruction.'],
     [],
     headers
@@ -15205,6 +15247,9 @@ function exportExpiryExposure() {
       Math.round(r.qty * 100) / 100, r.unit,
       _matExpDateStr(r.exp), r.days,
       r.days < 0 ? 'EXPIRED' : (r.days <= 30 ? 'Within 30 days' : 'Within ' + EXPIRY_SOON_DAYS + ' days'),
+      (usageReady && usage[r.part] && usage[r.part].last) ? _matExpDateStr(usage[r.part].last.getTime()) : '',
+      usageReady ? Math.round(((usage[r.part] && usage[r.part].qty) || 0) * 100) / 100 : '',
+      demandLoaded ? Math.round((demandByPart[r.part] || 0) * 100) / 100 : '',
       r.received,
       r.origQty == null ? '' : Math.round(r.origQty * 100) / 100,
       r.fracLeft == null ? '' : Math.round(r.fracLeft * 1000) / 10,
@@ -15215,8 +15260,9 @@ function exportExpiryExposure() {
   var wb = XLSX.utils.book_new();
   var ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:42},{wch:10},{wch:12},{wch:11},{wch:9},{wch:12},{wch:10},{wch:16},
+                 {wch:14},{wch:18},{wch:14},
                  {wch:13},{wch:13},{wch:17},{wch:20},{wch:30},{wch:24},{wch:20}];
-  ws['!merges'] = [0,1,2,3,4,5,6,7].map(function(r){ return {s:{r:r,c:0},e:{r:r,c:headers.length-1}}; });
+  ws['!merges'] = [0,1,2,3,4,5,6,7,8].map(function(r){ return {s:{r:r,c:0},e:{r:r,c:headers.length-1}}; });
   XLSX.utils.book_append_sheet(wb, ws, 'Expiration Exposure');
   XLSX.writeFile(wb, 'DTF_Expiration_Exposure_' + now.toISOString().split('T')[0] + '.xlsx');
 }
