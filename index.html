@@ -1362,6 +1362,7 @@ var partQuery = '';
 var partResult = null;    // null = no lookup yet; { customers:[] } once searched
 var partPending = '';     // a Part # looked up before pickRows finished loading
 var partOpen = {};        // customer name -> 1 open / -1 closed; absent = closed
+var partRange = null;     // pick-date window; null = all time, else {start, end, label}
 var selectedCustomer = null;
 var sortCol = 'date', sortDir = -1, page = 1, PAGE_SIZE = 50;
 var custLimit = 10;
@@ -20187,6 +20188,146 @@ function buildPartResult(hits, part) {
            plannedAny: plannedAny, firstTs: firstTs, lastTs: lastTs };
 }
 
+// ── Part Lookup date range ────────────────────────────────────────────────
+// Filters on the PICK date, the only date every draw carries (a non-production draw
+// has no run to date it by). For a production lot the pick is the morning of its run,
+// so a quarter boundary lands in the same place either way. The all-time first draw
+// and lot count are kept beside the filtered result, so the footnote can say how much
+// of the part's history the window leaves out.
+function _partBuild(q, raw) {
+  var all = tracePartNumber(materialsData, q), hits = all, i, t;
+  if (partRange) {
+    hits = [];
+    for (i = 0; i < all.length; i++) {
+      if (all[i].date && all[i].date >= partRange.start && all[i].date <= partRange.end) hits.push(all[i]);
+    }
+  }
+  var res = buildPartResult(hits, raw);
+  var lots = {}, first = null;
+  for (i = 0; i < all.length; i++) {
+    lots[String(all[i].orderLot == null ? '' : all[i].orderLot).trim()] = 1;
+    t = all[i].date ? all[i].date.getTime() : null;
+    if (t != null && (first == null || t < first)) first = t;
+    if (!res.material && all[i].material) res.material = all[i].material;
+  }
+  res.range = partRange;
+  res.allHits = all.length;
+  res.allLots = countKeys(lots);
+  res.firstEverTs = first;
+  return res;
+}
+
+function _partRangeSpan(r) {
+  var f = function(d) { return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); };
+  return f(r.start) + ' – ' + f(r.end);
+}
+
+// Re-run the current lookup under the new window. partOpen is kept: same part, same
+// customers, so whatever the reader had expanded stays expanded.
+function setPartRange(r) {
+  partRange = r;
+  closePartRangePicker();
+  if (partResult && materialsData.length) {
+    var raw = partResult.rawPart || partResult.part;
+    partResult = _partBuild(normPart(raw), raw);
+  }
+  render();
+}
+
+function applyPartPeriod(key) {
+  var now = new Date();
+  if (key === 'all') { setPartRange(null); return; }
+  var parts = key.split('-'), type = parts[0], n = parseInt(parts[1], 10);
+  var start, end, label;
+  if (type === 'R') {
+    start = new Date(now); start.setDate(start.getDate() - n); start.setHours(0,0,0,0);
+    end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59); label = 'Last ' + n + ' days';
+  } else if (type === 'YTD') {
+    start = new Date(n,0,1); end = new Date(n, now.getMonth(), now.getDate(), 23, 59, 59); label = 'Year to date ' + n;
+  } else if (type === 'Full') {
+    start = new Date(n,0,1); end = new Date(n,11,31,23,59,59); label = 'Full year ' + n;
+  } else {
+    var qMap = {Q1:[0,2],Q2:[3,5],Q3:[6,8],Q4:[9,11]}, q = qMap[type];
+    start = new Date(n,q[0],1); end = new Date(n,q[1]+1,0,23,59,59); label = type + ' ' + n;
+  }
+  setPartRange({ start: start, end: end, label: label });
+}
+
+function applyPartCustomRange() {
+  var s = document.getElementById('part-range-start');
+  var e = document.getElementById('part-range-end');
+  if (!s || !e) return;
+  var start = new Date(s.value+'T00:00:00'), end = new Date(e.value+'T23:59:59');
+  if (isNaN(start) || isNaN(end)) return;
+  if (end < start) { var tmp = start; start = end; end = tmp; }
+  var f = function(d){ return (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear(); };
+  setPartRange({ start: start, end: end, label: f(start)+' – '+f(end) });
+}
+
+function closePartRangePicker() { var p = document.getElementById('part-range-picker'); if (p) p.remove(); }
+
+// Same list as the Detail / Trend pickers, trimmed to the pick sheet's history: nothing
+// before MATERIALS_TRACKING_START exists, so 2025 offers Q4 and its (three-month) full
+// year, not quarters that would always come back empty. Rendered into document.body —
+// the input card clips its overflow, so a picker anchored inside it would be cut off.
+function openPartRangePicker(btn) {
+  if (document.getElementById('part-range-picker')) { closePartRangePicker(); return; }
+  var now = new Date(), cur = partRange ? partRange.label : 'All time';
+  var trackStart = new Date(MATERIALS_TRACKING_START);
+  var fmt = function(d){ return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}); };
+  var rowStyle = 'display:flex;align-items:center;justify-content:space-between;gap:16px;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px;transition:background .1s;';
+  var row = function(key, label, hint) {
+    var on = cur === label;
+    var hover = on ? '' : 'onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\'transparent\'"';
+    return '<div onclick="applyPartPeriod(\''+key+'\')" '+hover+' style="'+rowStyle+'background:'+(on?'#0C447C':'transparent')+';color:'+(on?'#85B7EB':'#e8e6e0')+';">'
+      + '<span>'+label+'</span><span style="font-size:11px;color:'+(on?'#378ADD':'#5f5e5a')+';">'+hint+'</span></div>';
+  };
+  var grp = function(t) { return '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;padding:6px 10px 3px;">'+t+'</div>'; };
+
+  var list = row('all', 'All time', 'since ' + fmt(trackStart) + ', ' + trackStart.getFullYear());
+  list += grp('Rolling windows');
+  [30, 90, 180].forEach(function(d) {
+    var s = new Date(now); s.setDate(s.getDate() - d);
+    list += row('R-'+d, 'Last '+d+' days', fmt(s)+' – today');
+  });
+  for (var yr = now.getFullYear(); yr >= trackStart.getFullYear(); yr--) {
+    list += grp(String(yr));
+    if (yr === now.getFullYear()) list += row('YTD-'+yr, 'Year to date '+yr, 'Jan 1 – '+fmt(now)+' (today)');
+    else list += row('Full-'+yr, 'Full year '+yr, (new Date(yr,0,1) < trackStart ? fmt(trackStart) : 'Jan 1') + ' – Dec 31');
+    [['Q4',9,11],['Q3',6,8],['Q2',3,5],['Q1',0,2]].forEach(function(q) {
+      var qs = new Date(yr,q[1],1), qe = new Date(yr,q[2]+1,0,23,59,59);
+      if (qs > now || qe < trackStart) return;
+      list += row(q[0]+'-'+yr, q[0]+' '+yr, fmt(qs)+' – '+(qe > now ? fmt(now) : fmt(qe)));
+    });
+  }
+  var rs = partRange ? partRange.start : new Date(now.getFullYear(),0,1);
+  var re = partRange ? (partRange.end > now ? now : partRange.end) : now;
+  var html =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+    + '<span style="font-size:11px;font-weight:500;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Date range</span>'
+    + '<button onclick="closePartRangePicker()" style="background:transparent;border:none;color:#888780;cursor:pointer;font-size:16px;line-height:1;padding:0;">&#x2715;</button></div>'
+    + '<div style="max-height:300px;overflow-y:auto;margin-bottom:10px;">'+list+'</div>'
+    + '<div style="border-top:0.5px solid #2c2c2a;padding-top:10px;">'
+    + '<div style="font-size:10px;color:#5f5e5a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Custom range</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<input type="date" id="part-range-start" value="'+toInputDate(rs)+'" min="'+toInputDate(trackStart)+'" max="'+toInputDate(now)+'" style="padding:5px 8px;border:0.5px solid #444441;border-radius:6px;background:#141618;color:#e8e6e0;font-size:12px;">'
+    + '<span style="color:#5f5e5a;font-size:12px;">to</span>'
+    + '<input type="date" id="part-range-end" value="'+toInputDate(re)+'" min="'+toInputDate(trackStart)+'" max="'+toInputDate(now)+'" style="padding:5px 8px;border:0.5px solid #444441;border-radius:6px;background:#141618;color:#e8e6e0;font-size:12px;"></div>'
+    + '<div style="display:flex;justify-content:flex-end;margin-top:8px;">'
+    + '<button onclick="applyPartCustomRange()" style="padding:5px 14px;border-radius:6px;border:1.5px solid #378ADD;background:#0C447C;color:#85B7EB;font-size:12px;font-weight:500;cursor:pointer;font-family:system-ui;">Apply custom range</button>'
+    + '</div></div>';
+  var r = btn.getBoundingClientRect();
+  var picker = document.createElement('div');
+  picker.id = 'part-range-picker';
+  picker.style.cssText = 'position:absolute;z-index:1000;background:#1e2124;border:0.5px solid #444441;border-radius:12px;padding:1rem;min-width:300px;box-sizing:border-box;'
+    + 'top:'+(r.bottom + window.scrollY + 6)+'px;left:'+Math.max(8, Math.min(r.left + window.scrollX, window.innerWidth - 316))+'px;';
+  picker.innerHTML = html;
+  picker.addEventListener('mousedown', function(e){ e.stopPropagation(); });
+  document.body.appendChild(picker);
+  function outsideHandler() { closePartRangePicker(); document.removeEventListener('mousedown', outsideHandler); }
+  setTimeout(function(){ document.addEventListener('mousedown', outsideHandler); }, 0);
+}
+
 // ── Part Lookup handlers ──────────────────────────────────────────────────
 function onPartInput(v) { partQuery = v; }
 function onPartKey(e) { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); runPartTrace(); } }
@@ -20202,7 +20343,7 @@ function runPartTrace() {
   }
   trackEvent('part_lookup', { part: qn });
   partOpen = {};                          // a new part starts with its groups closed
-  partResult = buildPartResult(tracePartNumber(materialsData, qn), raw.trim());
+  partResult = _partBuild(qn, raw.trim());
   partPending = '';
   render();
 }
@@ -20240,7 +20381,7 @@ function qJumpToPart(q) {
   renderSubBar();
   partOpen = {};
   if (materialsData.length) {
-    partResult = buildPartResult(tracePartNumber(materialsData, normPart(partQuery)), partQuery.trim());
+    partResult = _partBuild(normPart(partQuery), partQuery.trim());
   } else { partResult = null; partPending = normPart(partQuery); fetchMaterialsIfNeeded(); }
   render();
 }
@@ -20260,7 +20401,7 @@ function renderPart() {
   if (partPending && materialsData.length > 0) {
     var pq = partPending; partPending = '';
     trackEvent('part_lookup', { part: pq });
-    partResult = buildPartResult(tracePartNumber(materialsData, pq), pq);
+    partResult = _partBuild(pq, pq);
   }
 
   var loading = materialsData.length === 0;
@@ -20278,6 +20419,16 @@ function renderPart() {
     +         '<input id="part-input" type="text" value="'+q+'" placeholder="e.g. 10-359" autocomplete="off" spellcheck="false" oninput="onPartInput(this.value)" onkeydown="onPartKey(event)" onfocus="this.style.borderColor=\'rgba(29,158,117,0.65)\'" onblur="this.style.borderColor=\'#444441\'" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.02em;padding:10px 12px;min-width:160px;flex:1 1 160px;background:#141618;border:1px solid #444441;border-radius:8px;color:#e8e6e0;outline:none;box-sizing:border-box;" />'
     +         '<button onclick="runPartTrace()" style="box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;padding:0 18px;border-radius:8px;border:0.5px solid rgba(29,158,117,0.65);background:rgba(29,158,117,0.15);color:#9FE1CB;font-size:13px;font-weight:600;cursor:pointer;font-family:system-ui;"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.25" stroke="#9FE1CB" stroke-width="1.3"/><line x1="9.2" y1="9.2" x2="12.2" y2="12.2" stroke="#9FE1CB" stroke-width="1.3" stroke-linecap="round"/></svg>Look up</button>'
     +         '<button onclick="clearPartTrace()" title="Clear and start a new lookup" style="box-sizing:border-box;display:inline-flex;align-items:center;padding:0 14px;border-radius:8px;border:0.5px solid #444441;background:transparent;color:#888780;font-size:13px;font-weight:500;cursor:pointer;font-family:system-ui;visibility:'+((partResult || partQuery) ? 'visible' : 'hidden')+';" onmouseover="this.style.color=\'#e8e6e0\';this.style.borderColor=\'#5f5e5a\'" onmouseout="this.style.color=\'#888780\';this.style.borderColor=\'#444441\'">Clear</button>'
+    +       '</div>'
+    +       '<div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;">'
+    +         '<span style="font-size:11px;color:#7d8288;">Picks dated</span>'
+    // onmousedown stops the picker's outside-click handler from closing it a moment
+    // before this click reopens it, so the button toggles.
+    +         '<div onmousedown="event.stopPropagation()" onclick="openPartRangePicker(this)" title="Limit the lookup to picks made in a date range" style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;padding:5px 12px;border-radius:8px;border:0.5px solid '+(partRange?'#378ADD':'#444441')+';background:'+(partRange?'rgba(55,138,221,0.12)':'transparent')+';" onmouseover="this.style.background=\'#252829\'" onmouseout="this.style.background=\''+(partRange?'rgba(55,138,221,0.12)':'transparent')+'\'">'
+    +           '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="2" width="11" height="10" rx="2" stroke="#888780" stroke-width="1.2"/><line x1="4" y1="1" x2="4" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="9" y1="1" x2="9" y2="4" stroke="#888780" stroke-width="1.2" stroke-linecap="round"/><line x1="1" y1="6" x2="12" y2="6" stroke="#888780" stroke-width="1.2"/></svg>'
+    +           '<span style="font-size:12px;font-weight:500;color:'+(partRange?'#85B7EB':'#e8e6e0')+';white-space:nowrap;">'+esc(partRange ? partRange.label : 'All time')+' &#x25BE;</span>'
+    +         '</div>'
+    +         (partRange ? '<button onclick="setPartRange(null)" style="height:26px;padding:0 10px;border-radius:6px;border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;" onmouseover="this.style.color=\'#e8e6e0\'" onmouseout="this.style.color=\'#888780\'">Show all time</button>' : '')
     +       '</div>'
     +       (loading ? '<div style="font-size:11px;color:#888780;margin-top:10px;">Loading pick-sheet data&hellip;</div>' : '')
     +     '</div>'
@@ -20337,6 +20488,17 @@ function partSummaryHTML(res) {
         body: bodyW, jumpFn: jf, btnLabel: lbl, btnBorder: bd, btnBg: bg, btnTxt: tx
       }) + '</div>';
     }
+    // Used, just not inside the chosen window. Saying "No recorded use" here would tell
+    // the reader the part has never run, which is false and is the opposite of what a
+    // supply question needs to hear.
+    if (res.range && res.allHits > 0) {
+      return head
+        + '<div style="font-size:13px;font-weight:600;color:#e8e6e0;margin-bottom:2px;">No use in ' + esc(res.range.label) + '</div>'
+        + '<div style="font-size:12px;color:#888780;line-height:1.5;margin-bottom:10px;">' + _partRangeSpan(res.range) + '. This part has drawn on '
+        + res.allLots.toLocaleString() + ' lot' + (res.allLots === 1 ? '' : 's') + ' outside that window.</div>'
+        + '<button onclick="setPartRange(null)" style="padding:6px 14px;border-radius:8px;border:0.5px solid rgba(29,158,117,0.65);background:rgba(29,158,117,0.15);color:#9FE1CB;font-size:12px;font-weight:600;cursor:pointer;font-family:system-ui;">Show all time</button>'
+        + '</div>';
+    }
     // Shaped right, found nothing. That is a different statement from "not a part #"
     // and has a different cause — 20-1189 is a well-formed part number with no picks
     // against it — so it gets its own wording rather than a generic miss.
@@ -20359,6 +20521,7 @@ function partSummaryHTML(res) {
     +   partMetricCell(res.totProducts.toLocaleString(), 'Products') + divider
     +   partMetricCell(res.totLots.toLocaleString(), 'Lots run')
     + '</div>'
+    + (res.range ? '<div style="font-size:11px;color:#7d8288;margin-top:12px;">' + esc(res.range.label) + ' &middot; ' + _partRangeSpan(res.range) + '</div>' : '')
     + '</div>';
 
 
@@ -20383,7 +20546,7 @@ function renderPartTableHTML(res) {
 
   out += '<div id="part-results" data-anchor class="pnl-on-card" style="background:#1e2124;border:0.5px solid #2c2c2a;border-radius:12px;padding:16px 18px 10px;">';
   out += '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap;">'
-    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Customers that have used this part</div>'
+    + '<div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.04em;font-weight:500;">Customers that have used this part' + (res.range ? ' &middot; <span style="color:#85B7EB;">' + esc(res.range.label) + '</span>' : '') + '</div>'
     + '<div style="display:flex;align-items:center;gap:8px;">'
     + '<button onclick="toggleAllPartCust(' + (allOpen ? 'false' : 'true') + ')" style="display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:6px;'
     +   'border:0.5px solid #444441;background:transparent;cursor:pointer;color:#888780;font-size:11px;font-weight:500;font-family:system-ui;white-space:nowrap;" '
@@ -20448,8 +20611,11 @@ function renderPartTableHTML(res) {
     + 'This is what <b style="color:#7d8288;">has consumed</b> the material, not what is formulated with it &mdash; a product that uses this part but has not run in the window below will not appear.'
     + ' Materials tracking begins ' + MATERIALS_TRACKING_START.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
     + ' and earlier picks are not counted'
-    + (res.firstTs ? '; the first recorded draw of this part is ' + new Date(res.firstTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '')
-    + '.</div>';
+    + (res.firstEverTs ? '; the first recorded draw of this part is ' + new Date(res.firstEverTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '')
+    + '.'
+    + (res.range ? ' Filtered to picks dated ' + _partRangeSpan(res.range) + ': ' + res.totLots.toLocaleString() + ' of the '
+        + res.allLots.toLocaleString() + ' lots that have drawn this part.' : '')
+    + '</div>';
 
   // R&D, Quality and other non-run draws, stated plainly rather than filed as errors. On
   // a vendor-delay call "R&D has pulled this 6 times" is a real answer — samples are being
@@ -20509,6 +20675,7 @@ function exportPartUsage() {
     ['Customers: ' + res.customers.length + ' · Products: ' + res.totProducts
       + ' · Lots run: ' + res.totLots + ' · Units produced: ' + Math.round(res.totUnits).toLocaleString()
       + (res.anySticks ? ' · Stick packs: ' + Math.round(res.totSticks).toLocaleString() : '')],
+    ['Date range: ' + (res.range ? res.range.label + ' (picks dated ' + _partRangeSpan(res.range) + ') — ' + res.totLots + ' of ' + res.allLots + ' lots that have drawn this part' : 'All time')],
     ['Exported: ' + dateStr],
     [],
     // Same caveat as the screen, on the sheet's own face: nobody opening this workbook
@@ -20516,7 +20683,7 @@ function exportPartUsage() {
     ['BASIS: this lists what HAS CONSUMED the material, not what is formulated with it — a product that uses this part but has not run in the window does not appear. '
       + 'Materials tracking begins ' + MATERIALS_TRACKING_START.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
       + ' and earlier picks are not counted'
-      + (res.firstTs ? '; the first recorded draw of this part is ' + new Date(res.firstTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '') + '.'],
+      + (res.firstEverTs ? '; the first recorded draw of this part is ' + new Date(res.firstEverTs).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '') + '.'],
     []
   ];
   var hdr = ['Customer', 'Product', 'Lots', 'Units produced'];
@@ -20546,7 +20713,8 @@ function exportPartUsage() {
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Part Usage');
   var safe = String(res.part || 'unknown').replace(/[^A-Za-z0-9]/g, '') || 'unknown';
-  XLSX.writeFile(wb, 'part_usage_' + safe + '.xlsx');
+  var rsuf = res.range ? '_' + toInputDate(res.range.start) + '_to_' + toInputDate(res.range.end > now ? now : res.range.end) : '';
+  XLSX.writeFile(wb, 'part_usage_' + safe + rsuf + '.xlsx');
 }
 
 function toggleExportPopover(e) {
