@@ -14780,6 +14780,14 @@ function _matCommittedLines(m) {
 }
 function matCommittedHTML(m, unit) {
   var lines = _matCommittedLines(m);
+  // The tab shows on every material, committed or not, so its absence can't be read
+  // as a bug. Empty says which kind of empty: no demand, or the sheet not in yet.
+  if (!lines.length) {
+    return '<div style="padding:14px 10px;font-size:12px;color:#888780;font-family:system-ui;line-height:1.5;">'
+      + (demandLoaded ? 'Nothing committed. No product on the RMO demand sheet needs this material.'
+                      : 'Loading the RMO demand sheet…')
+      + '</div>';
+  }
   var multiPart = lines.some(function(l){ return l.part !== lines[0].part; });
   var th = 'padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
@@ -14819,7 +14827,6 @@ function matCommittedHTML(m, unit) {
 function _matTab(m) {
   var t = matInlineTab;
   if (t === 'parts' && !(m && m.isGroup)) return 'usage';
-  if (t === 'committed' && !(m && m.demand > 0)) return 'usage';
   return (t === 'usage' || t === 'customers' || t === 'committed' || t === 'parts' || t === 'lots') ? t : 'usage';
 }
 function setMatInlineTab(v) {
@@ -15462,7 +15469,7 @@ function matInlineTabBar(m, idx) {
   var tabs = [
     { id:'usage',     label:'Usage' },
     { id:'customers', label:'Customers', count: custN },
-    { id:'committed', label:'Committed', count: _matCommittedLines(m).length, only: m.demand > 0 },
+    { id:'committed', label:'Committed', count: _matCommittedLines(m).length, showZero: demandLoaded },
     { id:'parts',     label:'Parts',     count: partN, only: !!m.isGroup },
     { id:'lots',      label:'Lots',      count: lotN,  dot: risk, dotTip: riskTip }
   ];
@@ -15475,7 +15482,7 @@ function matInlineTabBar(m, idx) {
             : 'border:1.5px solid transparent;background:transparent;color:#888780;font-weight:400;');
     return '<button onclick="event.stopPropagation();setMatInlineTab(' + jsStr(t.id) + ')" style="' + st + '">'
       + t.label
-      + (t.count ? ' <span style="font-size:10px;opacity:.75;">' + t.count + '</span>' : '')
+      + ((t.count || t.showZero) ? ' <span style="font-size:10px;opacity:.75;">' + (t.count || 0) + '</span>' : '')
       + (t.dot ? ' <span title="' + esc(t.dotTip || '') + '" style="width:6px;height:6px;border-radius:50%;background:#FAC775;display:inline-block;"></span>' : '')
       + '</button>';
   }).join('');
