@@ -14783,9 +14783,12 @@ function matCommittedHTML(m, unit) {
   var multiPart = lines.some(function(l){ return l.part !== lines[0].part; });
   var th = 'padding:4px 10px;font-size:10px;color:#5f5e5a;font-weight:500;font-family:system-ui;white-space:nowrap;';
   var td = 'padding:5px 10px;font-size:11px;white-space:nowrap;';
-  var total = 0;
+  // Units and servings are totalled apart, never added: a bulk line written as
+  // "25k servings" is not 25,000 bottles. A line with no count adds nothing.
+  var total = 0, totUnits = 0, totServ = 0, anyUnits = false, anyServ = false;
   var rows = lines.map(function(l){
     total += l.kg;
+    if (l.units != null) { if (l.servings) { totServ += l.units; anyServ = true; } else { totUnits += l.units; anyUnits = true; } }
     var u = l.units == null ? '\u2014' : (l.units.toLocaleString() + (l.servings ? ' servings' : ''));
     return '<tr style="border-bottom:0.5px solid #2c2c2a;">'
       + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">' + u + '</td>'
@@ -14803,7 +14806,9 @@ function matCommittedHTML(m, unit) {
       + (multiPart ? '<th style="' + th + 'text-align:left;width:1%;">Part #</th>' : '')
       + '<th style="' + th + 'text-align:right;width:1%;padding-right:14px;">Committed</th>'
     + '</tr></thead><tbody>' + rows
-      + '<tr><td style="' + td + 'text-align:right;color:#888780;font-weight:500;">Total</td><td></td>' + (multiPart ? '<td></td>' : '')
+      + '<tr><td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;">'
+        + [anyUnits ? totUnits.toLocaleString() : '', anyServ ? totServ.toLocaleString() + ' servings' : ''].filter(Boolean).join(' + ')
+        + '</td><td style="' + td + 'color:#888780;font-weight:500;">Total</td>' + (multiPart ? '<td></td>' : '')
       + '<td style="' + td + 'text-align:right;color:#e8e6e0;font-weight:500;padding-right:14px;">' + fmtStockQty(total) + ' ' + esc(unit) + '</td></tr>'
     + '</tbody></table></div>'
     + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">From the RMO demand sheet: each product\u2019s unit count and name as written there, and how much of this material it needs.</div>'
