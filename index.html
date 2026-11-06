@@ -17097,6 +17097,30 @@ function _rdyPickerHTML() {
     +   '<div id="rdy-nomatch" style="display:' + (shown ? 'none' : 'block') + ';padding:14px;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">No product on the RMO sheet matches that search.</div>'
     + '</div>'
     + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">Products and quantities are read from the RMO demand sheet, the same one behind Committed in Procurement. The chip is each product taken on its own against stock on hand.</div>'
+    + '<div id="rdy-selected">' + _rdySelectedHTML() + '</div>'
+    + '</div>';
+}
+// What is selected, whatever the search is showing: the list above only shows matches,
+// so after a new search the selection was a bare count with nothing to point at it.
+// In the order picked; each row removes itself.
+function _rdySelectedHTML() {
+  var byId = {};
+  rmoBlocks.forEach(function(bk){ byId[bk.id] = bk; });
+  var sel = Object.keys(rdySel).map(function(id){ return byId[id]; }).filter(Boolean);
+  if (!sel.length) return '';
+  return '<div style="margin-top:12px;border:0.5px solid #2c2c2a;border-radius:6px;overflow:hidden;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 10px;background:#1e2124;border-bottom:0.5px solid #2c2c2a;">'
+    +   '<span style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Products selected · ' + sel.length + '</span>'
+    +   '<a href="javascript:void(0)" onclick="rdyClear()" style="font-size:11px;color:#85B7EB;text-decoration:none;font-family:system-ui;">Clear all</a>'
+    + '</div>'
+    + sel.map(function(bk){
+        return '<div style="display:grid;grid-template-columns:1fr auto auto 22px;gap:10px;align-items:center;padding:6px 10px;border-bottom:0.5px solid #2c2c2a;font-size:12px;font-family:system-ui;">'
+          + '<span style="color:#e8e6e0;white-space:normal;line-height:1.35;min-width:0;">' + esc(bk.product) + '</span>'
+          + '<span style="color:#888780;font-variant-numeric:tabular-nums;white-space:nowrap;">' + (bk.units != null ? bk.units.toLocaleString() + (bk.servings ? ' servings' : ' units') : '') + '</span>'
+          + '<span>' + _rdyBlockChip(bk) + '</span>'
+          + '<button onclick="rdyToggle(' + jsStr(bk.id) + ',false)" title="Remove" style="background:transparent;border:none;color:#888780;cursor:pointer;font-size:15px;line-height:1;padding:0;" onmouseover="this.style.color=\'#F09595\'" onmouseout="this.style.color=\'#888780\'">&times;</button>'
+          + '</div>';
+      }).join('')
     + '</div>';
 }
 function _rdySelCountHTML(n) {
@@ -17318,11 +17342,13 @@ function _rdyRefreshResults() {
   if (r) r.innerHTML = _rdyResultsHTML();
   var c = document.getElementById('rdy-selcount');
   if (c) c.innerHTML = _rdySelCountHTML(_rdySelectedBlocks().length);
+  var sd = document.getElementById('rdy-selected');
+  if (sd) sd.innerHTML = _rdySelectedHTML();
 }
 function rdyToggle(id, on) {
   if (on) rdySel[id] = true; else delete rdySel[id];
   var el = document.querySelector('.rdy-item[data-rdy-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
-  if (el) el.classList.toggle('on', !!on);
+  if (el) { el.classList.toggle('on', !!on); var cb = el.querySelector('input'); if (cb) cb.checked = !!on; }
   _rdyRefreshResults();
 }
 function rdyFilter(q) {
