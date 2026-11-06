@@ -1425,7 +1425,7 @@ var rdyQuery = '';         // picker search text
 var rdySel = {};           // rmo block id -> true (ids are header + occurrence, so they survive a refresh)
 var rdyView = 'product';   // 'product' (default, Alex 2026-11-06) | 'ingredient' (combined across the selection)
 var rdyShortOnly = true;   // default: covered ingredients fold into one "N ingredients covered" row per table
-var rdyCovOpen = {};       // table key (block id, or '__all' for By ingredient) -> true: its covered rows unfolded
+var rdyCovOpen = {};       // table key (block id, or '__all' for By ingredient) -> explicit open/closed of its covered rows; absent = default (open only when nothing is short)
 var rdyOpen = {};          // ingredient key -> true: expanded per-product breakdown in the combined table
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
 var openOrdersCapsule = null;
@@ -17398,8 +17398,11 @@ function _rdyTbody(items, key, opts) {
   items.forEach(function(it){ (it.status === 'ok' ? covered : shown).push(it); });
   var html = shown.map(row).join('');
   if (!covered.length) return html;
-  var open = !!rdyCovOpen[key];
-  html += '<tr onclick="rdyToggleCovered(' + jsStr(key) + ')" style="cursor:pointer;"><td colspan="7" style="' + _RDY_TD + 'color:#9FE1CB;">'
+  // Folded by default only when something above needs attention. With nothing short,
+  // the covered rows ARE the answer, so they open on their own (Alex, 2026-11-06). A
+  // click records an explicit open/closed that overrides the default either way.
+  var open = rdyCovOpen.hasOwnProperty(key) ? rdyCovOpen[key] : !shown.length;
+  html += '<tr onclick="rdyToggleCovered(' + jsStr(key) + ',' + (open ? 'false' : 'true') + ')" style="cursor:pointer;"><td colspan="7" style="' + _RDY_TD + 'color:#9FE1CB;">'
     + (open ? '▾ ' : '▸ ') + covered.length + ' ingredient' + (covered.length === 1 ? '' : 's') + ' covered'
     + '<span style="color:#5f5e5a;margin-left:8px;">' + (open ? 'hide' : 'show') + '</span></td></tr>';
   if (open) html += covered.map(row).join('');
@@ -17557,8 +17560,8 @@ function rdyClear() {
 }
 function setRdyView(v) { rdyView = v; _rdyRefreshResults(); }
 function setRdyShortOnly(v) { rdyShortOnly = !!v; rdyCovOpen = {}; _rdyRefreshResults(); }
-function rdyToggleCovered(key) {
-  if (rdyCovOpen[key]) delete rdyCovOpen[key]; else rdyCovOpen[key] = true;
+function rdyToggleCovered(key, open) {
+  rdyCovOpen[key] = !!open;
   _rdyRefreshResults();
 }
 function rdyToggleOpen(key) {
