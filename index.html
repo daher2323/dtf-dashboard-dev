@@ -1423,7 +1423,9 @@ var ordersView = 'summary'; // 'summary' | 'labels' | 'planning' | 'readiness'
 // RMO Readiness (ordersView 'readiness'): pick products off the RMO demand sheet, see what they need.
 var rdyQuery = '';         // picker search text
 var rdySel = {};           // rmo block id -> true (ids are header + occurrence, so they survive a refresh)
-var rdyView = 'ingredient'; // 'ingredient' (combined across the selection) | 'product'
+var rdyView = 'product';   // 'product' (default, Alex 2026-11-06) | 'ingredient' (combined across the selection)
+var rdyShortOnly = true;   // default: covered ingredients fold into one "N ingredients covered" row per table
+var rdyCovOpen = {};       // table key (block id, or '__all' for By ingredient) -> true: its covered rows unfolded
 var rdyOpen = {};          // ingredient key -> true: expanded per-product breakdown in the combined table
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
 var openOrdersCapsule = null;
@@ -16999,7 +17001,8 @@ var _RDY_PILL = {
   req:     { t: 'Short · requested, no PO', bg: '#791F1F', fg: '#F09595', rank: 0 },
   short:   { t: 'Short',              bg: '#791F1F', fg: '#F09595', rank: 0 },
   nocheck: { t: "Can't check",        bg: '#2c2c2a', fg: '#888780', rank: 4 },
-  loading: { t: 'Loading…',           bg: '#2c2c2a', fg: '#888780', rank: 3 }
+  loading: { t: 'Loading…',           bg: '#2c2c2a', fg: '#888780', rank: 3 },
+  shared:  { t: 'Short with the others', bg: '#4a3410', fg: '#FAC775', rank: 1 }
 };
 function _rdyPill(st, title) {
   var p = _RDY_PILL[st];
@@ -17189,6 +17192,24 @@ function _rdyRowHTML(it, opts) {
   return html;
 }
 
+// A table's rows. In Short only, everything Covered folds into one clickable
+// "N ingredients covered" row after the ones needing attention (short, can't check,
+// short with the others), which unfolds in place for that table alone.
+function _rdyTbody(items, key, opts) {
+  var row = function(it){ return _rdyRowHTML(it, opts); };
+  if (!rdyShortOnly) return items.map(row).join('');
+  var shown = [], covered = [];
+  items.forEach(function(it){ (it.status === 'ok' ? covered : shown).push(it); });
+  var html = shown.map(row).join('');
+  if (!covered.length) return html;
+  var open = !!rdyCovOpen[key];
+  html += '<tr onclick="rdyToggleCovered(' + jsStr(key) + ')" style="cursor:pointer;"><td colspan="7" style="' + _RDY_TD + 'color:#9FE1CB;">'
+    + (open ? '▾ ' : '▸ ') + covered.length + ' ingredient' + (covered.length === 1 ? '' : 's') + ' covered'
+    + '<span style="color:#5f5e5a;margin-left:8px;">' + (open ? 'hide' : 'show') + '</span></td></tr>';
+  if (open) html += covered.map(row).join('');
+  return html;
+}
+
 function _rdyResultsHTML() {
   var sel = _rdySelectedBlocks();
   if (!sel.length) {
@@ -17218,9 +17239,14 @@ function _rdyResultsHTML() {
   if (!demandLoaded) notes.push('Loading the RMO demand sheet…');
 
   var toggle = '<div style="display:flex;gap:2px;padding:3px;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;">'
-    + '<button onclick="setRdyView(\'ingredient\')" style="' + navBtnStyle(rdyView === 'ingredient') + '">By ingredient</button>'
     + '<button onclick="setRdyView(\'product\')" style="' + navBtnStyle(rdyView === 'product') + '">By product</button>'
+    + '<button onclick="setRdyView(\'ingredient\')" style="' + navBtnStyle(rdyView === 'ingredient') + '">By ingredient</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:2px;padding:3px;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;">'
+    + '<button onclick="setRdyShortOnly(true)" style="' + navBtnStyle(rdyShortOnly) + '">Short only</button>'
+    + '<button onclick="setRdyShortOnly(false)" style="' + navBtnStyle(!rdyShortOnly) + '">All ingredients</button>'
     + '</div>';
+  toggle = '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + toggle + '</div>';
 
   var body;
   if (rdyView === 'product') {
@@ -17230,7 +17256,7 @@ function _rdyResultsHTML() {
       var own = _rdyItems([bk]), ownShort = 0, sharedShort = 0;
       own.forEach(function(it){
         if (it.status !== 'ok' && it.status !== 'nocheck' && it.status !== 'loading') ownShort++;
-        else if (it.status === 'ok' && combined[it.key] && combined[it.key].balance < 0) { it.sharedShort = true; sharedShort++; }
+        else if (it.status === 'ok' && combined[it.key] && combined[it.key].balance < 0) { it.status = 'shared'; sharedShort++; }
       });
       var chip = !inventoryLoaded ? ''
         : ownShort ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;">' + ownShort + ' short</span>'
@@ -17243,12 +17269,12 @@ function _rdyResultsHTML() {
         +   chip
         + '</div>'
         + '<div class="pnl-sub-scroll"><table style="border-collapse:collapse;">' + _rdyTableHead('Needed')
-        + '<tbody>' + own.map(function(it){ return _rdyRowHTML(it, null); }).join('') + '</tbody></table></div>'
+        + '<tbody>' + _rdyTbody(own, bk.id, null) + '</tbody></table></div>'
         + '</div>';
     }).join('');
   } else {
     body = '<div class="pnl-sub-scroll"><table style="border-collapse:collapse;">' + _rdyTableHead(sel.length > 1 ? 'Needed (all selected)' : 'Needed')
-      + '<tbody>' + items.map(function(it){ return _rdyRowHTML(it, { expandable: true }); }).join('') + '</tbody></table></div>';
+      + '<tbody>' + _rdyTbody(items, '__all', { expandable: true }) + '</tbody></table></div>';
   }
 
   return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
@@ -17325,6 +17351,11 @@ function rdyClear() {
   _rdyRefreshResults();
 }
 function setRdyView(v) { rdyView = v; _rdyRefreshResults(); }
+function setRdyShortOnly(v) { rdyShortOnly = !!v; rdyCovOpen = {}; _rdyRefreshResults(); }
+function rdyToggleCovered(key) {
+  if (rdyCovOpen[key]) delete rdyCovOpen[key]; else rdyCovOpen[key] = true;
+  _rdyRefreshResults();
+}
 function rdyToggleOpen(key) {
   if (rdyOpen[key]) delete rdyOpen[key]; else rdyOpen[key] = true;
   _rdyRefreshResults();
