@@ -17239,9 +17239,39 @@ function _rdyPoHTML(it) {
             + (l.confirmed ? '' : ' <span title="The Confirmation box is not ticked: the vendor has not confirmed this PO." style="font-size:10px;padding:1px 5px;border-radius:4px;background:#2c2c2a;color:#c2c0b6;cursor:help;white-space:nowrap;">unconfirmed</span>')
           : ' <span title="On the purchasing sheet with no PO #, so it has not been ordered yet. Not counted toward covering the shortfall." style="font-size:10px;padding:1px 5px;border-radius:4px;background:#3a2323;color:#F09595;cursor:help;white-space:nowrap;">no PO # yet</span>')
       + (sub.length ? '<div style="font-size:10px;color:#888780;line-height:1.35;">' + sub.join(' · ') + '</div>' : '')
-      + (l.eta ? '<div style="font-size:10px;color:#FAC775;white-space:normal;line-height:1.35;">' + esc(l.eta) + '</div>' : '')
+      + (l.eta ? '<div style="font-size:10px;color:#FAC775;white-space:normal;line-height:1.35;">' + _rdyNoteHTML(l.eta) + '</div>' : '')
       + '</div>';
   }).join('<div style="height:6px;"></div>');
+}
+// Procurement Notes carry tracking as "<carrier> - <number>" ("FedEx - 879624047556",
+// "Daylight - 177085982", "150lbs received; 150lbs Daylight - 17708..."). Turn each into
+// the same tracking link + copy button Logistics uses (_logiRefCell), via the same
+// CARRIER_TRACK_URL table. Carrier names are matched from a fixed list, not "any word
+// before a dash", so "Mid-December" is never read as a carrier. FedEx here is parcel
+// (12-digit express/ground numbers), so it goes to fedex.com, not FedEx Freight; the
+// fedex.com tracker also takes freight PROs. A carrier with no URL stays plain text.
+var _RDY_NOTE_CARRIER = {
+  'fedex': 'https://www.fedex.com/fedextrack/?trknbr={TRACKING}',
+  'ups': 'UPS', 'dhl': 'DHL', 'saia': 'SAIA', 'r&l': 'R&L', 'abf': 'ABF',
+  'daylight': 'Day Light', 'day light': 'Day Light',
+  'southeastern': 'Southeastern', 'sefl': 'SEFL',
+  'central': 'Central T', 'central transport': 'Central T',
+  'estes': 'Estes', 'xpo': 'XPO', 'averitt': 'Averitt', 'roadrunner': 'Roadrunner', 'xgs': 'XGS',
+  'old dominion': 'Old Dominion Freight Line', 'odfl': 'Old Dominion Freight Line',
+  't force': 'T Force', 'tforce': 'T Force'
+};
+var _RDY_NOTE_TRACK_RE = /\b(fedex|ups|dhl|saia|r&l|abf|day ?light|southeastern|sefl|central(?: transport)?|estes|xpo|averitt|roadrunner|xgs|old dominion|odfl|t ?force)\b\s*[-:#]?\s*#?\s*([A-Za-z0-9]*\d[A-Za-z0-9]{4,})/gi;
+function _rdyNoteHTML(note) {
+  var out = '', last = 0, m;
+  _RDY_NOTE_TRACK_RE.lastIndex = 0;
+  while ((m = _RDY_NOTE_TRACK_RE.exec(note))) {
+    var key = m[1].toLowerCase().replace(/\s+/g, ' '), v = _RDY_NOTE_CARRIER[key], link = null;
+    if (v && v.indexOf('{TRACKING}') !== -1) link = { url: v.replace('{TRACKING}', encodeURIComponent(m[2])), direct: true };
+    else if (v) link = _logiTrackUrl(v, m[2]);
+    out += esc(note.slice(last, m.index)) + esc(m[1]) + ' ' + (link ? _logiRefCell(m[2], '', link) : esc(m[2]));
+    last = m.index + m[0].length;
+  }
+  return out + esc(note.slice(last));
 }
 
 var _RDY_TH = 'text-align:left;font-size:10px;color:#888780;font-weight:500;text-transform:uppercase;letter-spacing:.04em;padding:6px 8px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;';
