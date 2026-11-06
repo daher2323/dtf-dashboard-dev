@@ -12449,7 +12449,7 @@ function computeCustomerData() {
 
     var pr1 = custPaceRaw[cust];
     var pace = _custPace(pr1 ? { last: pr1.last, prior: pr1.prior, lastLots: pr1.lastLots.size, priorLots: pr1.priorLots.size, first: pr1.first } : null, paceW);
-    results.push({cust:cust, qtrs:qtrs, months:months, tag:tag, pace:pace, ytd:ytd, ytd25:ytd25, ytdLots:ytdLots, ytdLots25:ytdLots25, ytdPct:ytdPct, ytdPct25:ytdPct25, annuals:annuals, withData:withData, products:products});
+    results.push({cust:cust, first:(pr1 ? pr1.first : null), qtrs:qtrs, months:months, tag:tag, pace:pace, ytd:ytd, ytd25:ytd25, ytdLots:ytdLots, ytdLots25:ytdLots25, ytdPct:ytdPct, ytdPct25:ytdPct25, annuals:annuals, withData:withData, products:products});
   });
 
   // Sort by YTD units descending
@@ -12744,11 +12744,25 @@ function renderCustomerOverview(healthData) {
   // by now, so ytd / share projects the full-year finish. priorPeriodUnits is
   // cd.ytd25 (the seasonal anchor) — NOT fy2025.units. Returns null with no 2025
   // baseline so "New" customers skip the bar entirely.
-  function buildBenchmarkData(fyUnits, ytdUnits, priorPeriodUnits) {
+  // The seasonal split only means something when the customer ran all of 2025. One
+  // onboarded mid-year has its whole 2025 crammed into the months after it started, so
+  // "Jan-cutoff share" reads far too low: Dragon Pharma (first run Oct 2025) showed 56%
+  // of the year done on Nov 6 and projected 1.8M off 1.01M YTD. For a customer whose
+  // first run falls after January of the prior year, use the share of the calendar year
+  // elapsed instead (seasonal = false), and say so in the tooltip and footnote.
+  function buildBenchmarkData(fyUnits, ytdUnits, priorPeriodUnits, firstRun) {
     if (!fyUnits || fyUnits <= 0 || !priorPeriodUnits || priorPeriodUnits <= 0) {
       return null;
     }
-    var share = priorPeriodUnits / fyUnits;
+    var now = new Date();
+    var seasonal = !(firstRun && firstRun >= new Date(now.getFullYear() - 1, 1, 1));
+    var share;
+    if (seasonal) {
+      share = priorPeriodUnits / fyUnits;
+    } else {
+      var y0 = new Date(now.getFullYear(), 0, 1), y1 = new Date(now.getFullYear() + 1, 0, 1);
+      share = (now - y0) / (y1 - y0);
+    }
     if (share > 1) { share = 1; }
     var projUnits = Math.round(ytdUnits / share);
     var pctYTD  = ytdUnits / fyUnits * 100;
@@ -12756,6 +12770,7 @@ function renderCustomerOverview(healthData) {
     var trackMax = Math.max(120, Math.ceil((pctProj + 12) / 10) * 10);
     return {
       projUnits:    projUnits,
+      seasonal:     seasonal,
       unitsToMatch: Math.max(0, fyUnits - ytdUnits),
       sharePct:     Math.round(share * 100),
       pctYTDLabel:  Math.round(pctYTD),
@@ -12781,14 +12796,17 @@ function _benchAnchor(pct) {
   if (pct > 88) return 'translateX(-100%)';
   return 'translateX(-50%)';
 }
-function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
-    var d = buildBenchmarkData(fyUnits, ytdUnits, priorPeriodUnits);
+function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits, firstRun) {
+    var d = buildBenchmarkData(fyUnits, ytdUnits, priorPeriodUnits, firstRun);
     if (!d) { return ''; }
     var matchText = d.exceeded
       ? 'matched &mdash; exceeding 2025'
       : d.unitsToMatch.toLocaleString() + ' to match all of 2025';
-    var tip = 'Projected from YTD using 2025’s seasonal split (Jan–cutoff was '
-            + d.sharePct + '% of 2025). Estimate, not recorded production.';
+    var tip = d.seasonal
+      ? 'Projected from YTD using 2025’s seasonal split (Jan–cutoff was '
+            + d.sharePct + '% of 2025). Estimate, not recorded production.'
+      : 'Projected from YTD at the year-to-date pace (' + d.sharePct + '% of the year elapsed). '
+            + 'No full 2025 to take a seasonal split from: first run was mid-2025. Estimate, not recorded production.';
     return '' +
     '<div class="bench-bar">' +
       '<div class="bench-label">2026 pace vs 2025 full year</div>' +
@@ -12807,7 +12825,7 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
         '<div><b>' + matchText + '</b></div>' +
         '<div><b>' + d.pctProjLabel + '%</b> projected finish</div>' +
       '</div>' +
-      '<div class="bench-foot">Projected = YTD annualized on 2025’s seasonal split. Estimate, not recorded production.</div>' +
+      '<div class="bench-foot">' + (d.seasonal ? 'Projected = YTD annualized on 2025’s seasonal split.' : 'Projected = YTD annualized on the share of the year elapsed (customer started mid-2025, so no seasonal split).') + ' Estimate, not recorded production.</div>' +
     '</div>';
   }
 
@@ -13031,7 +13049,7 @@ function buildBenchmarkBar(fyUnits, ytdUnits, priorPeriodUnits) {
       +'</tr></thead>'
       +'<tbody>'+tableRows+'</tbody>'
       +'</table></div>'
-      +buildBenchmarkBar(_fy2025.units, cd.ytd, cd.ytd25)
+      +buildBenchmarkBar(_fy2025.units, cd.ytd, cd.ytd25, cd.first)
       +'</div>'
       +'<div class="cust-tab-panel" data-cust-tab="products" style="display:'+(custInlineTab==='products'?'block':'none')+';">'
       + _custProductsHTML(cd)
