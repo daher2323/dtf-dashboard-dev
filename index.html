@@ -802,6 +802,16 @@
   .agf-chip.off .agf-lbl { text-decoration:line-through; }
   .agf-chip.off .agf-n { color:#6b7688; }
   .agf-chip.off .agf-mark { background:transparent; border:1.5px solid rgba(148,163,184,.30); }
+/* RMO Readiness picker rows: classes rather than inline styles, ~370 rows per render */
+.rdy-item { display: grid; grid-template-columns: 18px 1fr auto auto; gap: 10px; align-items: center; padding: 6px 8px; border-bottom: 0.5px solid #2c2c2a; cursor: pointer; font-size: 12px; font-family: system-ui; }
+.rdy-item.on { background: #0C2240; }
+.rdy-item.off { display: none; }
+.rdy-item input { margin: 0; accent-color: #378ADD; cursor: pointer; }
+.rdy-item .rdy-n { color: #e8e6e0; white-space: normal; line-height: 1.35; min-width: 0; }
+.rdy-item .rdy-u { color: #888780; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rdy-chip { font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.rdy-chip.s { background: #3a2323; color: #F09595; }
+.rdy-chip.r { background: #085041; color: #9FE1CB; }
 </style>
 <!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
      Production-only: the gtag('config') call is gated on the URL not
@@ -1163,12 +1173,13 @@ var inventoryLoaded = false; // true once a successful inventory fetch has popul
 var demandByPart = {};       // DTF Part # -> forthcoming demand in KG, summed across the demand sheet
 var demandLoaded = false;    // true once a successful demand fetch has populated demandByPart
 var demandLinesByPart = {};  // DTF Part # -> [{ units, servings, product, kg }], one per product block (parseDemand)
+var rmoBlocks = [];          // RMO demand sheet, one entry per product block with every line (parseRmoBlocks), for RMO Readiness
 // sessionStorage caches so On hand / Committed / Available / Cover render instantly
 // on re-navigation and page refresh, instead of re-waiting on Google's slow
 // published-CSV endpoint (the inventory sheet can take 15-60s to regenerate cold).
 var STOCK_CACHE_TTL = 10 * 60 * 1000; // 10 min — inventory/demand change slowly
 var INVENTORY_CACHE_KEY = 'dtf_inventory_cache_v10';  // v10: switched to the RMI_NEW sheet, so a payload cached from the old RMI tab is not shown for up to 10 min after the switch; v9: the audit carries blindLots, not just a count — a v8 payload would open an empty list; v8: carries the impossible-stock audit, which parseInventory does not re-run to rebuild on a cache hit; v7: carries archiveLots, so the broken-archive warning survives a cache hit; v6 put `category` on part records for Raw vs Flavors; v5 added archived lots to lotIndex; v4 discarded pre-size-guard payloads
-var DEMAND_CACHE_KEY = 'dtf_demand_cache_v2';  // v2: carries the per-product lines, so a v1 payload would open an empty Committed tab
+var DEMAND_CACHE_KEY = 'dtf_demand_cache_v3';  // v3: carries rmoBlocks for RMO Readiness; v2: carries the per-product lines, so a v1 payload would open an empty Committed tab
 var lotIndex = {};           // lot number -> { combined, brand, product } populated from the Lot # reference sheets
 var lotIndexLoaded = false;
 // In-flight guards for the four slow-moving feeds. The *Loaded flags above answer
@@ -1408,7 +1419,12 @@ var materialsShortOnly = false; // Materials toolbar "Short only" toggle: hide r
 var matSummaryView = 'quarter'; // expanded-view consumption summary breakdown: 'quarter' | 'customer'
 var drillCustomer = null; // Materials "By customer" → product drill: selected customer name, or null while showing the customer list. Reset when a different material is opened; cleared by the Back button.
 var drillOpenLots = {}; // Product → lot accordion (L4): set of open product strings, so an expanded lot list survives a re-render. Cleared when the customer drill changes / on back / on a new material.
-var ordersView = 'summary'; // 'summary' (more sub-views TBD)
+var ordersView = 'summary'; // 'summary' | 'labels' | 'planning' | 'readiness'
+// RMO Readiness (ordersView 'readiness'): pick products off the RMO demand sheet, see what they need.
+var rdyQuery = '';         // picker search text
+var rdySel = {};           // rmo block id -> true (ids are header + occurrence, so they survive a refresh)
+var rdyView = 'ingredient'; // 'ingredient' (combined across the selection) | 'product'
+var rdyOpen = {};          // ingredient key -> true: expanded per-product breakdown in the combined table
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
 var openOrdersCapsule = null;
 var openOrdersLastFetch = 0;
@@ -3105,6 +3121,7 @@ function fetchInventoryIfNeeded(force) {
       _writeInventoryCache();
       _invRejects = 0;
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+      else if (_onReadiness()) render();
     } else {
       inventoryLotIndex = keepIndex;
       inventoryStockAudit = keepAudit;
@@ -4957,15 +4974,126 @@ function fetchDemandIfNeeded(force) {
     if (Object.keys(parsed.byPart).length > 0) {
       demandByPart = parsed.byPart;
       demandLinesByPart = parsed.lines;
+      rmoBlocks = parseRmoBlocks(t);
       demandLoaded = true;
-      try { sessionStorage.setItem(DEMAND_CACHE_KEY, JSON.stringify({ byPart: parsed.byPart, lines: parsed.lines, ts: Date.now() })); } catch(e) {}
+      try { sessionStorage.setItem(DEMAND_CACHE_KEY, JSON.stringify({ byPart: parsed.byPart, lines: parsed.lines, blocks: rmoBlocks, ts: Date.now() })); } catch(e) {}
       if (mainSection === 'procurement' && procView === 'materials') renderMaterials();
+      else if (_onReadiness()) render();
     }
   }).catch(function(e){
     _demandFetching = false;
     console.warn('Demand refresh failed: ' + (e && e.message ? e.message : e));
   });
 }
+
+// ── RMO product blocks (for RMO Readiness) ─────────────────────────────────
+// The same demand sheet parseDemand reads, kept whole instead of summed by part.
+// parseDemand answers "how much of this part is committed"; RMO Readiness asks the
+// reverse, "what does this product need", so it wants each block intact: its header
+// and every line under it, part-less lines (salts, flavors) included.
+//
+// Layout (measured 2026-11-06): blocks sit in 4-column groups (Part # | Name | KG |
+// blank), stacked down each group. A header has text in the name column and nothing in
+// the part # or KG columns, same rule as parseDemand. Section labels ("POWDERS",
+// "ALPHA LION") are headers with no lines and are dropped. The KG cell is not always
+// kilograms: the fish oil line reads "603,000 softgels", so the unit is read off the
+// cell (or the material name) rather than assumed, and a cell with no number ("a",
+// blank) is kept as an unreadable line, not a zero requirement.
+function parseRmoBlocks(text) {
+  var out = [];
+  if (!text) return out;
+  try {
+    var grid = parseCSVGrid(text), width = 0, r, c;
+    for (r = 0; r < grid.length; r++) if (grid[r] && grid[r].length > width) width = grid[r].length;
+    function cell(rr, cc) { return (grid[rr] && grid[rr][cc] != null) ? String(grid[rr][cc]).trim() : ''; }
+    var seen = {};
+    for (c = 0; c < width; c += 4) {
+      var cur = null;
+      for (r = DEMAND_FIRST_DATA_ROW; r < grid.length; r++) {
+        var a = cell(r, c), b = cell(r, c + 1), k = cell(r, c + 2);
+        if (!a && !b && !k) continue;
+        var isPart = DEMAND_PART_RE.test(a);
+        if (b && !isPart && !k) {
+          var hd = _demandHead(b);
+          seen[b] = (seen[b] || 0) + 1;
+          cur = { id: b + '|' + seen[b], head: b, units: hd.units, servings: hd.servings, product: hd.product, lines: [] };
+          out.push(cur);
+          continue;
+        }
+        if (!cur) continue;
+        var m = /-?[\d,]*\.?\d+/.exec(k), qty = m ? parseFloat(m[0].replace(/,/g, '')) : null;
+        if (qty != null && isNaN(qty)) qty = null;
+        cur.lines.push({
+          part: isPart ? a : '',
+          name: b || (isPart ? a : ''),
+          qty: qty,
+          raw: k,
+          unit: (/softgel/i.test(k) || isSoftgel(b)) ? 'sg' : 'kg'
+        });
+      }
+    }
+    return out.filter(function(bk){ return bk.lines.length > 0; });
+  } catch (e) { return []; }
+}
+
+// ── Open POs (for RMO Readiness) ───────────────────────────────────────────
+// One row per PO line: Part #, quantity ordered, and an ETA note when there is one.
+// Columns are found by header name rather than position so a column added to the
+// sheet does not shift them. Until the URL is filled in, the Readiness view says
+// the PO sheet is not connected instead of implying no part has a PO.
+var CSV_OPEN_POS = '';
+var openPOsByPart = {};     // part # -> { qty, lines: [{ qty, qtyRaw, eta, po, vendor }] }
+var openPOsLoaded = false;
+var _openPOsFetching = false;
+var _openPOsAt = 0;
+function _poCol(keys, res) {
+  for (var i = 0; i < res.length; i++)
+    for (var j = 0; j < keys.length; j++) if (res[i].test(keys[j])) return keys[j];
+  return null;
+}
+function parseOpenPOs(text) {
+  var byPart = {};
+  if (!text) return null;
+  var rows = parseCSVMultiline(text);
+  if (!rows.length) return null;
+  var keys = Object.keys(rows[0]);
+  var kPart = _poCol(keys, [/^\s*(dtf\s*)?part\s*#?\s*$/i, /part/i]);
+  var kQty  = _poCol(keys, [/qty\s*ordered|quantity\s*ordered/i, /^\s*(qty|quantity)\b/i, /qty|quantity/i]);
+  var kEta  = _poCol(keys, [/eta/i, /note/i, /expected|arriv|deliver/i]);
+  var kPo   = _poCol(keys, [/^\s*p\.?\s*o\.?\s*(#|num|number)?\s*$/i]);
+  var kVend = _poCol(keys, [/vendor|supplier/i]);
+  if (!kPart || !kQty) { console.warn('Open PO sheet: could not find Part # / Qty columns in ' + JSON.stringify(keys)); return null; }
+  rows.forEach(function(r){
+    var part = String(r[kPart] || '').trim();
+    if (!DEMAND_PART_RE.test(part)) return;
+    var qRaw = String(r[kQty] || '').trim();
+    var q = /\d/.test(qRaw) ? num(qRaw) : null;
+    var rec = byPart[part] || (byPart[part] = { qty: 0, lines: [] });
+    if (q != null) rec.qty += q;
+    rec.lines.push({ qty: q, qtyRaw: qRaw, eta: kEta ? String(r[kEta] || '').trim() : '', po: kPo ? String(r[kPo] || '').trim() : '', vendor: kVend ? String(r[kVend] || '').trim() : '' });
+  });
+  return byPart;
+}
+function fetchOpenPOsIfNeeded(force) {
+  if (!CSV_OPEN_POS || _openPOsFetching) return;
+  if (openPOsLoaded && !force && Date.now() - _openPOsAt < STOCK_CACHE_TTL) return;
+  _openPOsFetching = true;
+  fetchWithTimeout(force ? bustUrl(CSV_OPEN_POS, true) : CSV_OPEN_POS, NO_CACHE).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }).then(function(t){
+    _openPOsFetching = false;
+    if (!t || t.trim().startsWith('<!')) throw new Error('Invalid response');
+    var parsed = parseOpenPOs(t);
+    if (!parsed) return;
+    openPOsByPart = parsed; openPOsLoaded = true; _openPOsAt = Date.now();
+    if (_onReadiness()) render();
+  }).catch(function(e){
+    _openPOsFetching = false;
+    console.warn('Open PO refresh failed: ' + (e && e.message ? e.message : e));
+  });
+}
+function _onReadiness() { return mainSection === 'orders' && ordersView === 'readiness'; }
 
 // Hydrate inventory/demand from sessionStorage (set by prior fetches this session)
 // so the Stock-position columns paint instantly instead of re-waiting on Google.
@@ -4987,7 +5115,7 @@ function _loadStockCaches() {
   } catch(e) {}
   try {
     var rd = sessionStorage.getItem(DEMAND_CACHE_KEY);
-    if (rd) { var cd = JSON.parse(rd); if (cd && cd.byPart && cd.lines && (Date.now() - (cd.ts || 0)) < STOCK_CACHE_TTL) { demandByPart = cd.byPart; demandLinesByPart = cd.lines; demandLoaded = true; _stockHydratedFromCache = true; } }
+    if (rd) { var cd = JSON.parse(rd); if (cd && cd.byPart && cd.lines && Array.isArray(cd.blocks) && (Date.now() - (cd.ts || 0)) < STOCK_CACHE_TTL) { demandByPart = cd.byPart; demandLinesByPart = cd.lines; rmoBlocks = cd.blocks; demandLoaded = true; _stockHydratedFromCache = true; } }
   } catch(e) {}
 }
 
@@ -5056,7 +5184,7 @@ function fetchOpenOrdersIfNeeded(force) {
     openOrdersLastFetch = Date.now();
     openOrdersFetchInFlight = false;
     _saveOpenOrdersCache();
-    if (mainSection === 'orders') render();
+    if (mainSection === 'orders' && ordersView !== 'readiness') render();
   }).catch(function(){
     openOrdersFetchInFlight = false;
   });
@@ -5635,6 +5763,7 @@ function refreshStockFeeds() {
   if (userRole === 'admin') {
     fetchInventoryIfNeeded(true);
     fetchDemandIfNeeded(true);
+    fetchOpenPOsIfNeeded(true);
   }
 }
 
@@ -5653,7 +5782,7 @@ function refreshStockFeedsIfStale() {
 // periodic re-read off the backs of users sitting on Production or Sales, where
 // none of it is on screen.
 function _onStockSection() {
-  return mainSection === 'procurement' || mainSection === 'quality';
+  return mainSection === 'procurement' || mainSection === 'quality' || _onReadiness();
 }
 
 function parseMaterials(text) {
@@ -6493,6 +6622,7 @@ function renderSubBar() {
       + '<button onclick="setOrdersView(\'summary\')"  style="'+navBtnStyle(ordersView==='summary')+'">Summary</button>'
       + '<button onclick="setOrdersView(\'labels\')"   style="'+navBtnStyle(ordersView==='labels')+'">Labels</button>'
       + '<button onclick="setOrdersView(\'planning\')" style="'+navBtnStyle(ordersView==='planning')+'">Planning</button>'
+      + '<button onclick="setOrdersView(\'readiness\')" style="'+navBtnStyle(ordersView==='readiness')+'">RMO Readiness</button>'
       + '</div>';
   } else if (mainSection === 'logistics') {
     // Logistics sub-bar: Outbound/Inbound direction toggle + Daily/Weekly/Monthly
@@ -16739,7 +16869,394 @@ function exportOpenOrdersForCustomer(brand) {
   XLSX.writeFile(wb, 'DTF_Open_Orders_' + safe + '_' + ymd + '.xlsx');
 }
 
+// ── Sales → Open Orders → RMO Readiness ───────────────────────────────────
+// The reverse of the Materials Committed tab. Committed starts from a material and
+// lists the RMO products that need it; this starts from products and lists the
+// materials they need, against stock on hand and open POs: can we run it?
+//
+// Source is the RMO demand sheet (rmoBlocks), not the Open Orders feed: that sheet is
+// where the ingredient quantities live, and its headers are the product names.
+//
+// Three readings, kept apart on purpose:
+//   - On hand is the exact Part # only. A grouped sibling (SKU_GROUPS, e.g. another WPC
+//     part) is mentioned beside it, never added in, because the RMO line names one part.
+//   - Balance is on hand minus what the SELECTION needs. What the rest of the RMO sheet
+//     also wants from that part is shown under it, not subtracted: the question is
+//     "can these run", and folding every other order in would mark nearly everything short.
+//   - A line with no Part # or no readable quantity cannot be checked and says so; it is
+//     never counted as covered.
+function _rdyQty(v, unit) {
+  if (v == null) return '—';
+  var a = Math.abs(v), d = a >= 100 ? 0 : a >= 10 ? 1 : a >= 1 ? 2 : 3;
+  var s = (a > 0 && a < 0.001) ? '<0.001' : v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: d });
+  return s + ' ' + (unit === 'sg' ? 'softgels' : 'kg');
+}
+function _rdyStock(part) {
+  if (!part) return null;
+  var rec = inventoryByPart[part];
+  return rec ? rec.stock : null;
+}
+// Stock held on the other parts of this part's SKU group, for the "also on hand" hint.
+function _rdyGroupOther(part) {
+  var g = SKU_GROUPS[part];
+  if (!g) return null;
+  var t = 0, any = false;
+  (GROUP_PARTS[g] || []).forEach(function(p){
+    if (p === part) return;
+    var rec = inventoryByPart[p];
+    if (rec && rec.stock > 0) { t += rec.stock; any = true; }
+  });
+  return any ? { group: g, qty: t } : null;
+}
+var _rdyAllNeedFor = null, _rdyAllNeed = {};
+function _rdyAllNeedByPart() {
+  if (_rdyAllNeedFor === rmoBlocks) return _rdyAllNeed;
+  var m = {};
+  rmoBlocks.forEach(function(bk){
+    bk.lines.forEach(function(ln){ if (ln.part && ln.qty != null) m[ln.part] = (m[ln.part] || 0) + ln.qty; });
+  });
+  _rdyAllNeedFor = rmoBlocks; _rdyAllNeed = m;
+  return m;
+}
+function _rdyStatus(it) {
+  if (!it.part || it.badQty) return 'nocheck';
+  if (!inventoryLoaded) return 'loading';
+  if (it.balance >= 0) return 'ok';
+  if (!CSV_OPEN_POS || !openPOsLoaded) return 'short';
+  var po = openPOsByPart[it.part];
+  if (!po || !(po.qty > 0)) return 'nopo';
+  return po.qty >= -it.balance ? 'po' : 'partial';
+}
+var _RDY_PILL = {
+  ok:      { t: 'Covered',            bg: '#085041', fg: '#9FE1CB', rank: 5 },
+  po:      { t: 'Short · PO covers',  bg: '#4a3410', fg: '#FAC775', rank: 2 },
+  partial: { t: 'Short · PO partial', bg: '#633806', fg: '#FAC775', rank: 1 },
+  nopo:    { t: 'Short · no open PO', bg: '#791F1F', fg: '#F09595', rank: 0 },
+  short:   { t: 'Short',              bg: '#791F1F', fg: '#F09595', rank: 0 },
+  nocheck: { t: "Can't check",        bg: '#2c2c2a', fg: '#888780', rank: 4 },
+  loading: { t: 'Loading…',           bg: '#2c2c2a', fg: '#888780', rank: 3 }
+};
+function _rdyPill(st, title) {
+  var p = _RDY_PILL[st];
+  return '<span' + (title ? ' title="' + esc(title) + '"' : '') + ' style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:' + p.bg + ';color:' + p.fg + ';white-space:nowrap;display:inline-block;' + (title ? 'cursor:help;' : '') + '">' + p.t + '</span>';
+}
+function _rdyNoCheckWhy(it) {
+  if (!it.part) return 'This line on the RMO sheet has no Part #, so it cannot be matched to inventory.';
+  return 'The quantity on the RMO sheet (' + (it.raw || 'blank') + ') is not a number.';
+}
+
+// One item per Part # (or per name, for a part-less line) across the given blocks.
+function _rdyItems(blocks) {
+  var map = {}, order = [], all = _rdyAllNeedByPart();
+  blocks.forEach(function(bk){
+    bk.lines.forEach(function(ln){
+      var key = ln.part || ('~' + ln.name.toLowerCase());
+      var it = map[key];
+      if (!it) {
+        it = map[key] = { key: key, part: ln.part, name: ln.name, unit: ln.unit, need: 0, badQty: false, raw: '', products: [] };
+        order.push(it);
+      }
+      if (ln.qty == null) { it.badQty = true; it.raw = ln.raw; }
+      else it.need += ln.qty;
+      it.products.push({ head: bk.head, qty: ln.qty, raw: ln.raw });
+    });
+  });
+  order.forEach(function(it){
+    it.onHand = _rdyStock(it.part);
+    it.notInInv = !!it.part && inventoryLoaded && it.onHand == null;
+    it.balance = (it.onHand || 0) - it.need;
+    it.elsewhere = it.part ? Math.max(0, (all[it.part] || 0) - it.need) : 0;
+    it.group = it.part ? _rdyGroupOther(it.part) : null;
+    it.po = it.part ? openPOsByPart[it.part] || null : null;
+    it.status = _rdyStatus(it);
+  });
+  order.sort(function(a, b){
+    var ra = _RDY_PILL[a.status].rank, rb = _RDY_PILL[b.status].rank;
+    if (ra !== rb) return ra - rb;
+    if (a.balance !== b.balance && a.status !== 'ok') return a.balance - b.balance;
+    return b.need - a.need;
+  });
+  return order;
+}
+// Picker chip: can this product run on its own, from stock on hand?
+function _rdyBlockChip(bk) {
+  if (!inventoryLoaded) return '';
+  var short = 0, nocheck = 0;
+  bk.lines.forEach(function(ln){
+    if (!ln.part || ln.qty == null) { nocheck++; return; }
+    if ((_rdyStock(ln.part) || 0) < ln.qty) short++;
+  });
+  if (short) return '<span class="rdy-chip s">' + short + ' short</span>';
+  return '<span title="' + (nocheck ? esc(nocheck + ' line' + (nocheck === 1 ? '' : 's') + ' could not be checked (no Part # or no readable quantity).') : 'Every ingredient is covered by stock on hand, taking this product on its own.') + '" class="rdy-chip r">Ready' + (nocheck ? '*' : '') + '</span>';
+}
+
+function _rdySelectedBlocks() {
+  return rmoBlocks.filter(function(bk){ return rdySel[bk.id]; });
+}
+function _rdyMatches(bk, toks) {
+  var h = bk.head.toLowerCase();
+  for (var i = 0; i < toks.length; i++) if (h.indexOf(toks[i]) < 0) return false;
+  return true;
+}
+function _rdyToks() { return rdyQuery.toLowerCase().split(/\s+/).filter(Boolean); }
+
+function _rdyPickerHTML() {
+  var sorted = rmoBlocks.slice().sort(function(a, b){ return a.product.localeCompare(b.product); });
+  var toks = _rdyToks(), shown = 0;
+  var rows = sorted.map(function(bk){
+    var vis = _rdyMatches(bk, toks); if (vis) shown++;
+    var on = !!rdySel[bk.id];
+    return '<label class="rdy-item' + (vis ? '' : ' off') + (on ? ' on' : '') + '" data-rdy-q="' + esc(bk.head.toLowerCase()) + '" data-rdy-id="' + esc(bk.id) + '">'
+      + '<input type="checkbox"' + (on ? ' checked' : '') + ' onchange="rdyToggle(' + jsStr(bk.id) + ',this.checked)">'
+      + '<span class="rdy-n">' + esc(bk.product) + '</span>'
+      + '<span class="rdy-u">' + (bk.units != null ? bk.units.toLocaleString() + (bk.servings ? ' servings' : ' units') : '') + '</span>'
+      + '<span>' + _rdyBlockChip(bk) + '</span>'
+      + '</label>';
+  }).join('');
+  var nSel = _rdySelectedBlocks().length;
+  return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'
+    +   '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;">Products on the RMO sheet</div>'
+    +   '<div id="rdy-selcount" style="font-size:11px;color:#888780;font-family:system-ui;">' + _rdySelCountHTML(nSel) + '</div>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'
+    +   '<input id="rdy-search" type="search" placeholder="Search products, e.g. Fresh Supps" value="' + esc(rdyQuery) + '" oninput="rdyFilter(this.value)" autocomplete="off" style="flex:1;min-width:200px;padding:7px 10px;border-radius:6px;border:0.5px solid #444441;background:#1e2124;color:#e8e6e0;font-size:13px;font-family:system-ui;">'
+    +   '<button id="rdy-selall" onclick="rdySelectMatches()" style="' + navBtnStyle(false) + 'border:0.5px solid #444441;">' + _rdySelAllLabel(shown, toks.length > 0) + '</button>'
+    + '</div>'
+    + '<div id="rdy-list" data-keep-scroll style="max-height:300px;overflow-y:auto;border:0.5px solid #2c2c2a;border-radius:6px;">'
+    +   rows
+    +   '<div id="rdy-nomatch" style="display:' + (shown ? 'none' : 'block') + ';padding:14px;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">No product on the RMO sheet matches that search.</div>'
+    + '</div>'
+    + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">Products and quantities are read from the RMO demand sheet, the same one behind Committed in Procurement. The chip is each product taken on its own against stock on hand.</div>'
+    + '</div>';
+}
+function _rdySelCountHTML(n) {
+  return n ? n + ' selected · <a href="javascript:void(0)" onclick="rdyClear()" style="color:#85B7EB;text-decoration:none;">Clear</a>' : 'None selected';
+}
+function _rdySelAllLabel(shown, searching) {
+  return searching ? 'Select all ' + shown + ' match' + (shown === 1 ? '' : 'es') : 'Select all';
+}
+
+function _rdyQtyCell(v, unit, color) {
+  return '<span style="color:' + (color || '#e8e6e0') + ';font-variant-numeric:tabular-nums;">' + _rdyQty(v, unit) + '</span>';
+}
+function _rdyBalanceHTML(it) {
+  if (it.status === 'nocheck' || it.status === 'loading') return '<span style="color:#5f5e5a;">—</span>';
+  var c = it.balance >= 0 ? '#9FE1CB' : '#F09595';
+  var s = (it.balance > 0 ? '+' : '') + _rdyQty(it.balance, it.unit);
+  var sub = it.elsewhere > 0
+    ? '<div title="Other products on the RMO sheet also need this part. Not subtracted from the balance." style="font-size:10px;color:#888780;cursor:help;white-space:nowrap;">' + _rdyQty(it.elsewhere, it.unit) + ' more on other RMO orders</div>'
+    : '';
+  return '<span style="color:' + c + ';font-weight:500;font-variant-numeric:tabular-nums;">' + s + '</span>' + sub;
+}
+function _rdyOnHandHTML(it) {
+  if (!it.part) return '<span style="color:#5f5e5a;">—</span>';
+  if (!inventoryLoaded) return '<span style="color:#5f5e5a;">…</span>';
+  var main = it.notInInv
+    ? '<span title="This Part # has no row in the inventory sheet." style="color:#888780;cursor:help;">not in inventory</span>'
+    : _rdyQtyCell(it.onHand, it.unit);
+  var g = it.group
+    ? '<div title="Other part #s in the ' + esc(it.group.group) + ' group hold stock. Not counted here, since the RMO sheet names this part." style="font-size:10px;color:#888780;cursor:help;white-space:nowrap;">+' + _rdyQty(it.group.qty, it.unit) + ' on other ' + esc(it.group.group.replace(/^.*\((.*)\)$/, '$1')) + ' parts</div>'
+    : '';
+  return main + g;
+}
+function _rdyPoHTML(it) {
+  if (!it.part) return '<span style="color:#5f5e5a;">—</span>';
+  if (!CSV_OPEN_POS) return '<span style="color:#5f5e5a;">—</span>';
+  if (!openPOsLoaded) return '<span style="color:#5f5e5a;">…</span>';
+  if (!it.po) return '<span style="color:#5f5e5a;">none</span>';
+  var lines = it.po.lines.map(function(l){
+    return '<div style="white-space:nowrap;">'
+      + '<span style="color:#e8e6e0;font-variant-numeric:tabular-nums;">' + (l.qty != null ? _rdyQty(l.qty, it.unit) : esc(l.qtyRaw || '—')) + '</span>'
+      + (l.po ? ' <span style="color:#888780;">· PO ' + esc(l.po) + '</span>' : '')
+      + (l.eta ? '<div style="font-size:10px;color:#FAC775;white-space:normal;line-height:1.35;">' + esc(l.eta) + '</div>' : '<div style="font-size:10px;color:#5f5e5a;">no ETA noted</div>')
+      + '</div>';
+  });
+  return lines.join('<div style="height:4px;"></div>');
+}
+
+var _RDY_TH = 'text-align:left;font-size:10px;color:#888780;font-weight:500;text-transform:uppercase;letter-spacing:.04em;padding:6px 8px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;';
+var _RDY_TD = 'padding:7px 8px;border-bottom:0.5px solid #2c2c2a;font-size:12px;font-family:system-ui;vertical-align:top;';
+function _rdyTableHead(needLabel) {
+  return '<thead><tr>'
+    + '<th style="' + _RDY_TH + '">Status</th>'
+    + '<th style="' + _RDY_TH + '">Part #</th>'
+    + '<th style="' + _RDY_TH + '">Material</th>'
+    + '<th style="' + _RDY_TH + 'text-align:right;">' + needLabel + '</th>'
+    + '<th style="' + _RDY_TH + 'text-align:right;">On hand</th>'
+    + '<th style="' + _RDY_TH + 'text-align:right;">Balance</th>'
+    + '<th style="' + _RDY_TH + '">Open PO</th>'
+    + '</tr></thead>';
+}
+function _rdyRowHTML(it, opts) {
+  var expandable = opts && opts.expandable && it.products.length > 1;
+  var open = expandable && rdyOpen[it.key];
+  var nameCell = '<div style="color:#e8e6e0;white-space:normal;line-height:1.35;">' + esc(it.name) + '</div>'
+    + (expandable ? '<div style="font-size:10px;color:#85B7EB;margin-top:2px;">' + (open ? '▾' : '▸') + ' ' + it.products.length + ' products</div>' : '');
+  var tip = it.status === 'nocheck' ? _rdyNoCheckWhy(it) : '';
+  var html = '<tr' + (expandable ? ' onclick="rdyToggleOpen(' + jsStr(it.key) + ')" style="cursor:pointer;"' : '') + '>'
+    + '<td style="' + _RDY_TD + '">' + _rdyPill(it.status, tip) + '</td>'
+    + '<td onclick="event.stopPropagation()" style="' + _RDY_TD + 'white-space:nowrap;">' + (it.part ? _blendCopyCell(it.part) : '<span style="color:#5f5e5a;">no part #</span>') + '</td>'
+    + '<td style="' + _RDY_TD + 'white-space:normal;min-width:180px;">' + nameCell + '</td>'
+    + '<td style="' + _RDY_TD + 'text-align:right;white-space:nowrap;">' + (it.badQty ? '<span style="color:#888780;" title="' + esc(_rdyNoCheckWhy(it)) + '">' + esc(it.raw || 'blank') + '</span>' : _rdyQtyCell(it.need, it.unit)) + '</td>'
+    + '<td style="' + _RDY_TD + 'text-align:right;">' + _rdyOnHandHTML(it) + '</td>'
+    + '<td style="' + _RDY_TD + 'text-align:right;">' + _rdyBalanceHTML(it) + '</td>'
+    + '<td style="' + _RDY_TD + '">' + _rdyPoHTML(it) + '</td>'
+    + '</tr>';
+  if (open) {
+    html += '<tr><td colspan="7" style="padding:0 8px 8px 8px;border-bottom:0.5px solid #2c2c2a;"><div style="background:#0f1012;border-left:2px solid #378ADD;border-radius:6px;padding:6px 12px;">'
+      + it.products.map(function(p){
+          return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:11px;font-family:system-ui;">'
+            + '<span style="color:#c2c0b6;white-space:normal;">' + esc(p.head) + '</span>'
+            + '<span style="color:#e8e6e0;font-variant-numeric:tabular-nums;white-space:nowrap;">' + (p.qty != null ? _rdyQty(p.qty, it.unit) : esc(p.raw || 'blank')) + '</span></div>';
+        }).join('')
+      + '</div></td></tr>';
+  }
+  return html;
+}
+
+function _rdyResultsHTML() {
+  var sel = _rdySelectedBlocks();
+  if (!sel.length) {
+    return '<div style="padding:28px;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;">Select one or more products above to see the ingredients they need.</div>';
+  }
+  var items = _rdyItems(sel);
+  var n = { ok: 0, short: 0, po: 0, partial: 0, nopo: 0, nocheck: 0, loading: 0 };
+  items.forEach(function(it){ n[it.status]++; });
+  var shortAll = n.short + n.po + n.partial + n.nopo;
+  var checkable = items.length - n.nocheck;
+
+  var verdict, vc;
+  if (!inventoryLoaded) { verdict = 'Loading inventory…'; vc = '#888780'; }
+  else if (!shortAll) { verdict = (sel.length === 1 ? 'Can run' : 'Can run all ' + sel.length) + ': every ingredient covered by stock on hand' + (n.nocheck ? ' (' + n.nocheck + ' line' + (n.nocheck === 1 ? '' : 's') + ' could not be checked)' : '') + '.'; vc = '#9FE1CB'; }
+  else {
+    var bits = [];
+    if (n.nopo) bits.push(n.nopo + ' with no open PO');
+    if (n.partial) bits.push(n.partial + ' with a PO short of the gap');
+    if (n.po) bits.push(n.po + ' covered by an open PO');
+    verdict = shortAll + ' of ' + checkable + ' ingredient' + (checkable === 1 ? '' : 's') + ' short' + (bits.length ? ': ' + bits.join(', ') : '') + '.';
+    vc = (n.nopo || n.short || n.partial) ? '#F09595' : '#FAC775';
+  }
+  var notes = [];
+  if (!CSV_OPEN_POS) notes.push('The open PO sheet is not connected yet, so short ingredients are not checked against POs.');
+  else if (!openPOsLoaded) notes.push('Loading the open PO sheet…');
+  if (!demandLoaded) notes.push('Loading the RMO demand sheet…');
+
+  var toggle = '<div style="display:flex;gap:2px;padding:3px;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;">'
+    + '<button onclick="setRdyView(\'ingredient\')" style="' + navBtnStyle(rdyView === 'ingredient') + '">By ingredient</button>'
+    + '<button onclick="setRdyView(\'product\')" style="' + navBtnStyle(rdyView === 'product') + '">By product</button>'
+    + '</div>';
+
+  var body;
+  if (rdyView === 'product') {
+    var combined = {};
+    items.forEach(function(it){ combined[it.key] = it; });
+    body = sel.map(function(bk){
+      var own = _rdyItems([bk]), ownShort = 0, sharedShort = 0;
+      own.forEach(function(it){
+        if (it.status !== 'ok' && it.status !== 'nocheck' && it.status !== 'loading') ownShort++;
+        else if (it.status === 'ok' && combined[it.key] && combined[it.key].balance < 0) { it.sharedShort = true; sharedShort++; }
+      });
+      var chip = !inventoryLoaded ? ''
+        : ownShort ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;">' + ownShort + ' short</span>'
+        : sharedShort ? '<span title="Covered on its own, but the products selected together need more of ' + sharedShort + ' ingredient' + (sharedShort === 1 ? '' : 's') + ' than is on hand." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#4a3410;color:#FAC775;cursor:help;">Ready alone · short with the others</span>'
+        : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;">Ready</span>';
+      return '<div style="margin-bottom:14px;">'
+        + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">'
+        +   '<span style="font-size:13px;color:#e8e6e0;font-weight:500;font-family:system-ui;">' + esc(bk.product) + '</span>'
+        +   (bk.units != null ? '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + bk.units.toLocaleString() + (bk.servings ? ' servings' : ' units') + '</span>' : '')
+        +   chip
+        + '</div>'
+        + '<div class="pnl-sub-scroll"><table style="border-collapse:collapse;">' + _rdyTableHead('Needed')
+        + '<tbody>' + own.map(function(it){ return _rdyRowHTML(it, null); }).join('') + '</tbody></table></div>'
+        + '</div>';
+    }).join('');
+  } else {
+    body = '<div class="pnl-sub-scroll"><table style="border-collapse:collapse;">' + _rdyTableHead(sel.length > 1 ? 'Needed (all selected)' : 'Needed')
+      + '<tbody>' + items.map(function(it){ return _rdyRowHTML(it, { expandable: true }); }).join('') + '</tbody></table></div>';
+  }
+
+  return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px;">'
+    +   '<div style="min-width:0;flex:1;">'
+    +     '<div style="font-size:10px;color:#888780;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Readiness · ' + sel.length + ' product' + (sel.length === 1 ? '' : 's') + ' · ' + items.length + ' ingredient' + (items.length === 1 ? '' : 's') + '</div>'
+    +     '<div style="font-size:13px;color:' + vc + ';font-weight:500;font-family:system-ui;line-height:1.4;">' + verdict + '</div>'
+    +     notes.map(function(t){ return '<div style="font-size:11px;color:#888780;font-family:system-ui;margin-top:3px;">' + t + '</div>'; }).join('')
+    +   '</div>'
+    +   toggle
+    + '</div>'
+    + body
+    + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">Balance is on hand minus what the selected products need. Other RMO orders that also need a part are listed under its balance, not subtracted. On hand is the exact Part # on the RMO sheet.</div>'
+    + '</div>';
+}
+
+function renderReadiness() {
+  fetchInventoryIfNeeded(); fetchDemandIfNeeded(); fetchOpenPOsIfNeeded(); refreshStockFeedsIfStale();
+  var content = document.getElementById('content');
+  if (!rmoBlocks.length) {
+    content.innerHTML = '<div style="padding:28px;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;">' + (demandLoaded ? 'The RMO demand sheet has no products on it.' : 'Loading the RMO demand sheet…') + '</div>';
+    return;
+  }
+  // Drop selections whose block left the sheet, so a stale id can't sit in the count.
+  var live = {};
+  rmoBlocks.forEach(function(bk){ live[bk.id] = 1; });
+  Object.keys(rdySel).forEach(function(id){ if (!live[id]) delete rdySel[id]; });
+  content.innerHTML = _rdyPickerHTML() + '<div id="rdy-results">' + _rdyResultsHTML() + '</div>';
+}
+// Repaint only the results and the counter: rebuilding the picker would reset its
+// scroll and the search box mid-click.
+function _rdyRefreshResults() {
+  var r = document.getElementById('rdy-results');
+  if (r) r.innerHTML = _rdyResultsHTML();
+  var c = document.getElementById('rdy-selcount');
+  if (c) c.innerHTML = _rdySelCountHTML(_rdySelectedBlocks().length);
+}
+function rdyToggle(id, on) {
+  if (on) rdySel[id] = true; else delete rdySel[id];
+  var el = document.querySelector('.rdy-item[data-rdy-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+  if (el) el.classList.toggle('on', !!on);
+  _rdyRefreshResults();
+}
+function rdyFilter(q) {
+  rdyQuery = q || '';
+  var toks = _rdyToks(), shown = 0;
+  var els = document.querySelectorAll('.rdy-item');
+  for (var i = 0; i < els.length; i++) {
+    var h = els[i].getAttribute('data-rdy-q'), vis = true;
+    for (var j = 0; j < toks.length; j++) if (h.indexOf(toks[j]) < 0) { vis = false; break; }
+    els[i].classList.toggle('off', !vis);
+    if (vis) shown++;
+  }
+  var nm = document.getElementById('rdy-nomatch'); if (nm) nm.style.display = shown ? 'none' : 'block';
+  var b = document.getElementById('rdy-selall'); if (b) b.textContent = _rdySelAllLabel(shown, toks.length > 0);
+}
+function rdySelectMatches() {
+  var els = document.querySelectorAll('.rdy-item');
+  for (var i = 0; i < els.length; i++) {
+    if (els[i].classList.contains('off')) continue;
+    rdySel[els[i].getAttribute('data-rdy-id')] = true;
+    var cb = els[i].querySelector('input'); if (cb) cb.checked = true;
+    els[i].classList.add('on');
+  }
+  _rdyRefreshResults();
+}
+function rdyClear() {
+  rdySel = {}; rdyOpen = {};
+  var els = document.querySelectorAll('.rdy-item');
+  for (var i = 0; i < els.length; i++) {
+    var cb = els[i].querySelector('input'); if (cb) cb.checked = false;
+    els[i].classList.remove('on');
+  }
+  _rdyRefreshResults();
+}
+function setRdyView(v) { rdyView = v; _rdyRefreshResults(); }
+function rdyToggleOpen(key) {
+  if (rdyOpen[key]) delete rdyOpen[key]; else rdyOpen[key] = true;
+  _rdyRefreshResults();
+}
+
 function renderOrders() {
+  if (ordersView === 'readiness') { renderReadiness(); return; }
   fetchOpenOrdersIfNeeded(false);
   // renderOrdersSummary builds the whole page and picks which sections to
   // inject based on ordersView (summary / labels / planning).
