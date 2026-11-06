@@ -5037,42 +5037,97 @@ function parseRmoBlocks(text) {
 }
 
 // ── Open POs (for RMO Readiness) ───────────────────────────────────────────
-// One row per PO line: Part #, quantity ordered, and an ETA note when there is one.
-// Columns are found by header name rather than position so a column added to the
-// sheet does not shift them. Until the URL is filled in, the Readiness view says
-// the PO sheet is not connected instead of implying no part has a PO.
-var CSV_OPEN_POS = '';
-var openPOsByPart = {};     // part # -> { qty, lines: [{ qty, qtyRaw, eta, po, vendor }] }
+// The purchasing log (every PO line since 2022, ~13k rows), not a list of open POs.
+// Read 2026-11-06:
+//   - Column A is the received checkbox: FALSE = still open. ~200 open lines carry a part #.
+//   - Dates are header rows ("October 13, 2026" alone in Date:) that forward-fill.
+//   - Purchased QTY carries its unit: kg, lbs, mt, softgels, or a bare number. lbs and
+//     mt are converted to kg; a bare number is taken in the material's own unit.
+//   - A partial delivery is only recorded in the notes ("150lbs received; ..."), so it
+//     is subtracted from what is still to come.
+//   - A line with no PO # is a request not yet ordered (the bottom of the sheet). It is
+//     shown, but never counts toward "PO covers": nothing has been ordered.
+//   - Confirmation FALSE = the vendor has not confirmed; shown, still counted.
+//   - Lines whose Part # is "Part # Not Found" are indexed by item name, which is how a
+//     part-less RMO line (customer-supplied salt, a flavor) can still find its PO.
+// Columns are found by header name, so a column added to the sheet does not shift them.
+var CSV_OPEN_POS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=148677654&single=true&output=csv';
+var openPOsByPart = {};     // part # -> { qty (kg, or softgels), reqQty, lines: [...] } — qty counts placed POs only
+var openPOsByName = {};     // lowercased item name -> same shape, for lines with no part #
 var openPOsLoaded = false;
 var _openPOsFetching = false;
 var _openPOsAt = 0;
-function _poCol(keys, res) {
+var _PO_LB_KG = 0.45359237;
+// "200lbs" -> { qty: 90.7, unit: 'kg' }; "690,000 softgels" -> { qty: 690000, unit: 'sg' };
+// "1292.76" -> { qty: 1292.76, unit: null } (the material's own unit). null when no number.
+function _poParseQty(raw) {
+  var s = String(raw || '').toLowerCase().replace(/,/g, '');
+  var m = /(\d*\.?\d+)\s*(kg|kgs|kilo\w*|lbs?|pounds?|mt|metric\s*tons?|tons?|softgels?|sg|g|k)?\b/.exec(s);
+  if (!m) return null;
+  var v = parseFloat(m[1]), u = m[2] || '';
+  if (isNaN(v)) return null;
+  if (/^(lb|lbs|pound)/.test(u)) return { qty: v * _PO_LB_KG, unit: 'kg' };
+  if (/^(mt|metric|ton)/.test(u)) return { qty: v * 1000, unit: 'kg' };
+  if (/^(softgel|sg)/.test(u)) return { qty: v, unit: 'sg' };
+  if (u === 'g') return { qty: v / 1000, unit: 'kg' };
+  if (/^(kg|kilo)/.test(u)) return { qty: v, unit: 'kg' };
+  return { qty: v, unit: null };   // bare number, or "2K" — read in the material's unit
+}
+// "100lbs Received; 100lbs Ships 12/3" -> 45.36 (kg already in). Sums every "N unit received".
+function _poReceived(note) {
+  var re = /(\d[\d,]*\.?\d*)\s*(kg|kgs|lbs?|mt|softgels?)?\s+received/ig, m, t = 0, any = false;
+  while ((m = re.exec(note || ''))) {
+    var q = _poParseQty(m[1] + (m[2] || ''));
+    if (q) { t += q.qty; any = true; }
+  }
+  return any ? t : 0;
+}
+function _poHeaderIdx(hdr, res) {
   for (var i = 0; i < res.length; i++)
-    for (var j = 0; j < keys.length; j++) if (res[i].test(keys[j])) return keys[j];
-  return null;
+    for (var j = 0; j < hdr.length; j++) if (res[i].test(hdr[j])) return j;
+  return -1;
 }
 function parseOpenPOs(text) {
-  var byPart = {};
   if (!text) return null;
-  var rows = parseCSVMultiline(text);
-  if (!rows.length) return null;
-  var keys = Object.keys(rows[0]);
-  var kPart = _poCol(keys, [/^\s*(dtf\s*)?part\s*#?\s*$/i, /part/i]);
-  var kQty  = _poCol(keys, [/qty\s*ordered|quantity\s*ordered/i, /^\s*(qty|quantity)\b/i, /qty|quantity/i]);
-  var kEta  = _poCol(keys, [/eta/i, /note/i, /expected|arriv|deliver/i]);
-  var kPo   = _poCol(keys, [/^\s*p\.?\s*o\.?\s*(#|num|number)?\s*$/i]);
-  var kVend = _poCol(keys, [/vendor|supplier/i]);
-  if (!kPart || !kQty) { console.warn('Open PO sheet: could not find Part # / Qty columns in ' + JSON.stringify(keys)); return null; }
-  rows.forEach(function(r){
-    var part = String(r[kPart] || '').trim();
-    if (!DEMAND_PART_RE.test(part)) return;
-    var qRaw = String(r[kQty] || '').trim();
-    var q = /\d/.test(qRaw) ? num(qRaw) : null;
-    var rec = byPart[part] || (byPart[part] = { qty: 0, lines: [] });
-    if (q != null) rec.qty += q;
-    rec.lines.push({ qty: q, qtyRaw: qRaw, eta: kEta ? String(r[kEta] || '').trim() : '', po: kPo ? String(r[kPo] || '').trim() : '', vendor: kVend ? String(r[kVend] || '').trim() : '' });
-  });
-  return byPart;
+  var grid = parseCSVGrid(text);
+  if (!grid.length) return null;
+  var hdr = grid[0].map(function(h){ return String(h || '').replace(/:\s*$/, '').trim(); });
+  var iPart = _poHeaderIdx(hdr, [/^part\s*#?$/i, /part/i]);
+  var iQty  = _poHeaderIdx(hdr, [/^purchased\s*qty$/i, /purchased/i]);
+  var iItem = _poHeaderIdx(hdr, [/^item$/i, /material|item/i]);
+  var iPo   = _poHeaderIdx(hdr, [/^p\.?\s*o\.?\s*#?$/i]);
+  var iDate = _poHeaderIdx(hdr, [/^date$/i]);
+  var iConf = _poHeaderIdx(hdr, [/confirm/i]);
+  var iVend = _poHeaderIdx(hdr, [/vendor|supplier/i]);
+  var iNote = _poHeaderIdx(hdr, [/note/i, /eta/i]);
+  var iOpen = hdr[0] === '' ? 0 : _poHeaderIdx(hdr, [/received|done|closed/i]);
+  if (iPart < 0 || iQty < 0 || iOpen < 0) { console.warn('Open PO sheet: expected columns not found in ' + JSON.stringify(hdr)); return null; }
+  function c(r, i) { return i >= 0 && r[i] != null ? String(r[i]).trim() : ''; }
+  var byPart = {}, byName = {}, date = '';
+  for (var r = 1; r < grid.length; r++) {
+    var row = grid[r];
+    if (!row) continue;
+    var part = c(row, iPart).replace(/\s+/g, ' '), item = c(row, iItem);
+    // A date header row: the date alone, nothing in Part # / Item.
+    if (!part && !item) { var d = c(row, iDate); if (d && /\d{4}/.test(d)) date = d; continue; }
+    if (c(row, iOpen).toUpperCase() !== 'FALSE') continue;
+    var isPart = DEMAND_PART_RE.test(part);
+    if (!isPart && !item) continue;
+    var qRaw = c(row, iQty), q = _poParseQty(qRaw), note = c(row, iNote), po = c(row, iPo);
+    var rec0 = q ? Math.min(_poReceived(note), q.qty) : 0;
+    var line = {
+      qty: q ? q.qty - rec0 : null, unit: q ? q.unit : null, qtyRaw: qRaw, received: rec0,
+      po: po, placed: /\d/.test(po) || /blanket/i.test(po),
+      confirmed: c(row, iConf).toUpperCase() === 'TRUE',
+      ordered: date, vendor: c(row, iVend), eta: note
+    };
+    var key = isPart ? part : item.toLowerCase().replace(/\s+/g, ' ');
+    var map = isPart ? byPart : byName;
+    var rec = map[key] || (map[key] = { qty: 0, reqQty: 0, lines: [] });
+    if (line.qty != null) { if (line.placed) rec.qty += line.qty; else rec.reqQty += line.qty; }
+    rec.lines.push(line);
+  }
+  return { byPart: byPart, byName: byName };
 }
 function fetchOpenPOsIfNeeded(force) {
   if (!CSV_OPEN_POS || _openPOsFetching) return;
@@ -5086,7 +5141,7 @@ function fetchOpenPOsIfNeeded(force) {
     if (!t || t.trim().startsWith('<!')) throw new Error('Invalid response');
     var parsed = parseOpenPOs(t);
     if (!parsed) return;
-    openPOsByPart = parsed; openPOsLoaded = true; _openPOsAt = Date.now();
+    openPOsByPart = parsed.byPart; openPOsByName = parsed.byName; openPOsLoaded = true; _openPOsAt = Date.now();
     if (_onReadiness()) render();
   }).catch(function(e){
     _openPOsFetching = false;
@@ -16923,15 +16978,25 @@ function _rdyStatus(it) {
   if (!inventoryLoaded) return 'loading';
   if (it.balance >= 0) return 'ok';
   if (!CSV_OPEN_POS || !openPOsLoaded) return 'short';
-  var po = openPOsByPart[it.part];
-  if (!po || !(po.qty > 0)) return 'nopo';
-  return po.qty >= -it.balance ? 'po' : 'partial';
+  if (!(it.poQty > 0)) return it.reqQty > 0 || (it.po && it.po.lines.length) ? 'req' : 'nopo';
+  return it.poQty >= -it.balance ? 'po' : 'partial';
+}
+// What is still to come on placed POs, in the item's unit. A line whose unit cannot be
+// compared (kg ordered against a softgel requirement) is shown but not counted.
+function _rdyPoTotals(it) {
+  it.poQty = 0; it.reqQty = 0;
+  if (!it.po) return;
+  it.po.lines.forEach(function(l){
+    if (l.qty == null || (l.unit && l.unit !== it.unit)) return;
+    if (l.placed) it.poQty += l.qty; else it.reqQty += l.qty;
+  });
 }
 var _RDY_PILL = {
   ok:      { t: 'Covered',            bg: '#085041', fg: '#9FE1CB', rank: 5 },
   po:      { t: 'Short · PO covers',  bg: '#4a3410', fg: '#FAC775', rank: 2 },
   partial: { t: 'Short · PO partial', bg: '#633806', fg: '#FAC775', rank: 1 },
   nopo:    { t: 'Short · no open PO', bg: '#791F1F', fg: '#F09595', rank: 0 },
+  req:     { t: 'Short · requested, no PO', bg: '#791F1F', fg: '#F09595', rank: 0 },
   short:   { t: 'Short',              bg: '#791F1F', fg: '#F09595', rank: 0 },
   nocheck: { t: "Can't check",        bg: '#2c2c2a', fg: '#888780', rank: 4 },
   loading: { t: 'Loading…',           bg: '#2c2c2a', fg: '#888780', rank: 3 }
@@ -16967,7 +17032,8 @@ function _rdyItems(blocks) {
     it.balance = (it.onHand || 0) - it.need;
     it.elsewhere = it.part ? Math.max(0, (all[it.part] || 0) - it.need) : 0;
     it.group = it.part ? _rdyGroupOther(it.part) : null;
-    it.po = it.part ? openPOsByPart[it.part] || null : null;
+    it.po = (it.part ? openPOsByPart[it.part] : openPOsByName[it.name.toLowerCase().replace(/\s+/g, ' ')]) || null;
+    _rdyPoTotals(it);
     it.status = _rdyStatus(it);
   });
   order.sort(function(a, b){
@@ -17061,18 +17127,26 @@ function _rdyOnHandHTML(it) {
   return main + g;
 }
 function _rdyPoHTML(it) {
-  if (!it.part) return '<span style="color:#5f5e5a;">—</span>';
   if (!CSV_OPEN_POS) return '<span style="color:#5f5e5a;">—</span>';
   if (!openPOsLoaded) return '<span style="color:#5f5e5a;">…</span>';
-  if (!it.po) return '<span style="color:#5f5e5a;">none</span>';
-  var lines = it.po.lines.map(function(l){
-    return '<div style="white-space:nowrap;">'
-      + '<span style="color:#e8e6e0;font-variant-numeric:tabular-nums;">' + (l.qty != null ? _rdyQty(l.qty, it.unit) : esc(l.qtyRaw || '—')) + '</span>'
-      + (l.po ? ' <span style="color:#888780;">· PO ' + esc(l.po) + '</span>' : '')
-      + (l.eta ? '<div style="font-size:10px;color:#FAC775;white-space:normal;line-height:1.35;">' + esc(l.eta) + '</div>' : '<div style="font-size:10px;color:#5f5e5a;">no ETA noted</div>')
+  if (!it.po) return '<span style="color:#5f5e5a;">' + (it.part ? 'none' : '—') + '</span>';
+  return it.po.lines.map(function(l){
+    var unitOff = l.qty != null && l.unit && l.unit !== it.unit;
+    var q = l.qty == null || unitOff ? esc(l.qtyRaw || '—') : _rdyQty(l.qty, it.unit);
+    var sub = [];
+    if (l.received > 0 && !unitOff) sub.push(_rdyQty(l.received, it.unit) + ' already in');
+    if (l.ordered) sub.push((l.placed ? 'ordered ' : 'requested ') + esc(l.ordered.replace(/,?\s*\d{4}$/, '')));
+    if (l.vendor) sub.push(esc(l.vendor));
+    return '<div style="min-width:170px;">'
+      + '<span style="color:#e8e6e0;font-variant-numeric:tabular-nums;white-space:nowrap;">' + q + (l.received > 0 && !unitOff ? ' to come' : '') + '</span>'
+      + (l.placed
+          ? ' <span style="color:#888780;white-space:nowrap;">· PO ' + esc(l.po) + '</span>'
+            + (l.confirmed ? '' : ' <span title="The Confirmation box is not ticked: the vendor has not confirmed this PO." style="font-size:10px;padding:1px 5px;border-radius:4px;background:#2c2c2a;color:#c2c0b6;cursor:help;white-space:nowrap;">unconfirmed</span>')
+          : ' <span title="On the purchasing sheet with no PO #, so it has not been ordered yet. Not counted toward covering the shortfall." style="font-size:10px;padding:1px 5px;border-radius:4px;background:#3a2323;color:#F09595;cursor:help;white-space:nowrap;">no PO # yet</span>')
+      + (sub.length ? '<div style="font-size:10px;color:#888780;line-height:1.35;">' + sub.join(' · ') + '</div>' : '')
+      + (l.eta ? '<div style="font-size:10px;color:#FAC775;white-space:normal;line-height:1.35;">' + esc(l.eta) + '</div>' : '')
       + '</div>';
-  });
-  return lines.join('<div style="height:4px;"></div>');
+  }).join('<div style="height:6px;"></div>');
 }
 
 var _RDY_TH = 'text-align:left;font-size:10px;color:#888780;font-weight:500;text-transform:uppercase;letter-spacing:.04em;padding:6px 8px;border-bottom:0.5px solid #2c2c2a;white-space:nowrap;';
@@ -17121,9 +17195,9 @@ function _rdyResultsHTML() {
     return '<div style="padding:28px;text-align:center;color:#5f5e5a;font-size:12px;font-style:italic;font-family:system-ui;background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;">Select one or more products above to see the ingredients they need.</div>';
   }
   var items = _rdyItems(sel);
-  var n = { ok: 0, short: 0, po: 0, partial: 0, nopo: 0, nocheck: 0, loading: 0 };
+  var n = { ok: 0, short: 0, po: 0, partial: 0, nopo: 0, req: 0, nocheck: 0, loading: 0 };
   items.forEach(function(it){ n[it.status]++; });
-  var shortAll = n.short + n.po + n.partial + n.nopo;
+  var shortAll = n.short + n.po + n.partial + n.nopo + n.req;
   var checkable = items.length - n.nocheck;
 
   var verdict, vc;
@@ -17132,10 +17206,11 @@ function _rdyResultsHTML() {
   else {
     var bits = [];
     if (n.nopo) bits.push(n.nopo + ' with no open PO');
+    if (n.req) bits.push(n.req + ' requested but not yet ordered');
     if (n.partial) bits.push(n.partial + ' with a PO short of the gap');
     if (n.po) bits.push(n.po + ' covered by an open PO');
     verdict = shortAll + ' of ' + checkable + ' ingredient' + (checkable === 1 ? '' : 's') + ' short' + (bits.length ? ': ' + bits.join(', ') : '') + '.';
-    vc = (n.nopo || n.short || n.partial) ? '#F09595' : '#FAC775';
+    vc = (n.nopo || n.req || n.short || n.partial) ? '#F09595' : '#FAC775';
   }
   var notes = [];
   if (!CSV_OPEN_POS) notes.push('The open PO sheet is not connected yet, so short ingredients are not checked against POs.');
@@ -17186,7 +17261,7 @@ function _rdyResultsHTML() {
     +   toggle
     + '</div>'
     + body
-    + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">Balance is on hand minus what the selected products need. Other RMO orders that also need a part are listed under its balance, not subtracted. On hand is the exact Part # on the RMO sheet.</div>'
+    + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">Balance is on hand minus what the selected products need. Other RMO orders that also need a part are listed under its balance, not subtracted. On hand is the exact Part # on the RMO sheet. Open POs are the purchasing sheet\u2019s lines not yet ticked received, less anything the notes record as already in; only lines with a PO # count toward covering a shortfall.</div>'
     + '</div>';
 }
 
