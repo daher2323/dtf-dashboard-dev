@@ -17284,6 +17284,35 @@ function _rdyRowHTML(it, opts) {
   return html;
 }
 
+// How much of a short product can run from stock on hand, this product alone. The
+// limiting ingredient is the one with the smallest share of its requirement on hand;
+// units scale by that share, rounded down (Alex, 2026-11-06: 1,442 / 1,514 kg x 40,050
+// = 38,145). Lines that cannot be checked are left out of the minimum, and say so.
+function _rdyRunnable(bk, own) {
+  var frac = 1, lim = null, nocheck = 0;
+  own.forEach(function(it){
+    if (it.status === 'nocheck' || it.status === 'loading') { nocheck++; return; }
+    if (!(it.need > 0)) return;
+    var f = Math.max(0, it.onHand || 0) / it.need;
+    if (f < frac) { frac = f; lim = it; }
+  });
+  return { frac: frac, lim: lim, nocheck: nocheck, units: bk.units != null ? Math.floor(bk.units * frac) : null };
+}
+function _rdyRunnableHTML(bk, own) {
+  var r = _rdyRunnable(bk, own);
+  if (!r.lim) return '';
+  var noun = bk.servings ? 'servings' : 'units';
+  var what = r.units != null
+    ? 'Can run <b style="color:#e8e6e0;font-weight:500;">' + r.units.toLocaleString() + '</b> of ' + bk.units.toLocaleString() + ' ' + noun
+    : 'Can run <b style="color:#e8e6e0;font-weight:500;">' + Math.floor(r.frac * 100) + '%</b> of the batch';
+  return '<div style="font-size:12px;color:#c2c0b6;font-family:system-ui;margin:-2px 0 8px 0;line-height:1.45;">'
+    + what + ' from stock on hand'
+    + (r.units != null ? ' <span style="color:#888780;">(' + Math.floor(r.frac * 100) + '%)</span>' : '')
+    + '<span style="color:#888780;"> · limited by ' + esc(r.lim.name) + ' (' + _rdyQty(Math.max(0, r.lim.onHand || 0), r.lim.unit) + ' of ' + _rdyQty(r.lim.need, r.lim.unit) + ')</span>'
+    + (r.nocheck ? '<span title="Lines with no Part # or no readable quantity are not in this figure." style="color:#5f5e5a;cursor:help;"> · ' + r.nocheck + ' line' + (r.nocheck === 1 ? '' : 's') + ' not checked</span>' : '')
+    + '</div>';
+}
+
 // A table's rows. In Short only, everything Covered folds into one clickable
 // "N ingredients covered" row after the ones needing attention (short, can't check,
 // short with the others), which unfolds in place for that table alone.
@@ -17363,6 +17392,7 @@ function _rdyResultsHTML() {
         +   (bk.units != null ? '<span style="font-size:11px;color:#888780;font-family:system-ui;">' + bk.units.toLocaleString() + (bk.servings ? ' servings' : ' units') + '</span>' : '')
         +   chip
         + '</div>'
+        + (ownShort ? _rdyRunnableHTML(bk, own) : '')
         + '<div class="pnl-sub-scroll"><table style="border-collapse:collapse;">' + _rdyTableHead('Needed')
         + '<tbody>' + _rdyTbody(own, bk.id, null) + '</tbody></table></div>'
         + '</div>';
