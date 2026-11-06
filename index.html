@@ -5060,7 +5060,12 @@ function parseRmoBlocks(text) {
 //   - Lines whose Part # is "Part # Not Found" are indexed by item name, which is how a
 //     part-less RMO line (customer-supplied salt, a flavor) can still find its PO.
 // Columns are found by header name, so a column added to the sheet does not shift them.
-var CSV_OPEN_POS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR0qIxGwCZPR0M4t9Q_XGMDSd5eFi1a46beypexJEcUMNZE5Sz5bLzZ7LqZqL7T5_REKjoqrOLyNN7f/pub?gid=148677654&single=true&output=csv';
+// Published straight from the purchasing workbook's own Open Orders tab (2026-11-06), not
+// through the IMPORTRANGE mirror in the Materials workbook: that mirror's publish copy sat
+// on "Loading..." for most of a morning. The direct tab has no formula to wait on. It is
+// the whole log (~1.4 MB) and extra columns (Inventory Notes, Ordered in LBS) that the
+// header-name lookup ignores.
+var CSV_OPEN_POS = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0RbxQFw87S9yCUIENC5Y8XIptzLrXD3PNP37FjqYR1VsCe0AqQgMV9InGYROVjHYDDWj039vuoKzY/pub?gid=1912844250&single=true&output=csv';
 var openPOsByPart = {};     // part # -> { qty (kg, or softgels), reqQty, lines: [...] } — qty counts placed POs only
 var openPOsByName = {};     // lowercased item name -> same shape, for lines with no part #
 var openPOsLoaded = false;
@@ -5166,8 +5171,9 @@ function fetchOpenPOsIfNeeded(force) {
     return r.text();
   }).then(function(t){
     _openPOsFetching = false;
-    if (!t || t.trim().startsWith('<!')) throw new Error('Invalid response');
-    var parsed = /^\s*loading/i.test(t) ? null : parseOpenPOs(t);
+    // An HTML page here is Google's "can't access this content right now" interstitial,
+    // served when requests come too fast; like "Loading...", it is waited out, not fatal.
+    var parsed = (!t || /^\s*(loading|<!)/i.test(t)) ? null : parseOpenPOs(t);
     if (!parsed) {
       if (!_openPOsStuckSince) _openPOsStuckSince = Date.now();
       if (_onReadiness()) _rdyRefreshResults();
@@ -5188,7 +5194,7 @@ function fetchOpenPOsIfNeeded(force) {
 // The line under the verdict saying where the PO column stands, or '' when it is current.
 function _openPOsStatusTxt() {
   if (!CSV_OPEN_POS) return 'The open PO sheet is not connected yet, so short ingredients are not checked against POs.';
-  var stuck = _openPOsStuckSince ? 'The purchasing sheet is still recalculating on Google’s side (retrying every ' + Math.round(OPEN_PO_RETRY_MS / 1000) + 's)' : '';
+  var stuck = _openPOsStuckSince ? 'Google has not served the purchasing sheet yet (retrying every ' + Math.round(OPEN_PO_RETRY_MS / 1000) + 's)' : '';
   if (!openPOsLoaded) return stuck ? stuck + '; open POs will appear when it finishes.' : 'Loading the open PO sheet…';
   var age = Date.now() - _openPOsDataTs;
   if (!stuck && _openPOsAt) return '';
