@@ -17113,6 +17113,10 @@ function _rdyBalanceHTML(it) {
   if (it.status === 'nocheck' || it.status === 'loading') return '<span style="color:#5f5e5a;">—</span>';
   var c = it.balance >= 0 ? '#9FE1CB' : '#F09595';
   var s = (it.balance > 0 ? '+' : '') + _rdyQty(it.balance, it.unit);
+  // Covered for this product alone, short across the selection: say by how much, since
+  // the green figure above it is the product-alone reading.
+  if (it.status === 'shared') return '<span style="color:' + c + ';font-weight:500;font-variant-numeric:tabular-nums;">' + s + ' alone</span>'
+    + '<div style="font-size:11px;color:#FAC775;font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums;">' + _rdyQty(it.combinedBal, it.unit) + ' with the ' + it.combinedOf + ' selected</div>';
   var sub = it.elsewhere > 0
     ? '<div title="Other products on the RMO sheet also need this part. Not subtracted from the balance." style="font-size:10px;color:#888780;cursor:help;white-space:nowrap;">' + _rdyQty(it.elsewhere, it.unit) + ' more on other RMO orders</div>'
     : '';
@@ -17253,14 +17257,17 @@ function _rdyResultsHTML() {
     var combined = {};
     items.forEach(function(it){ combined[it.key] = it; });
     body = sel.map(function(bk){
-      var own = _rdyItems([bk]), ownShort = 0, sharedShort = 0;
+      var own = _rdyItems([bk]), ownShort = 0, sharedShort = 0, sharedNames = [];
       own.forEach(function(it){
         if (it.status !== 'ok' && it.status !== 'nocheck' && it.status !== 'loading') ownShort++;
-        else if (it.status === 'ok' && combined[it.key] && combined[it.key].balance < 0) { it.status = 'shared'; sharedShort++; }
+        else if (it.status === 'ok' && combined[it.key] && combined[it.key].balance < 0) {
+          it.status = 'shared'; it.combinedBal = combined[it.key].balance; it.combinedOf = combined[it.key].products.length;
+          sharedShort++; sharedNames.push(it.name);
+        }
       });
       var chip = !inventoryLoaded ? ''
         : ownShort ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;">' + ownShort + ' short</span>'
-        : sharedShort ? '<span title="Covered on its own, but the products selected together need more of ' + sharedShort + ' ingredient' + (sharedShort === 1 ? '' : 's') + ' than is on hand." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#4a3410;color:#FAC775;cursor:help;">Ready alone · short with the others</span>'
+        : sharedShort ? '<span title="Covered on its own, but the products selected together need more of ' + (sharedShort === 1 ? 'it' : 'these') + ' than is on hand." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#4a3410;color:#FAC775;cursor:help;">Ready alone · short with the others: ' + esc(sharedNames.slice(0, 2).join(', ') + (sharedNames.length > 2 ? ' +' + (sharedNames.length - 2) + ' more' : '')) + '</span>'
         : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;">Ready</span>';
       return '<div style="margin-bottom:14px;">'
         + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">'
