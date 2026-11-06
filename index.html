@@ -5050,6 +5050,13 @@ function parseRmoBlocks(text) {
 //   - A line with no PO # is a request not yet ordered (the bottom of the sheet). It is
 //     shown, but never counts toward "PO covers": nothing has been ordered.
 //   - Confirmation FALSE = the vendor has not confirmed; shown, still counted.
+//   - Received but not yet in inventory: procurement moves the line up to a block at the
+//     top of the open section when it lands in receiving, and ticks column A only once it
+//     is in inventory. The moved line sits under an old date row that is itself ticked,
+//     so its "date" is wherever it landed, not when it was ordered (Dextrose 9317 read
+//     Sept 8, ordered Oct 29). Rule: an open line whose date row is ticked is in receiving
+//     (line.receiving), and carries no order date. The open section's own date rows are
+//     unticked, which is why the published filter keeps date rows whatever their tick.
 //   - Lines whose Part # is "Part # Not Found" are indexed by item name, which is how a
 //     part-less RMO line (customer-supplied salt, a flavor) can still find its PO.
 // Columns are found by header name, so a column added to the sheet does not shift them.
@@ -5105,13 +5112,13 @@ function parseOpenPOs(text) {
   var iOpen = hdr[0] === '' ? 0 : _poHeaderIdx(hdr, [/received|done|closed/i]);
   if (iPart < 0 || iQty < 0 || iOpen < 0) { console.warn('Open PO sheet: expected columns not found in ' + JSON.stringify(hdr)); return null; }
   function c(r, i) { return i >= 0 && r[i] != null ? String(r[i]).trim() : ''; }
-  var byPart = {}, byName = {}, date = '';
+  var byPart = {}, byName = {}, date = '', dateTicked = true;
   for (var r = 1; r < grid.length; r++) {
     var row = grid[r];
     if (!row) continue;
     var part = c(row, iPart).replace(/\s+/g, ' '), item = c(row, iItem);
     // A date header row: the date alone, nothing in Part # / Item.
-    if (!part && !item) { var d = c(row, iDate); if (d && /\d{4}/.test(d)) date = d; continue; }
+    if (!part && !item) { var d = c(row, iDate); if (d && /\d{4}/.test(d)) { date = d; dateTicked = c(row, iOpen).toUpperCase() === 'TRUE'; } continue; }
     if (c(row, iOpen).toUpperCase() !== 'FALSE') continue;
     var isPart = DEMAND_PART_RE.test(part);
     if (!isPart && !item) continue;
@@ -5121,7 +5128,7 @@ function parseOpenPOs(text) {
       qty: q ? q.qty - rec0 : null, unit: q ? q.unit : null, qtyRaw: qRaw, received: rec0,
       po: po, placed: /\d/.test(po) || /blanket/i.test(po),
       confirmed: c(row, iConf).toUpperCase() === 'TRUE',
-      ordered: date, vendor: c(row, iVend), eta: note
+      receiving: dateTicked, ordered: dateTicked ? '' : date, vendor: c(row, iVend), eta: note
     };
     var key = isPart ? part : item.toLowerCase().replace(/\s+/g, ' ');
     var map = isPart ? byPart : byName;
@@ -17166,7 +17173,8 @@ function _rdyPoHTML(it) {
     var q = l.qty == null || unitOff ? esc(l.qtyRaw || '—') : _rdyQty(l.qty, it.unit);
     var sub = [];
     if (l.received > 0 && !unitOff) sub.push(_rdyQty(l.received, it.unit) + ' already in');
-    if (l.ordered) sub.push((l.placed ? 'ordered ' : 'requested ') + esc(l.ordered.replace(/,?\s*\d{4}$/, '')));
+    if (l.receiving) sub.push('<span title="Moved to the receiving block at the top of the purchasing sheet: it has arrived, but the received box is not ticked yet, so it is not in On hand. Its order date is not recoverable from the sheet once moved." style="font-size:10px;padding:1px 5px;border-radius:4px;background:#085041;color:#9FE1CB;cursor:help;white-space:nowrap;">in receiving</span>');
+    else if (l.ordered) sub.push((l.placed ? 'ordered ' : 'requested ') + esc(l.ordered.replace(/,?\s*\d{4}$/, '')));
     if (l.vendor) sub.push(esc(l.vendor));
     return '<div style="min-width:170px;">'
       + '<span style="color:#e8e6e0;font-variant-numeric:tabular-nums;white-space:nowrap;">' + q + (l.received > 0 && !unitOff ? ' to come' : '') + '</span>'
