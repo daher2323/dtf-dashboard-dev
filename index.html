@@ -17055,13 +17055,17 @@ function _rdyItems(blocks) {
   return order;
 }
 // Picker chip: can this product run on its own, from stock on hand?
-function _rdyBlockChip(bk) {
-  if (!inventoryLoaded) return '';
+function _rdyBlockCounts(bk) {
   var short = 0, nocheck = 0;
   bk.lines.forEach(function(ln){
     if (!ln.part || ln.qty == null) { nocheck++; return; }
     if ((_rdyStock(ln.part) || 0) < ln.qty) short++;
   });
+  return { short: short, nocheck: nocheck };
+}
+function _rdyBlockChip(bk) {
+  if (!inventoryLoaded) return '';
+  var bc = _rdyBlockCounts(bk), short = bc.short, nocheck = bc.nocheck;
   if (short) return '<span class="rdy-chip s">' + short + ' short</span>';
   return '<span title="' + (nocheck ? esc(nocheck + ' line' + (nocheck === 1 ? '' : 's') + ' could not be checked (no Part # or no readable quantity).') : 'Every ingredient is covered by stock on hand, taking this product on its own.') + '" class="rdy-chip r">Ready' + (nocheck ? '*' : '') + '</span>';
 }
@@ -17081,13 +17085,7 @@ function _rdyPickerHTML() {
   var toks = _rdyToks(), shown = 0;
   var rows = sorted.map(function(bk){
     var vis = _rdyMatches(bk, toks); if (vis) shown++;
-    var on = !!rdySel[bk.id];
-    return '<label class="rdy-item' + (vis ? '' : ' off') + (on ? ' on' : '') + '" data-rdy-q="' + esc(bk.head.toLowerCase()) + '" data-rdy-id="' + esc(bk.id) + '">'
-      + '<input type="checkbox"' + (on ? ' checked' : '') + ' onchange="rdyToggle(' + jsStr(bk.id) + ',this.checked)">'
-      + '<span class="rdy-n">' + esc(bk.product) + '</span>'
-      + '<span class="rdy-u">' + (bk.units != null ? bk.units.toLocaleString() + (bk.servings ? ' servings' : ' units') : '') + '</span>'
-      + '<span>' + _rdyBlockChip(bk) + '</span>'
-      + '</label>';
+    return _rdyPickRowHTML(bk, vis);
   }).join('');
   _rdyBindOutside();
   var open = rdyDropOpen && toks.length > 0;
@@ -17108,6 +17106,7 @@ function _rdyPickerHTML() {
     +     '</div>'
     +   '</div>'
     + '</div>'
+    + '<div id="rdy-browsewrap" style="margin-top:8px;">' + _rdyBrowseHTML() + '</div>'
     + '<div style="font-size:10px;color:#5f5e5a;font-family:system-ui;margin-top:6px;line-height:1.5;">Products and quantities are read from the RMO demand sheet, the same one behind Committed in Procurement. The chip is each product taken on its own against stock on hand.</div>'
     + '<div id="rdy-selected">' + _rdySelectedHTML() + '</div>'
     + '</div>';
@@ -17134,6 +17133,41 @@ function _rdySelectedHTML() {
           + '</div>';
       }).join('')
     + '</div>';
+}
+function _rdyPickRowHTML(bk, vis) {
+  var on = !!rdySel[bk.id];
+  return '<label class="rdy-item' + (vis ? '' : ' off') + (on ? ' on' : '') + '" data-rdy-q="' + esc(bk.head.toLowerCase()) + '" data-rdy-id="' + esc(bk.id) + '">'
+    + '<input type="checkbox"' + (on ? ' checked' : '') + ' onchange="rdyToggle(' + jsStr(bk.id) + ',this.checked)">'
+    + '<span class="rdy-n">' + esc(bk.product) + '</span>'
+    + '<span class="rdy-u">' + (bk.units != null ? bk.units.toLocaleString() + (bk.servings ? ' servings' : ' units') : '') + '</span>'
+    + '<span>' + _rdyBlockChip(bk) + '</span>'
+    + '</label>';
+}
+// The whole RMO list, folded into one bar under the search box: "373 products ·
+// 275 ready · 98 short". Search is the usual route; this is for when someone wants to
+// look down the list. Built only while open (~370 rows), and the search's filter and
+// Select all never touch it (they are scoped to #rdy-list).
+var rdyBrowseOpen = false;
+function _rdyBrowseHTML() {
+  var ready = 0, short = 0;
+  if (inventoryLoaded) rmoBlocks.forEach(function(bk){ if (_rdyBlockCounts(bk).short) short++; else ready++; });
+  var bar = '<div onclick="rdyToggleBrowse()" style="display:flex;align-items:center;gap:10px;padding:7px 10px;border:0.5px solid #2c2c2a;border-radius:6px;' + (rdyBrowseOpen ? 'border-bottom-left-radius:0;border-bottom-right-radius:0;' : '') + 'background:#1e2124;cursor:pointer;font-size:12px;font-family:system-ui;user-select:none;">'
+    + '<span style="color:#888780;font-size:10px;width:10px;">' + (rdyBrowseOpen ? '▾' : '▸') + '</span>'
+    + '<span style="color:#e8e6e0;">' + rmoBlocks.length + ' products</span>'
+    + (inventoryLoaded
+        ? '<span style="color:#5f5e5a;">·</span><span style="color:#9FE1CB;">' + ready + ' ready</span><span style="color:#5f5e5a;">·</span><span style="color:#F09595;">' + short + ' short</span>'
+        : '<span style="color:#5f5e5a;">· loading inventory…</span>')
+    + '<span style="margin-left:auto;color:#5f5e5a;font-size:11px;">' + (rdyBrowseOpen ? 'hide list' : 'show list') + '</span>'
+    + '</div>';
+  if (!rdyBrowseOpen) return bar;
+  var sorted = rmoBlocks.slice().sort(function(a, b){ return a.product.localeCompare(b.product); });
+  return bar + '<div id="rdy-browse" data-keep-scroll style="max-height:320px;overflow-y:auto;border:0.5px solid #2c2c2a;border-top:none;border-radius:0 0 6px 6px;">'
+    + sorted.map(function(bk){ return _rdyPickRowHTML(bk, true); }).join('')
+    + '</div>';
+}
+function rdyToggleBrowse() {
+  rdyBrowseOpen = !rdyBrowseOpen;
+  var w = document.getElementById('rdy-browsewrap'); if (w) w.innerHTML = _rdyBrowseHTML();
 }
 function _rdyMatchCountTxt(n) { return n + ' match' + (n === 1 ? '' : 'es') + ' · tick to add'; }
 var rdyDropOpen = false, _rdyOutsideBound = false;
@@ -17373,16 +17407,17 @@ function _rdyRefreshResults() {
   var sd = document.getElementById('rdy-selected');
   if (sd) sd.innerHTML = _rdySelectedHTML();
 }
-function rdyToggle(id, on) {
+function rdyToggle(id, on, noRefresh) {
   if (on) rdySel[id] = true; else delete rdySel[id];
-  var el = document.querySelector('.rdy-item[data-rdy-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
-  if (el) { el.classList.toggle('on', !!on); var cb = el.querySelector('input'); if (cb) cb.checked = !!on; }
-  _rdyRefreshResults();
+  // The same product can be on screen twice: in the search dropdown and in the full list.
+  var els = document.querySelectorAll('.rdy-item[data-rdy-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+  for (var i = 0; i < els.length; i++) { els[i].classList.toggle('on', !!on); var cb = els[i].querySelector('input'); if (cb) cb.checked = !!on; }
+  if (!noRefresh) _rdyRefreshResults();
 }
 function rdyFilter(q) {
   rdyQuery = q || '';
   var toks = _rdyToks(), shown = 0;
-  var els = document.querySelectorAll('.rdy-item');
+  var els = document.querySelectorAll('#rdy-list .rdy-item');
   for (var i = 0; i < els.length; i++) {
     var h = els[i].getAttribute('data-rdy-q'), vis = true;
     for (var j = 0; j < toks.length; j++) if (h.indexOf(toks[j]) < 0) { vis = false; break; }
@@ -17396,12 +17431,10 @@ function rdyFilter(q) {
   var d = document.getElementById('rdy-drop'); if (d) d.style.display = toks.length ? 'block' : 'none';
 }
 function rdySelectMatches() {
-  var els = document.querySelectorAll('.rdy-item');
+  var els = document.querySelectorAll('#rdy-list .rdy-item');
   for (var i = 0; i < els.length; i++) {
     if (els[i].classList.contains('off')) continue;
-    rdySel[els[i].getAttribute('data-rdy-id')] = true;
-    var cb = els[i].querySelector('input'); if (cb) cb.checked = true;
-    els[i].classList.add('on');
+    rdyToggle(els[i].getAttribute('data-rdy-id'), true, true);
   }
   // Done with this search: they are in the Products selected table now.
   var inp = document.getElementById('rdy-search'); if (inp) inp.value = '';
