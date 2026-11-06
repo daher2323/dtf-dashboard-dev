@@ -5138,24 +5138,63 @@ function parseOpenPOs(text) {
   }
   return { byPart: byPart, byName: byName };
 }
+// The published PO tab is an IMPORTRANGE, and Google's publish copy can sit on a bare
+// "Loading..." for minutes while it recalculates (measured 2026-11-06: every fetch for
+// 10+ minutes after a formula edit, then again later the same morning). Two defences:
+//   - the last good parse is kept in localStorage (it is ~200 open lines, and POs move
+//     slowly), so the page shows it at once, stamped with its age, instead of waiting;
+//   - a "Loading..." answer is retried every OPEN_PO_RETRY_MS while someone is on the
+//     view, rather than waiting for the next 5-minute stock tick.
+var OPEN_PO_CACHE_KEY = 'dtf_open_pos_v1';
+var OPEN_PO_RETRY_MS = 15000;
+var _openPOsStuckSince = 0;   // first "Loading..." answer since the last good read, 0 when none
+var _openPOsRetryT = null;
+function _loadOpenPOsCache() {
+  try {
+    var c = JSON.parse(localStorage.getItem(OPEN_PO_CACHE_KEY) || 'null');
+    if (c && c.byPart && c.byName && c.ts) { openPOsByPart = c.byPart; openPOsByName = c.byName; openPOsLoaded = true; _openPOsAt = 0; _openPOsDataTs = c.ts; }
+  } catch (e) {}
+}
+var _openPOsDataTs = 0;       // when the PO data on screen was read from the sheet
 function fetchOpenPOsIfNeeded(force) {
   if (!CSV_OPEN_POS || _openPOsFetching) return;
-  if (openPOsLoaded && !force && Date.now() - _openPOsAt < STOCK_CACHE_TTL) return;
+  if (openPOsLoaded && !force && _openPOsAt && Date.now() - _openPOsAt < STOCK_CACHE_TTL) return;
   _openPOsFetching = true;
-  fetchWithTimeout(force ? bustUrl(CSV_OPEN_POS, true) : CSV_OPEN_POS, NO_CACHE).then(function(r){
+  // Always cache-busted: a cached copy of "Loading..." is the thing being waited out.
+  fetchWithTimeout(bustUrl(CSV_OPEN_POS, true), NO_CACHE).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.text();
   }).then(function(t){
     _openPOsFetching = false;
     if (!t || t.trim().startsWith('<!')) throw new Error('Invalid response');
-    var parsed = parseOpenPOs(t);
-    if (!parsed) return;
-    openPOsByPart = parsed.byPart; openPOsByName = parsed.byName; openPOsLoaded = true; _openPOsAt = Date.now();
+    var parsed = /^\s*loading/i.test(t) ? null : parseOpenPOs(t);
+    if (!parsed) {
+      if (!_openPOsStuckSince) _openPOsStuckSince = Date.now();
+      if (_onReadiness()) _rdyRefreshResults();
+      clearTimeout(_openPOsRetryT);
+      _openPOsRetryT = setTimeout(function(){ if (_onReadiness()) fetchOpenPOsIfNeeded(true); }, OPEN_PO_RETRY_MS);
+      return;
+    }
+    _openPOsStuckSince = 0;
+    openPOsByPart = parsed.byPart; openPOsByName = parsed.byName; openPOsLoaded = true;
+    _openPOsAt = _openPOsDataTs = Date.now();
+    try { localStorage.setItem(OPEN_PO_CACHE_KEY, JSON.stringify({ byPart: parsed.byPart, byName: parsed.byName, ts: _openPOsDataTs })); } catch (e) {}
     if (_onReadiness()) render();
   }).catch(function(e){
     _openPOsFetching = false;
     console.warn('Open PO refresh failed: ' + (e && e.message ? e.message : e));
   });
+}
+// The line under the verdict saying where the PO column stands, or '' when it is current.
+function _openPOsStatusTxt() {
+  if (!CSV_OPEN_POS) return 'The open PO sheet is not connected yet, so short ingredients are not checked against POs.';
+  var stuck = _openPOsStuckSince ? 'The purchasing sheet is still recalculating on Google’s side (retrying every ' + Math.round(OPEN_PO_RETRY_MS / 1000) + 's)' : '';
+  if (!openPOsLoaded) return stuck ? stuck + '; open POs will appear when it finishes.' : 'Loading the open PO sheet…';
+  var age = Date.now() - _openPOsDataTs;
+  if (!stuck && _openPOsAt) return '';
+  var when = new Date(_openPOsDataTs);
+  var asOf = 'Open POs as of ' + (age > 20 * 3600000 ? when.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' : '') + when.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return asOf + (stuck ? '. ' + stuck + '.' : ', refreshing…');
 }
 function _onReadiness() { return mainSection === 'orders' && ordersView === 'readiness'; }
 
@@ -17385,8 +17424,7 @@ function _rdyResultsHTML() {
     vc = (n.nopo || n.req || n.short || n.partial) ? '#F09595' : '#FAC775';
   }
   var notes = [];
-  if (!CSV_OPEN_POS) notes.push('The open PO sheet is not connected yet, so short ingredients are not checked against POs.');
-  else if (!openPOsLoaded) notes.push('Loading the open PO sheet…');
+  var poNote = _openPOsStatusTxt(); if (poNote) notes.push(poNote);
   if (!demandLoaded) notes.push('Loading the RMO demand sheet…');
 
   var toggle = '<div style="display:flex;gap:2px;padding:3px;background:#1e2124;border:0.5px solid #2c2c2a;border-radius:8px;">'
@@ -21569,6 +21607,7 @@ _loadOpenOrdersCache();
 _loadLogisticsCache();
 _loadInboundCache();
 _loadStockCaches();
+_loadOpenPOsCache();
 
 if (sessionStorage.getItem('dtf_auth') === '1') {
   userRole = sessionStorage.getItem('dtf_role') || 'viewer';
