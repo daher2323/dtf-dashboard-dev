@@ -13391,6 +13391,17 @@ function _drawProcChart(sid) {
   _procMonthDrill(sid);
 }
 
+// The days a product ran in the drilled month, as "Oct 3, 4, 17": the month is in the
+// header, so each date after the first drops it. Consecutive days are not collapsed into
+// a range, since a gap day inside "3-5" would read as a run that never happened.
+function _procRunDatesTxt(days) {
+  if (!days || !days.length) return '<span style="color:#5f5e5a;">\u2014</span>';
+  return days.map(function(t, i){
+    var d = new Date(t);
+    return i === 0 ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : String(d.getDate());
+  }).join(', ');
+}
+
 // sid -> month key ('2026-08') whose product list is open under that SKU's chart.
 var _procDrill = {};
 // What used this SKU in the clicked month: one row per product (spelling variants merged
@@ -13414,14 +13425,16 @@ function _procMonthDrill(sid) {
     if (ctx.getSku(r) !== cd.sku) continue;
     var u = ctx.getUnits(r), prod = (r['Product'] || '').trim();
     var pk = prod ? prodKey(prod) : '\u0000none';
-    var p = byP[pk] || (byP[pk] = { names: {}, units: 0, lots: {} });
+    var p = byP[pk] || (byP[pk] = { names: {}, units: 0, lots: {}, days: {} });
     if (prod) p.names[prod] = (p.names[prod] || 0) + 1;
     p.units += u; p.lots[lot] = 1; lotsAll[lot] = 1; total += u;
+    p.days[new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime()] = 1;
   }
   var list = Object.keys(byP).map(function(k){
     var p = byP[k], best = '', n = -1;
     Object.keys(p.names).forEach(function(nm){ if (p.names[nm] > n) { n = p.names[nm]; best = nm; } });
-    return { name: best, units: p.units, lots: Object.keys(p.lots) };
+    return { name: best, units: p.units, lots: Object.keys(p.lots),
+      days: Object.keys(p.days).map(Number).sort(function(a, b){ return a - b; }) };
   }).sort(function(a, b){ return b.units - a.units; });
   var monthTxt = from.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   var head = '<div style="display:flex;align-items:center;gap:10px;margin:10px 0 6px;font-family:system-ui;">'
@@ -13437,6 +13450,7 @@ function _procMonthDrill(sid) {
     var pct = total > 0 ? p.units / total * 100 : 0;
     return '<tr>'
       + '<td style="' + td + 'color:#e8e6e0;white-space:normal;">' + (p.name ? esc(p.name) : '<span style="color:#5f5e5a;">No product name on the row</span>') + '</td>'
+      + '<td style="' + td + 'color:#c9c7c1;white-space:normal;">' + _procRunDatesTxt(p.days) + '</td>'
       + '<td title="' + esc(p.lots.join(', ')) + '" style="' + td + 'text-align:right;color:#888780;cursor:help;">' + p.lots.length + '</td>'
       + '<td style="' + td + 'text-align:right;color:#e8e6e0;">' + Math.round(p.units).toLocaleString() + '</td>'
       + '<td style="' + td + 'text-align:right;color:#888780;">' + (pct < 0.5 && pct > 0 ? '&lt;1' : Math.round(pct)) + '%</td>'
@@ -13445,7 +13459,7 @@ function _procMonthDrill(sid) {
   }).join('');
   el.innerHTML = head
     + '<div class="pnl-sub-scroll" style="overflow-x:auto;max-height:320px;overflow-y:auto;" data-keep-scroll id="pdrill-scroll-' + sid + '"><table class="pnl-sub-table" style="width:100%;border-collapse:collapse;">'
-    + '<thead><tr><th style="' + th + 'text-align:left;">Product</th><th style="' + th + 'text-align:right;">Lots</th>'
+    + '<thead><tr><th style="' + th + 'text-align:left;">Product</th><th style="' + th + 'text-align:left;">Run dates</th><th style="' + th + 'text-align:right;">Lots</th>'
       + '<th style="' + th + 'text-align:right;">' + esc(noun.charAt(0).toUpperCase() + noun.slice(1)) + '</th>'
       + '<th style="' + th + 'text-align:right;">Share</th><th class="pnl-bar-only" style="' + th + 'padding-right:14px;"></th></tr></thead>'
     + '<tbody>' + rows + '</tbody></table></div>';
