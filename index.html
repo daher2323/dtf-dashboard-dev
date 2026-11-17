@@ -1426,7 +1426,7 @@ var rdySel = {};           // rmo block id -> true (ids are header + occurrence,
 var rdyView = 'product';   // 'product' (default, Alex 2026-11-06) | 'ingredient' (combined across the selection)
 var rdyShortOnly = true;   // default: covered ingredients fold into one "N ingredients covered" row per table
 var rdyCovOpen = {};       // table key (block id, or '__all' for By ingredient) -> true: its covered rows unfolded
-var rdyOpen = {};          // ingredient key -> true: expanded per-product breakdown in the combined table
+var rdyOpen = {};          // table key + '|' + ingredient key -> true: the row's "every RMO product needing this part" panel is open
 var openOrdersPowder = null;  // null = not yet fetched, [] = fetched but empty
 var openOrdersCapsule = null;
 var openOrdersLastFetch = 0;
@@ -17049,16 +17049,27 @@ function _rdyGroupOther(part) {
   });
   return any ? { group: g, qty: t } : null;
 }
-var _rdyAllNeedFor = null, _rdyAllNeed = {};
+var _rdyAllNeedFor = null, _rdyAllNeed = {}, _rdyUsers = {};
 function _rdyAllNeedByPart() {
   if (_rdyAllNeedFor === rmoBlocks) return _rdyAllNeed;
-  var m = {};
+  var m = {}, u = {};
   rmoBlocks.forEach(function(bk){
-    bk.lines.forEach(function(ln){ if (ln.part && ln.qty != null) m[ln.part] = (m[ln.part] || 0) + ln.qty; });
+    var mine = {};
+    bk.lines.forEach(function(ln){
+      if (!ln.part) return;
+      if (ln.qty != null) m[ln.part] = (m[ln.part] || 0) + ln.qty;
+      // One entry per product: a block naming the part on two lines needs the sum.
+      var e = mine[ln.part];
+      if (!e) { e = mine[ln.part] = { bk: bk, qty: null, raw: '' }; (u[ln.part] = u[ln.part] || []).push(e); }
+      if (ln.qty == null) e.raw = ln.raw || 'blank';
+      else e.qty = (e.qty || 0) + ln.qty;
+    });
   });
-  _rdyAllNeedFor = rmoBlocks; _rdyAllNeed = m;
+  _rdyAllNeedFor = rmoBlocks; _rdyAllNeed = m; _rdyUsers = u;
   return m;
 }
+// Every RMO product needing a part: [{ bk, qty, raw }]. Built in the same pass as the totals.
+function _rdyUsersOf(part) { _rdyAllNeedByPart(); return _rdyUsers[part] || []; }
 function _rdyStatus(it) {
   if (!it.part || it.badQty) return 'nocheck';
   if (!inventoryLoaded) return 'loading';
@@ -17282,7 +17293,7 @@ function _rdyBalanceHTML(it) {
   if (it.status === 'shared') return '<span style="color:' + c + ';font-weight:500;font-variant-numeric:tabular-nums;">' + s + ' alone</span>'
     + '<div style="font-size:11px;color:#FAC775;font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums;">' + _rdyQty(it.combinedBal, it.unit) + ' with the ' + it.combinedOf + ' selected</div>';
   var sub = it.elsewhere > 0
-    ? '<div title="Other products on the RMO sheet also need this part. Not subtracted from the balance." style="font-size:10px;color:#888780;cursor:help;white-space:nowrap;">' + _rdyQty(it.elsewhere, it.unit) + ' more on other RMO orders</div>'
+    ? '<div title="Other products on the RMO sheet also need this part. Not subtracted from the balance. Click the row to see which." style="font-size:10px;color:#888780;cursor:help;white-space:nowrap;">' + _rdyQty(it.elsewhere, it.unit) + ' more on other RMO orders ▸</div>'
     : '';
   return '<span style="color:' + c + ';font-weight:500;font-variant-numeric:tabular-nums;">' + s + '</span>' + sub;
 }
@@ -17364,13 +17375,25 @@ function _rdyTableHead(needLabel) {
     + '<th style="' + _RDY_TH + '">Open PO</th>'
     + '</tr></thead>';
 }
+// The "who else needs this" link under a material's name. Counts products on the RMO
+// sheet that are not selected; the panel itself lists the selected ones too.
+function _rdyOthersHint(it, open) {
+  var users = _rdyUsersOf(it.part), others = 0;
+  users.forEach(function(e){ if (!rdySel[e.bk.id]) others++; });
+  var t = others ? others + ' other RMO product' + (others === 1 ? '' : 's') + ' need' + (others === 1 ? 's' : '') + ' it'
+    : 'no other RMO product needs it';
+  return '<div style="font-size:10px;color:' + (others ? '#85B7EB' : '#5f5e5a') + ';margin-top:2px;">' + (open ? '▾' : '▸') + ' ' + t + '</div>';
+}
 function _rdyRowHTML(it, opts) {
-  var expandable = opts && opts.expandable && it.products.length > 1;
-  var open = expandable && rdyOpen[it.key];
+  // A row with a Part # opens the list of every RMO product needing that part. Keyed per
+  // table, since one part appears in several By-product tables.
+  var expandable = !!it.part;
+  var okey = ((opts && opts.table) || '') + '|' + it.key;
+  var open = expandable && rdyOpen[okey];
   var nameCell = '<div style="color:#e8e6e0;white-space:normal;line-height:1.35;">' + esc(it.name) + '</div>'
-    + (expandable ? '<div style="font-size:10px;color:#85B7EB;margin-top:2px;">' + (open ? '▾' : '▸') + ' ' + it.products.length + ' products</div>' : '');
+    + (expandable ? _rdyOthersHint(it, open) : '');
   var tip = it.status === 'nocheck' ? _rdyNoCheckWhy(it) : '';
-  var html = '<tr' + (expandable ? ' onclick="rdyToggleOpen(' + jsStr(it.key) + ')" style="cursor:pointer;"' : '') + '>'
+  var html = '<tr' + (expandable ? ' onclick="rdyToggleOpen(' + jsStr(okey) + ')" title="See every RMO product that needs this part" style="cursor:pointer;"' : '') + '>'
     + '<td style="' + _RDY_TD + '">' + _rdyPill(it.status, tip) + '</td>'
     + '<td onclick="event.stopPropagation()" style="' + _RDY_TD + 'white-space:nowrap;">' + (it.part ? _blendCopyCell(it.part) : '<span style="color:#5f5e5a;">no part #</span>') + '</td>'
     + '<td style="' + _RDY_TD + 'white-space:normal;min-width:180px;">' + nameCell + '</td>'
@@ -17379,16 +17402,62 @@ function _rdyRowHTML(it, opts) {
     + '<td style="' + _RDY_TD + 'text-align:right;">' + _rdyBalanceHTML(it) + '</td>'
     + '<td style="' + _RDY_TD + '">' + _rdyPoHTML(it) + '</td>'
     + '</tr>';
-  if (open) {
-    html += '<tr><td colspan="7" style="padding:0 8px 8px 8px;border-bottom:0.5px solid #2c2c2a;"><div style="background:#0f1012;border-left:2px solid #378ADD;border-radius:6px;padding:6px 12px;">'
-      + it.products.map(function(p){
-          return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:11px;font-family:system-ui;">'
-            + '<span style="color:#c2c0b6;white-space:normal;">' + esc(p.head) + '</span>'
-            + '<span style="color:#e8e6e0;font-variant-numeric:tabular-nums;white-space:nowrap;">' + (p.qty != null ? _rdyQty(p.qty, it.unit) : esc(p.raw || 'blank')) + '</span></div>';
-        }).join('')
-      + '</div></td></tr>';
-  }
+  if (open) html += '<tr><td colspan="7" style="padding:0 8px 8px 8px;border-bottom:0.5px solid #2c2c2a;">' + _rdyUsersHTML(it) + '</td></tr>';
   return html;
+}
+
+// Every product on the RMO sheet needing this part: the selected ones first, then the
+// rest by quantity. For each one not selected, the balance if it ran as well as the
+// selection, so a thin margin shows at a glance which other order would take it negative.
+// Ticking a row adds that product to the selection. Balance is on hand (exact Part #)
+// against the selection's need from the whole sheet, the same reading as the row above.
+function _rdyUsersHTML(it) {
+  var users = _rdyUsersOf(it.part).slice();
+  var onHand = it.onHand || 0, inv = inventoryLoaded && it.onHand != null;
+  var selNeed = 0, allNeed = 0, unread = 0;
+  users.forEach(function(e){
+    if (e.qty == null) { unread++; return; }
+    allNeed += e.qty;
+    if (rdySel[e.bk.id]) selNeed += e.qty;
+  });
+  users.sort(function(a, b){
+    var sa = rdySel[a.bk.id] ? 0 : 1, sb = rdySel[b.bk.id] ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return (b.qty || 0) - (a.qty || 0);
+  });
+  var balTxt = function(v){
+    return '<span style="color:' + (v >= 0 ? '#9FE1CB' : '#F09595') + ';font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;">' + (v > 0 ? '+' : '') + _rdyQty(v, it.unit) + '</span>';
+  };
+  var others = users.filter(function(e){ return !rdySel[e.bk.id]; }).length;
+  var head = '<div style="font-size:11px;color:#888780;font-family:system-ui;line-height:1.5;margin-bottom:4px;">'
+    + '<span style="color:#c2c0b6;">' + users.length + ' RMO product' + (users.length === 1 ? '' : 's') + ' need ' + esc(it.part) + '</span>'
+    + (inv ? ' · on hand ' + _rdyQty(onHand, it.unit)
+        + (others ? ' · if all ' + users.length + ' ran: ' + balTxt(onHand - allNeed) : '') : '')
+    + (unread ? ' · ' + unread + ' with an unreadable quantity, not counted' : '')
+    + '</div>';
+  var TD = 'padding:4px 8px;border-top:0.5px solid #2c2c2a;font-size:11px;font-family:system-ui;vertical-align:middle;';
+  var rows = users.map(function(e){
+    var on = !!rdySel[e.bk.id];
+    var after = !inv ? '<span style="color:#5f5e5a;">—</span>'
+      : on ? '<span style="color:#5f5e5a;">selected</span>'
+      : e.qty == null ? '<span style="color:#5f5e5a;">—</span>'
+      : balTxt(onHand - selNeed - e.qty);
+    return '<tr style="' + (on ? 'background:#0C2240;' : '') + '">'
+      + '<td style="' + TD + 'width:18px;"><input type="checkbox"' + (on ? ' checked' : '') + ' onclick="event.stopPropagation()" onchange="rdyToggle(' + jsStr(e.bk.id) + ', this.checked)" title="' + (on ? 'Remove from' : 'Add to') + ' the selection" style="margin:0;accent-color:#378ADD;cursor:pointer;"></td>'
+      + '<td style="' + TD + 'color:' + (on ? '#e8e6e0' : '#c2c0b6') + ';white-space:normal;line-height:1.35;">' + esc(e.bk.product) + '</td>'
+      + '<td style="' + TD + 'text-align:right;color:#888780;white-space:nowrap;font-variant-numeric:tabular-nums;">' + (e.bk.units != null ? e.bk.units.toLocaleString() + (e.bk.servings ? ' servings' : ' units') : '') + '</td>'
+      + '<td style="' + TD + 'text-align:right;color:#e8e6e0;white-space:nowrap;font-variant-numeric:tabular-nums;">' + (e.qty != null ? _rdyQty(e.qty, it.unit) : esc(e.raw)) + '</td>'
+      + '<td style="' + TD + 'text-align:right;">' + after + '</td>'
+      + '</tr>';
+  }).join('');
+  var TH = 'text-align:right;font-size:10px;color:#5f5e5a;font-weight:500;text-transform:uppercase;letter-spacing:.04em;padding:4px 8px;white-space:nowrap;';
+  return '<div onclick="event.stopPropagation()" style="background:#0f1012;border-left:2px solid #378ADD;border-radius:6px;padding:8px 12px;cursor:default;">'
+    + head
+    + '<table style="border-collapse:collapse;"><thead><tr>'
+    +   '<th style="' + TH + '"></th><th style="' + TH + 'text-align:left;">Product</th><th style="' + TH + '">Batch</th><th style="' + TH + '">Needs</th>'
+    +   '<th title="On hand minus what the selection needs, minus this product too." style="' + TH + 'cursor:help;">Balance with it too</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>'
+    + '</div>';
 }
 
 // How much of a short product can run from stock on hand, this product alone. The
@@ -17500,12 +17569,12 @@ function _rdyResultsHTML() {
         + '</div>'
         + (ownShort ? _rdyRunnableHTML(bk, own) : '')
         + '<div class="pnl-sub-scroll"><table style="border-collapse:collapse;">' + _rdyTableHead('Needed')
-        + '<tbody>' + _rdyTbody(own, bk.id, null) + '</tbody></table></div>'
+        + '<tbody>' + _rdyTbody(own, bk.id, { table: bk.id }) + '</tbody></table></div>'
         + '</div>';
     }).join('');
   } else {
     body = '<div class="pnl-sub-scroll"><table style="border-collapse:collapse;">' + _rdyTableHead(sel.length > 1 ? 'Needed (all selected)' : 'Needed')
-      + '<tbody>' + _rdyTbody(items, '__all', { expandable: true }) + '</tbody></table></div>';
+      + '<tbody>' + _rdyTbody(items, '__all', { table: '__all' }) + '</tbody></table></div>';
   }
 
   return '<div style="background:#141618;border:0.5px solid #2c2c2a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">'
