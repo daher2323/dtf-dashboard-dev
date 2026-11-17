@@ -812,6 +812,7 @@
 .rdy-chip { font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
 .rdy-chip.s { background: #3a2323; color: #F09595; }
 .rdy-chip.r { background: #085041; color: #9FE1CB; }
+.rdy-chip.u { background: #2c2c2a; color: #c2c0b6; cursor: help; }
 </style>
 <!-- Google Analytics 4 (GA4) — measurement ID G-MWCKT9L4N0.
      Production-only: the gtag('config') call is gated on the URL not
@@ -17151,11 +17152,17 @@ function _rdyBlockCounts(bk) {
   });
   return { short: short, nocheck: nocheck };
 }
+function _rdyUncheckedTip(n) {
+  return n + ' ingredient line' + (n === 1 ? ' has' : 's have') + ' no Part # or no readable quantity, so ' + (n === 1 ? 'it' : 'they') + ' cannot be checked against stock. Not marked Ready until the RMO sheet carries the Part #. Everything else is covered.';
+}
 function _rdyBlockChip(bk) {
   if (!inventoryLoaded) return '';
   var bc = _rdyBlockCounts(bk), short = bc.short, nocheck = bc.nocheck;
   if (short) return '<span class="rdy-chip s">' + short + ' short</span>';
-  return '<span title="' + (nocheck ? esc(nocheck + ' line' + (nocheck === 1 ? '' : 's') + ' could not be checked (no Part # or no readable quantity).') : 'Every ingredient is covered by stock on hand, taking this product on its own.') + '" class="rdy-chip r">Ready' + (nocheck ? '*' : '') + '</span>';
+  // A line with no Part # (or no readable quantity) is unknown, not covered, so the
+  // product is never called Ready on the strength of the lines that could be checked.
+  if (nocheck) return '<span title="' + esc(_rdyUncheckedTip(nocheck)) + '" class="rdy-chip u">' + nocheck + ' unchecked</span>';
+  return '<span title="Every ingredient is covered by stock on hand, taking this product on its own." class="rdy-chip r">Ready</span>';
 }
 
 function _rdySelectedBlocks() {
@@ -17237,13 +17244,14 @@ function _rdyPickRowHTML(bk, vis) {
 // Select all never touch it (they are scoped to #rdy-list).
 var rdyBrowseOpen = false;
 function _rdyBrowseHTML() {
-  var ready = 0, short = 0;
-  if (inventoryLoaded) rmoBlocks.forEach(function(bk){ if (_rdyBlockCounts(bk).short) short++; else ready++; });
+  var ready = 0, short = 0, unchk = 0;
+  if (inventoryLoaded) rmoBlocks.forEach(function(bk){ var bc = _rdyBlockCounts(bk); if (bc.short) short++; else if (bc.nocheck) unchk++; else ready++; });
   var bar = '<div onclick="rdyToggleBrowse()" style="display:flex;align-items:center;gap:10px;padding:7px 10px;border:0.5px solid #2c2c2a;border-radius:6px;' + (rdyBrowseOpen ? 'border-bottom-left-radius:0;border-bottom-right-radius:0;' : '') + 'background:#1e2124;cursor:pointer;font-size:12px;font-family:system-ui;user-select:none;">'
     + '<span style="color:#888780;font-size:10px;width:10px;">' + (rdyBrowseOpen ? '▾' : '▸') + '</span>'
     + '<span style="color:#e8e6e0;">' + rmoBlocks.length + ' products</span>'
     + (inventoryLoaded
         ? '<span style="color:#5f5e5a;">·</span><span style="color:#9FE1CB;">' + ready + ' ready</span><span style="color:#5f5e5a;">·</span><span style="color:#F09595;">' + short + ' short</span>'
+          + (unchk ? '<span style="color:#5f5e5a;">·</span><span title="Covered on every line that can be checked, but at least one line has no Part # or no readable quantity." style="color:#c2c0b6;cursor:help;">' + unchk + ' unchecked</span>' : '')
         : '<span style="color:#5f5e5a;">· loading inventory…</span>')
     + '<span style="margin-left:auto;color:#5f5e5a;font-size:11px;">' + (rdyBrowseOpen ? 'hide list' : 'show list') + '</span>'
     + '</div>';
@@ -17520,7 +17528,12 @@ function _rdyResultsHTML() {
 
   var verdict, vc;
   if (!inventoryLoaded) { verdict = 'Loading inventory…'; vc = '#888780'; }
-  else if (!shortAll) { verdict = (sel.length === 1 ? 'Can run' : 'Can run all ' + sel.length) + ': every ingredient covered by stock on hand' + (n.nocheck ? ' (' + n.nocheck + ' line' + (n.nocheck === 1 ? '' : 's') + ' could not be checked)' : '') + '.'; vc = '#9FE1CB'; }
+  else if (!shortAll && n.nocheck) {
+    verdict = 'Not confirmed: ' + n.nocheck + ' ingredient' + (n.nocheck === 1 ? '' : 's') + ' could not be checked (no Part # or no readable quantity). '
+      + (checkable ? (checkable === 1 ? 'The other one is' : 'The other ' + checkable + ' are') + ' covered by stock on hand.' : '');
+    vc = '#FAC775';
+  }
+  else if (!shortAll) { verdict = (sel.length === 1 ? 'Can run' : 'Can run all ' + sel.length) + ': every ingredient covered by stock on hand.'; vc = '#9FE1CB'; }
   else {
     var bits = [];
     if (n.nopo) bits.push(n.nopo + ' with no open PO');
@@ -17549,9 +17562,10 @@ function _rdyResultsHTML() {
     var combined = {};
     items.forEach(function(it){ combined[it.key] = it; });
     body = sel.map(function(bk){
-      var own = _rdyItems([bk]), ownShort = 0, sharedShort = 0, sharedNames = [];
+      var own = _rdyItems([bk]), ownShort = 0, sharedShort = 0, sharedNames = [], ownUnchk = 0;
       own.forEach(function(it){
-        if (it.status !== 'ok' && it.status !== 'nocheck' && it.status !== 'loading') ownShort++;
+        if (it.status === 'nocheck') ownUnchk++;
+        else if (it.status !== 'ok' && it.status !== 'loading') ownShort++;
         else if (it.status === 'ok' && combined[it.key] && combined[it.key].balance < 0) {
           it.status = 'shared'; it.combinedBal = combined[it.key].balance; it.combinedOf = combined[it.key].products.length;
           sharedShort++; sharedNames.push(it.name);
@@ -17560,6 +17574,7 @@ function _rdyResultsHTML() {
       var chip = !inventoryLoaded ? ''
         : ownShort ? '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#791F1F;color:#F09595;">' + ownShort + ' short</span>'
         : sharedShort ? '<span title="Covered on its own, but the products selected together need more of ' + (sharedShort === 1 ? 'it' : 'these') + ' than is on hand." style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#4a3410;color:#FAC775;cursor:help;">Ready alone · short with the others: ' + esc(sharedNames.slice(0, 2).join(', ') + (sharedNames.length > 2 ? ' +' + (sharedNames.length - 2) + ' more' : '')) + '</span>'
+        : ownUnchk ? '<span title="' + esc(_rdyUncheckedTip(ownUnchk)) + '" style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#2c2c2a;color:#c2c0b6;cursor:help;">' + ownUnchk + ' unchecked</span>'
         : '<span style="font-size:10px;font-weight:500;padding:2px 7px;border-radius:5px;background:#085041;color:#9FE1CB;">Ready</span>';
       return '<div style="margin-bottom:14px;">'
         + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">'
